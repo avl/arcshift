@@ -6,4 +6,8 @@ edition = "2021"
 [dependencies]
 crossbeam-channel = "0.5"
 rand="0.8"
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
 [dev-dependencies]
