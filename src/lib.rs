@@ -1,7 +1,7 @@
 use std::cell::UnsafeCell;
 
 pub use std::collections::HashSet;
-use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 #[cfg(not(loom))]
 mod atomic {
@@ -34,7 +34,63 @@ struct Dummy {
 
 impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
-        drop_item(self.item)
+        println!("ArcShift drop called");
+        let old_ptr = self.item;
+        if !old_ptr.is_null() && !is_dummy(old_ptr) {
+            let old = unsafe{&*old_ptr};
+            let count = old.refcount.fetch_sub(1, atomic::Ordering::AcqRel);
+            println!("Arcshift drop refcount: {}", count);
+            if count == 1 {
+                // Simple case, we're definitely the last retainer of the ItemHolder,
+                // not even its ShiftContext points to this ItemHolder. It must just be dropped.
+                println!("Dropping ItemHolder");
+                _ = unsafe { Box::from_raw(old_ptr as *mut ItemHolder<T>) }; //#2
+            } else if count == 2 {
+                println!("ArcShift drop X/Y case");
+                // There are two possibilities:
+                //
+                // X: We're the last retainer of the ItemHolder. The other count is just from
+                // the context (circular reference here). If this is the case, no-one else
+                // can access the ItemHolder, and we can leisurely check that the contained 'current'
+                // is in fact identical to our 'item'. In this case, we must drop the ItemHolder.
+                //
+                // Y: We are not the last retainer of the ItemHolder. Some other ArcShift somewhere
+                // also has a reference to it. In this case, 'current' will not be equal to 'item'.
+                // In this case, we should not drop ItemHolder - it will be done by that other AccShift-
+
+                // Regardless, As one of the counts is our reference, we know ItemHolder will not be dropped.
+
+                if old.shift.current.load(Ordering::Relaxed) as *const _ == old_ptr { //#3
+                    // Since this load, and the one of refcount, are not done atomically,
+                    // at this point we only know that 'current' is equal to 'item'.
+                    // This has to be because we're the only retainer of the ItemHolder.
+                    //
+                    // Proof:
+                    // Let's call the current thread A.
+                    // If we're in case 'X' above, things are simple. We should just drop ItemHolder.
+                    // If we're in case 'Y' above, things are more tricky.
+                    // In this case, some other thread B must have had the ItemHolder at point #3,
+                    // but then subsequently have given it back to the ShiftContext. However,
+                    // the only transition that puts a pointer in the shiftcontext is the 'upgrade'-operation,
+                    // and it never reuses pointers which still exist. So it couldn't have used our ItemHolder.
+                    // This means that we have a contradiction, and if we get here, we must be in case X.
+
+                    if let Ok(_) = old.refcount.compare_exchange(2, 0, atomic::Ordering::AcqRel, Ordering::Relaxed) {
+                        println!("Probably Dropping ItemHolder X-arc {:?}", old_ptr);
+                        _ = unsafe { Box::from_raw(old_ptr as *mut ItemHolder<T>) }; //#2
+                    } else {
+                        println!("Raced, not dropping");
+                    }
+                } else {
+                    println!("Not dropping ItemHolder Y");
+                    // The 'current' does not contain 'item'. There is no transition that
+                    // can ever restore 'current' to 'item', so we know the ShiftContext can't own 'item'.
+                    // It's safe to do nothing.
+                }
+
+            }
+
+        }
     }
 }
 fn is_dummy<T>(ptr: *const ItemHolder<T>) -> bool {
@@ -46,6 +102,11 @@ struct ItemHolder<T:'static> {
     payload: T,
     shift: atomic::Arc<ArcShiftContext<T>>,
     refcount: atomic::AtomicUsize,
+}
+impl<T> Drop for ItemHolder<T> {
+    fn drop(&mut self) {
+        println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T>);
+    }
 }
 
 struct ArcShiftContext<T:'static> {
@@ -83,9 +144,10 @@ impl<T:'static> ArcShift<T> {
             shift: atomic::Arc::new(ArcShiftContext {
                 current: atomic::AtomicPtr::<ItemHolder<T>>::default() //null
             }),
-            refcount: atomic::AtomicUsize::new(1),
+            refcount: atomic::AtomicUsize::new(2),
         };
         let cur_ptr = Box::into_raw(Box::new(item));
+        println!("New primary ItemHolder {:?}", cur_ptr);
 
         unsafe { *atomic::Arc::get_mut(&mut (*cur_ptr).shift).unwrap() = ArcShiftContext {
             current: atomic::AtomicPtr::<ItemHolder<T>>::new(cur_ptr)
@@ -103,9 +165,11 @@ impl<T:'static> ArcShift<T> {
             shift,
             refcount: atomic::AtomicUsize::new(1),
         }));
+        println!("New upgraded ItemHolder {:?}", item);
 
-        let _old_ptr = old_shift.current.swap(item, atomic::Ordering::AcqRel);
-        //drop_item(old_ptr);
+        let old_ptr = old_shift.current.swap(item, atomic::Ordering::AcqRel);
+        println!("Upgrade calling drop on {:?}", old_ptr);
+        drop_item(old_ptr);
     }
     pub fn get(&mut self) -> &T {
         let cur_shift = unsafe { &(*self.item).shift };
@@ -135,6 +199,7 @@ impl<T:'static> ArcShift<T> {
                     if cur_shift.current.compare_exchange(dummy_ptr, prev_ptr, atomic::Ordering::Release, atomic::Ordering::Relaxed).is_err() {
                         _ = actual.refcount.fetch_sub(1, atomic::Ordering::Relaxed);
                     }
+                    println!("ArcShift::get() drop_item");
                     drop_item(self.item);
                     self.item = prev_ptr;
                 }
@@ -148,8 +213,10 @@ fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
     if !old_ptr.is_null() && !is_dummy(old_ptr) {
         let old = unsafe{&*old_ptr};
 
-        if old.refcount.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
-
+        let counter = old.refcount.fetch_sub(1, atomic::Ordering::AcqRel);
+        println!("ItemHolder dropper: {}", counter);
+        if counter == 1 {
+            println!("Dropping ItemHolder {:?}", old_ptr);
             _ = unsafe { Box::from_raw(old_ptr as *mut ItemHolder<T>) };
         }
 
@@ -157,7 +224,7 @@ fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
 }
 impl<T> Drop for ArcShiftContext<T> {
     fn drop(&mut self) {
-        /*
+        println!("Arcshiftcontext drop");
         loop {
             let old_ptr = self.current.load(atomic::Ordering::Relaxed);
             if is_dummy(old_ptr) {
@@ -169,6 +236,7 @@ impl<T> Drop for ArcShiftContext<T> {
             let dummy = make_dummy();
             let droppable = self.current.compare_exchange(old_ptr, dummy, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed);
             if let Ok(_) = droppable {
+                println!("Arcshift dropper calling drop_item");
                 drop_item(old_ptr);
                 return;
             }
@@ -176,8 +244,6 @@ impl<T> Drop for ArcShiftContext<T> {
             loom::thread::yield_now();
             std::hint::spin_loop();
         }
-        */
-
     }
 }
 
