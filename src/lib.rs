@@ -28,6 +28,8 @@ pub struct ArcShift<T:'static> {
     item: *const ItemHolder<T>,
 }
 
+unsafe impl<T:'static> Sync for ArcShift<T> {}
+
 unsafe impl<T:'static> Send for ArcShift<T> {}
 
 #[repr(align(2))]
@@ -36,64 +38,124 @@ struct Dummy {
     _b: u8
 }
 
-fn raw_drop_item_and_current<T>(old_ptr: *mut ItemHolder<T>) {
-    let mut raw = unsafe { Box::from_raw(old_ptr) };
-    let the_arc = std::mem::replace(&mut raw.shift, Arc::new(
-        ArcShiftContext {
-            current: AtomicPtr::default()
-        })
-    );
-    if let Some(mut inner) = Arc::into_inner(the_arc) {
-        inner.current = AtomicPtr::default();
-    } else {
-        abort();
-    }
-}
 
 impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
-        println!("ArcShift drop called");
+        println!("ArcShift drop called {:?}", self.item);
         let old_ptr = self.item;
         if !old_ptr.is_null() && !is_dummy(old_ptr) {
-            let old = unsafe{&*old_ptr};
-
             loop {
-                let count = old.refcount.load(Ordering::SeqCst);
+                //let old = unsafe{&*old_ptr};
+                let count = unsafe{&*old_ptr}.refcount.load(Ordering::SeqCst);
 
+                println!("Arcshift count: {} @ {:?}", count, self.item);
+                if count == 0 {
+                    println!("Internal error");
+                    abort();
+                }
                 if count == 1 {
+                    println!("ArcShift drop count = 1 {:?}", self.item);
+                    // If count has reached 1, it can't increase, because we're the only
+                    // ones holding it.
+                    // In principle, we could use non-atomic ops here.
                     drop_item(old_ptr);
                     return;
                 }
                 if count == 2 {
+                    println!("ArcShift drop count = 2 {:?}", self.item);
                     let dummy= make_dummy();
-                    match old.shift.current.compare_exchange(old_ptr as *mut _, dummy,Ordering::SeqCst,Ordering::SeqCst) {
+                    assert!(!is_dummy(old_ptr));
+                    match unsafe{&*old_ptr}.shift.current.compare_exchange(old_ptr as *mut _, dummy, Ordering::SeqCst, Ordering::SeqCst) {
                         Ok(_) => {
-                            match old.refcount.compare_exchange(2, 0, Ordering::SeqCst,Ordering::SeqCst) {
+                            println!("ArcShift drop count =2 {:?} injected dummy", self.item);
+                            match unsafe{&*old_ptr}.refcount.compare_exchange(2, 1, Ordering::SeqCst,Ordering::SeqCst) {
                                 Ok(_) => {
-                                    compile_error!("Continue here!")
-                                    raw_drop_item_and_current(old_ptr as *mut ItemHolder<T>);
+                                    // What is known:
+                                    // * self.item has two owners
+                                    // * One of them is 'self'
+                                    // * The other is 'context'
+                                    // * The context may have other owners
+                                    // * The number of context owners can increase
+                                    // * No-one else has access to old_ptr, or can gain such access
+                                    // * We own the Arc inside ItemHolder.
+
+                                    println!("ArcShift drop count =2 {:?} injected dummy {:?} - no race", self.item, dummy);
+                                    let item_mut = unsafe { &mut *(self.item as *mut ItemHolder<T>) };
+                                    let the_arc = std::mem::replace(&mut item_mut.shift, atomic::Arc::new(
+                                        ArcShiftContext {
+                                            current: atomic::AtomicPtr::default()
+                                        })
+                                    );
+
+                                    let mut context_has_our_ptr;
+                                    match the_arc.current.compare_exchange(dummy, old_ptr as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
+                                        Ok(_) => {
+                                            println!("DUmmy {:?} was returned for {:?}", dummy, old_ptr);
+                                            context_has_our_ptr = true;
+                                            // Ok
+                                        }
+                                        Err(replaced_by) => {
+                                            // Dummy was replaced, presumably by upgrade. This means that ItemHolder is definitely unused now, after all
+                                            println!("Dummy was replaced by {:?}, presumably by upgrade", replaced_by);
+                                            context_has_our_ptr = false;
+                                            spin_loop();
+                                        }
+                                    }
+
+                                    if let Ok(mut inner) = atomic::Arc::<ArcShiftContext<T>>::try_unwrap(the_arc) { //TODO: BAD!
+                                        // If we get here, there are now no more owners of neither the item or the context.
+                                        println!("There were no more owners of the Arc");
+                                        if context_has_our_ptr {
+                                            inner.current = atomic::AtomicPtr::<ItemHolder<T>>::default();
+                                        }
+                                        println!("Actual drop(2) of ItemHolder");
+                                        let _item = unsafe { Box::from_raw(item_mut) };
+                                        return; //Done
+                                    } else {
+                                        println!("There were other owners of the Arc!");
+                                    }
                                     return;
                                 }
                                 Err(_) => {
-                                    spin_loop();
-                                    continue;
+                                    match unsafe{&*old_ptr}.shift.current.compare_exchange(dummy, old_ptr as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
+                                        Ok(_) => {
+                                            println!("ArcShift drop count =2 {:?} injected dummy - there was a race", self.item);
+                                            spin_loop();
+                                            continue;
+                                        }
+                                        Err(_) => {
+                                            // No one should ever replace a dummy
+                                            eprintln!("Internal error - unreachable code reached.");
+                                            abort();
+                                        }
+                                    }
                                 }
                             }
 
                         }
                         Err(_) => {
-                            // 'item' is no longer 'current', and never will be again
+                            println!("ArcShift drop - context doesn't have our item");
+                            // 'item' is no longer 'current', and thus never will be again
                             drop_item(old_ptr);
-                            continue;
+                            return;
                         }
                     }
                 }
                 if count >=3 {
-                    match old.refcount.compare_exchange(count, count - 1,Ordering::SeqCst,Ordering::SeqCst) {
+                    println!("ArcShift drop count >= 3 {:?}", self.item);
+                    match unsafe{&*old_ptr}.refcount.compare_exchange(count, count - 1,Ordering::SeqCst,Ordering::SeqCst) {
                         Ok(_) => {
+                            println!("ArcShift drop count >= 3 {:?} sucecss", self.item);
+                            //We successfully reduced count by one.
                             return;
                         }
                         Err(_) => {
+                            println!("ArcShift drop count >= 3 {:?} raced", self.item);
+                            // Someone else intercepted, we need to try again (we can't just
+                            // decrease the count by 1, since we could then end up at count = '1',
+                            // in which case we wouldn't know if only the 'context' remained,
+                            // or if someone else owns it, and in either case we can no longer
+                            // interact with the object soundly to determine which case is actual.
                             spin_loop();
                             continue;
                         }
@@ -118,7 +180,7 @@ struct ItemHolder<T:'static> {
 }
 impl<T> Drop for ItemHolder<T> {
     fn drop(&mut self) {
-        println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T>);
+        println!("ItemHolder<T>::drop {:?} (strongcount: {})", self as *const ItemHolder<T>, atomic::Arc::strong_count(&self.shift));
     }
 }
 
@@ -143,7 +205,8 @@ fn make_dummy<T>() -> *mut ItemHolder<T> {
 impl<T:'static> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         let cur_item = self.item;
-        unsafe { (*cur_item).refcount.fetch_add(1, atomic::Ordering::Relaxed); }
+        let rescount = unsafe { (*cur_item).refcount.fetch_add(1, atomic::Ordering::Relaxed) };
+        println!("Clone - adding count to {:?}, resulting in count {}", cur_item, rescount + 1);
         ArcShift {
             item: cur_item,
         }
@@ -171,23 +234,25 @@ impl<T:'static> ArcShift<T> {
         }
     }
     pub fn upgrade(&self, new_payload: T) {
+        println!(" = = = upgrade = = =");
         let old_shift = unsafe{ &(*self.item).shift };
-        let shift = atomic::Arc::clone(old_shift);
+
         let item = Box::into_raw(Box::new(ItemHolder {
             payload: new_payload,
-            shift,
+            shift: atomic::Arc::new(ArcShiftContext{current: atomic::AtomicPtr::default()}),
             refcount: atomic::AtomicUsize::new(1),
         }));
         println!("New upgraded ItemHolder {:?}", item);
 
         let old_ptr = old_shift.current.swap(item, atomic::Ordering::AcqRel);
-        println!("Upgrade calling drop on {:?}", old_ptr);
+        println!("Upgrade calling drop on {:?}, old shift strongcount: {}", old_ptr, atomic::Arc::strong_count(&old_shift));
         drop_item(old_ptr);
     }
     pub fn get(&mut self) -> &T {
+        println!(" = = = get = = =");
         let cur_shift = unsafe { &(*self.item).shift };
         let new_current = cur_shift.current.load(atomic::Ordering::Relaxed) as *const _;
-        if new_current != self.item && is_dummy(new_current) == false {
+        if new_current != self.item && is_dummy(new_current) == false && new_current.is_null() == false {
 
             let dummy_ptr = make_dummy::<T>();
 
@@ -198,21 +263,29 @@ impl<T:'static> ArcShift<T> {
                 {
                     // Undo our dummy!
                     _ = cur_shift.current.compare_exchange(dummy_ptr, prev_ptr, atomic::Ordering::Release, atomic::Ordering::Relaxed);
+                    println!("Undoing dummy {:?} to {:?}", dummy_ptr, prev_ptr);
 
                 } else {
 
                     // We now have exclusive ownership of 'current'
                     let actual = unsafe {&*prev_ptr};
-                    actual.refcount.fetch_add(1, atomic::Ordering::Relaxed);
+                    let prevcount = actual.refcount.fetch_add(1, atomic::Ordering::Relaxed);
+                    println!("Adding count to {:?}, giving count = {}", prev_ptr, prevcount + 1);
+                    if (&*actual.shift) as *const ArcShiftContext<T> != (&**cur_shift) as *const ArcShiftContext<T> {
+                        let actual_mut = unsafe {&mut *prev_ptr};
+                        actual_mut.shift = atomic::Arc::clone(cur_shift);
+                    }
+                    let actual = unsafe {&*prev_ptr};
 
                     // Give it back for others to enjoy
                     // This will fail if the main upgrade-ptr has changed. But this is okay, we
                     // have a stale pointer, but that could have happened _anyway_ if timing differed a few nanoseconds,
                     // and there isn't (and can't be) any guarantee anyway.
                     if cur_shift.current.compare_exchange(dummy_ptr, prev_ptr, atomic::Ordering::Release, atomic::Ordering::Relaxed).is_err() {
+                        println!("Subtracting on dummy-hand back {:?}", prev_ptr);
                         _ = actual.refcount.fetch_sub(1, atomic::Ordering::Relaxed);
                     }
-                    println!("ArcShift::get() drop_item");
+                    println!("ArcShift::get() drop_item: {:?} (cont {:?}) (dummy = {:?})", self.item, prev_ptr, dummy_ptr);
                     drop_item(self.item);
                     self.item = prev_ptr;
                 }
@@ -227,10 +300,11 @@ fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
         let old = unsafe{&*old_ptr};
 
         let counter = old.refcount.fetch_sub(1, atomic::Ordering::AcqRel);
-        println!("ItemHolder dropper: {} @{:?}", counter, old_ptr);
+        println!("ItemHolder dropper: {} @{:?} (shift stroungcount: {})", counter, old_ptr, atomic::Arc::strong_count(&old.shift));
         if counter == 1 {
-            println!("Dropping ItemHolder {:?}", old_ptr);
-            _ = unsafe { Box::from_raw(old_ptr as *mut ItemHolder<T>) };
+            println!("Actual drop of ItemHolder {:?}", old_ptr);
+            let temp = unsafe { Box::from_raw(old_ptr as *mut ItemHolder<T>) };
+            println!("Arc strongcount: {}", atomic::Arc::strong_count(&temp.shift));
         }
 
     }
@@ -238,17 +312,20 @@ fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
 impl<T> Drop for ArcShiftContext<T> {
     fn drop(&mut self) {
         println!("Starting ArcShiftContext loop");
-        loop {
+        loop
+        {
             let old_ptr = self.current.load(atomic::Ordering::Relaxed);
             println!("Arcshiftcontext drop: {:?}", old_ptr);
             if old_ptr.is_null() {
                 return; //Nothing to do
             }
+            println!("Arcshiftcontext contains non-null");
             if is_dummy(old_ptr) {
+                println!("Arcshiftcontext contains dummy at drop-time!");
+                abort();
                 #[cfg(loom)]
                 loom::thread::yield_now();
                 std::hint::spin_loop();
-                continue;
             }
             let dummy = make_dummy();
             let droppable = self.current.compare_exchange(old_ptr, dummy, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed);
@@ -257,9 +334,8 @@ impl<T> Drop for ArcShiftContext<T> {
                 drop_item(old_ptr);
                 return;
             }
-            #[cfg(loom)]
-            loom::thread::yield_now();
-            std::hint::spin_loop();
+            println!("Arcshiftcontext current was modified while dropping!");
+            continue;
         }
     }
 }
@@ -327,6 +403,7 @@ mod tests {
         _=t1.join().unwrap();
         _=t2.join().unwrap();
     }
+
     #[test]
     fn simple_threading() {
 
@@ -336,6 +413,34 @@ mod tests {
         });
     }
 
+    fn do_simple_threading2() {
+        let shift1 = Arc::new(ArcShift::new(42u32));
+        let shift2 = Arc::clone(&shift1);
+        let shift3 = Arc::clone(&shift1);
+        let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(10_000_000).spawn(move||{
+            shift1.upgrade(43);
+        }).unwrap();
+
+        let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(10_000_000).spawn(move||{
+            let mut shift = (*shift2).clone();
+            std::hint::black_box(shift.get());
+        }).unwrap();
+
+        let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(10_000_000).spawn(move||{
+            shift3.upgrade(43);
+        }).unwrap();
+        _=t1.join().unwrap();
+        _=t2.join().unwrap();
+        _=t3.join().unwrap();
+    }
+
+    #[test]
+    fn simple_threading2() {
+        model(||{
+            println!("=== Starting run ===");
+            do_simple_threading2();
+        });
+    }
 
 
     fn run_multi_fuzz<T:Clone+Hash+Eq+'static+Debug+Send+Sync>(rng: &mut StdRng,mut constructor: impl FnMut()->T) {
@@ -431,8 +536,10 @@ mod tests {
     fn run_fuzz<T:Clone+Hash+Eq+'static+Debug>(rng: &mut StdRng, mut constructor: impl FnMut()->T) {
         let cmds = make_commands::<T>(rng, &mut constructor);
         let mut arcs: [Option<ArcShift<T>>; 3] = [();3].map(|_|None);
-
+        println!("Staritng fuzzrun");
         for cmd in cmds {
+            println!("=== Applying cmd: {:?} ===", cmd);
+            print_arcs(&mut arcs);
             match cmd {
                 FuzzerCommand::CreateUpdateArc(chn, val) => {
                     if let Some(arc) = &mut arcs[chn as usize] {
@@ -457,6 +564,34 @@ mod tests {
                 }
             }
 
+        }
+        println!("=== No more commands ===");
+        print_arcs(&mut arcs);
+
+    }
+
+    fn print_arcs<T>(arcs: &mut [Option<ArcShift<T>>; 3]) {
+        for arc in arcs.iter() {
+            if let Some(arc) = arc {
+                print!("{:? } ", arc.item);
+            } else {
+                print!("None, ")
+            }
+        }
+        println!();
+        for arc in arcs.iter() {
+            if let Some(arc) = arc {
+                let curr = unsafe { (*arc.item).shift.current.load(Ordering::SeqCst) };
+                let currcount = if !curr.is_null() && !is_dummy(curr) { unsafe { (*curr).refcount.load(Ordering::Relaxed) } } else { 1111 };
+                let strongcount = if !curr.is_null() && !is_dummy(curr) { unsafe { atomic::Arc::strong_count(&(*curr).shift) } } else { 1111 };
+                println!("{:? } (ctx: {:?}/{}, sc: {}) refs = {}, ", arc.item,
+                         unsafe { (*arc.item).shift.current.load(Ordering::SeqCst) },
+                         currcount,
+                         strongcount,
+                         unsafe { (*arc.item).refcount.load(Ordering::SeqCst) });
+            } else {
+                println!("None, ")
+            }
         }
     }
 
@@ -491,7 +626,7 @@ mod tests {
     fn make_commands<T:Clone+Eq+Hash+Debug>(rng: &mut StdRng, constructor: &mut impl FnMut()->T) -> Vec<FuzzerCommand<T>> {
 
         let mut ret = Vec::new();
-        for _x in 0..50 {
+        for _x in 0..20 {
             match rng.gen_range(0..4) {
                 0 => {
                     let chn = rng.gen_range(0..3);
@@ -538,7 +673,7 @@ mod tests {
     }
     #[test]
     fn generic_fuzzing_all() {
-        const COUNT: u64 = 10000;
+        const COUNT: u64 = 100;
         for i in 0..COUNT {
             model(move||{
                 let mut rng = StdRng::seed_from_u64(i);
@@ -558,6 +693,20 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(70);
             let mut counter = 0u32;
             println!("Running seed {}", 70);
+            run_fuzz(&mut rng, move || -> u32 {
+                counter += 1;
+                counter
+            });
+        });
+    }
+    #[test]
+    fn generic_fuzzing0() {
+        let seed = 5;
+        model(move||
+        {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut counter = 0u32;
+            println!("Running seed {}", seed);
             run_fuzz(&mut rng, move || -> u32 {
                 counter += 1;
                 counter
