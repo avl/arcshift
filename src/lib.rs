@@ -4,8 +4,6 @@ pub use std::collections::HashSet;
 use std::hint::spin_loop;
 use std::process::abort;
 use std::ptr::{null, null_mut};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicPtr, fence, Ordering};
 
 #[cfg(not(loom))]
 mod atomic {
@@ -48,7 +46,7 @@ impl<T:Send+Sync> Drop for ArcShift<T> {
 #[repr(align(2))]
 struct ItemHolder<T:'static+Send+Sync> {
     payload: T,
-    next: AtomicPtr<ItemHolder<T>>,
+    next: atomic::AtomicPtr<ItemHolder<T>>,
     refcount: atomic::AtomicUsize,
 }
 impl<T:Send+Sync> Drop for ItemHolder<T> {
@@ -87,7 +85,7 @@ impl<T:'static+Send+Sync> ArcShift<T> {
     pub fn new(payload: T) -> ArcShift<T> {
         let item = ItemHolder {
             payload,
-            next: AtomicPtr::default(),
+            next: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(1),
         };
         let cur_ptr = Box::into_raw(Box::new(item));
@@ -98,18 +96,17 @@ impl<T:'static+Send+Sync> ArcShift<T> {
     pub fn upgrade(&self, new_payload: T) {
         let item = ItemHolder {
             payload:new_payload,
-            next: AtomicPtr::default(),
+            next: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(1),
         };
         let new_ptr = Box::into_raw(Box::new(item));
         println!("Upgrading {:?} -> {:?} ", self.item, new_ptr);
         let mut candidate = self.item;
         loop {
-            match unsafe{&*candidate}.next.compare_exchange(null_mut(), new_ptr, Ordering::SeqCst, Ordering::SeqCst) {
+            match unsafe{&*candidate}.next.compare_exchange(null_mut(), new_ptr, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
                 Ok(_) => {
                     // Upgrade complete.
                     println!("Upgrade complete");
-                    fence(Ordering::SeqCst);
                     return;
                 }
                 Err(other) => {
@@ -125,12 +122,12 @@ impl<T:'static+Send+Sync> ArcShift<T> {
     }
     pub fn get(&mut self) -> &T {
         println!("Getting {:?}", self.item);
-        let cand: *const ItemHolder<T> =  unsafe{&*self.item}.next.load(Ordering::SeqCst) as *const ItemHolder<T>;
+        let cand: *const ItemHolder<T> =  unsafe{&*self.item}.next.load(atomic::Ordering::SeqCst) as *const ItemHolder<T>;
         if !cand.is_null() {
             println!("Upgrade to {:?} detected", cand);
 
             unsafe { (*cand).refcount.fetch_add(1, atomic::Ordering::SeqCst) };
-            let count = unsafe{&*self.item}.refcount.fetch_sub(1, Ordering::SeqCst);
+            let count = unsafe{&*self.item}.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
             println!("fetch sub received {}", count);
             if count == 1 {
                 println!("Actual drop of ItemHolder {:?}", self.item);
@@ -151,12 +148,12 @@ impl<T:'static+Send+Sync> ArcShift<T> {
 }
 fn drop_item<T:Send+Sync>(old_ptr: *const ItemHolder<T>) {
     println!("drop_item {:?} about to subtract 1", old_ptr);
-    let count = unsafe{&*old_ptr}.refcount.fetch_sub(1, Ordering::SeqCst);
+    let count = unsafe{&*old_ptr}.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
     println!("Drop-item {:?}, post-count = {}", old_ptr, count-1);
     if count == 1 {
         println!("Begin drop of {:?}", old_ptr);
         //let next = *unsafe{&mut *(old_ptr as *mut ItemHolder<T>)}.next.get_mut();
-        let next = unsafe {&*old_ptr}.next.load(Ordering::SeqCst);
+        let next = unsafe {&*old_ptr}.next.load(atomic::Ordering::SeqCst);
         if next.is_null() == false {
             println!("Actual drop of ItemHolder {:?} - recursing into {:?}", old_ptr, next);
             drop_item(next);
@@ -229,8 +226,8 @@ mod tests {
     #[test]
     fn simple_threading3a() {
         model(|| {
-            let shift1 = Arc::new(ArcShift::new(42u32));
-            let shift2 = Arc::clone(&shift1);
+            let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
+            let shift2 = std::sync::Arc::clone(&shift1);
             let mut shift3 = (*shift1).clone();
             let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(10_000_000).spawn(move || {
                 println!(" = On thread t1 =");
@@ -258,9 +255,9 @@ mod tests {
     #[test]
     fn simple_threading4() {
         model(|| {
-            let shift1 = Arc::new(ArcShift::new(42u32));
-            let shift2 = Arc::clone(&shift1);
-            let shift3 = Arc::clone(&shift1);
+            let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
+            let shift2 = std::sync::Arc::clone(&shift1);
+            let shift3 = std::sync::Arc::clone(&shift1);
             let mut shift4 = (*shift1).clone();
             let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(10_000_000).spawn(move || {
                 println!(" = On thread t1 =");
@@ -431,13 +428,13 @@ mod tests {
         println!();
         for arc in arcs.iter() {
             if let Some(arc) = arc {
-                let curr = unsafe { (*arc.item).next.load(Ordering::SeqCst) };
-                let currcount = if !curr.is_null() { unsafe { (*curr).refcount.load(Ordering::Relaxed) } } else { 1111 };
+                let curr = unsafe { (*arc.item).next.load(atomic::Ordering::SeqCst) };
+                let currcount = if !curr.is_null() { unsafe { (*curr).refcount.load(atomic::Ordering::SeqCst) } } else { 1111 };
                 /*println!("{:? } (ctx: {:?}/{}, sc: {}) refs = {}, ", arc.item,
-                         unsafe { (*arc.item).shift.current.load(Ordering::SeqCst) },
+                         unsafe { (*arc.item).shift.current.load(Ordering::AcqRel) },
                          currcount,
                          strongcount,
-                         unsafe { (*arc.item).refcount.load(Ordering::SeqCst) });*/
+                         unsafe { (*arc.item).refcount.load(Ordering::AcqRel) });*/
             } else {
                 println!("None, ")
             }
