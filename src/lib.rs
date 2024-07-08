@@ -83,7 +83,8 @@ impl<T> Drop for ArcShift<T> {
                                     let item_mut = unsafe { &mut *(self.item as *mut ItemHolder<T>) };
                                     let the_arc = std::mem::replace(&mut item_mut.shift, atomic::Arc::new(
                                         ArcShiftContext {
-                                            current: atomic::AtomicPtr::default()
+                                            current: atomic::AtomicPtr::default(),
+                                            dummy: true
                                         })
                                     );
 
@@ -186,6 +187,7 @@ impl<T> Drop for ItemHolder<T> {
 
 struct ArcShiftContext<T:'static> {
     current: atomic::AtomicPtr<ItemHolder<T>>,
+    dummy: bool
 }
 
 #[cfg(not(loom))]
@@ -218,15 +220,21 @@ impl<T:'static> ArcShift<T> {
         let item = ItemHolder {
             payload,
             shift: atomic::Arc::new(ArcShiftContext {
-                current: atomic::AtomicPtr::<ItemHolder<T>>::default() //null
+                current: atomic::AtomicPtr::<ItemHolder<T>>::default(), //null
+                dummy: false,
             }),
             refcount: atomic::AtomicUsize::new(2),
         };
         let cur_ptr = Box::into_raw(Box::new(item));
-        println!("New primary ItemHolder {:?}", cur_ptr);
 
-        unsafe { *atomic::Arc::get_mut(&mut (*cur_ptr).shift).unwrap() = ArcShiftContext {
-            current: atomic::AtomicPtr::<ItemHolder<T>>::new(cur_ptr)
+        let ashift_instance = unsafe { atomic::Arc::get_mut(&mut (*cur_ptr).shift).unwrap() };
+        println!("New primary ItemHolder {:?}, with context = C({:?})", cur_ptr, ashift_instance as *const ArcShiftContext<T>);
+
+        unsafe { *ashift_instance = ArcShiftContext {
+            current: {
+                atomic::AtomicPtr::<ItemHolder<T>>::new(cur_ptr)
+                },
+            dummy: false
             }
         };
         ArcShift {
@@ -237,16 +245,36 @@ impl<T:'static> ArcShift<T> {
         println!(" = = = upgrade = = =");
         let old_shift = unsafe{ &(*self.item).shift };
 
+        assert!(!old_shift.dummy);
+
         let item = Box::into_raw(Box::new(ItemHolder {
             payload: new_payload,
-            shift: atomic::Arc::new(ArcShiftContext{current: atomic::AtomicPtr::default()}),
+            shift: atomic::Arc::new(ArcShiftContext{current: atomic::AtomicPtr::default(), dummy: true}),
             refcount: atomic::AtomicUsize::new(1),
         }));
         println!("New upgraded ItemHolder {:?}", item);
 
-        let old_ptr = old_shift.current.swap(item, atomic::Ordering::AcqRel);
-        println!("Upgrade calling drop on {:?}, old shift strongcount: {}", old_ptr, atomic::Arc::strong_count(&old_shift));
-        drop_item(old_ptr);
+        loop {
+            let old_current = old_shift.current.load(Ordering::SeqCst);
+            if (old_current.is_null() || is_dummy(old_current))
+            {
+                // TODO: It might never become non-null. Fix this!
+                println!("is null or dummy");
+            }
+            else {
+                println!("Doing upgrade switch");
+                if let Ok(_) = old_shift.current.compare_exchange(old_current, item, atomic::Ordering::AcqRel, atomic::Ordering::Relaxed) {
+                    println!("Upgrade calling drop on {:?}, old shift strongcount: {}", old_current, atomic::Arc::strong_count(&old_shift));
+                    drop_item(old_current);
+                    return;
+                }
+            }
+            println!("Upgrade raced");
+            #[cfg(loom)]
+            loom::thread::yield_now();
+            spin_loop();
+            continue;
+        }
     }
     pub fn get(&mut self) -> &T {
         println!(" = = = get = = =");
@@ -311,7 +339,10 @@ fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
 }
 impl<T> Drop for ArcShiftContext<T> {
     fn drop(&mut self) {
-        println!("Starting ArcShiftContext loop");
+        println!("Starting ArcShiftContext C({:?}) loop, dummy = {:?}", self as *const ArcShiftContext<T>, self.dummy);
+        if self.dummy {
+            assert!(self.current.load(Ordering::SeqCst).is_null());
+        }
         loop
         {
             let old_ptr = self.current.load(atomic::Ordering::Relaxed);
@@ -327,8 +358,10 @@ impl<T> Drop for ArcShiftContext<T> {
                 loom::thread::yield_now();
                 std::hint::spin_loop();
             }
+            compile_error!("It may now be working!!")
             let dummy = make_dummy();
-            let droppable = self.current.compare_exchange(old_ptr, dummy, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed);
+            let droppable = self.current.compare_exchange(old_ptr, dummy, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst);
+
             if let Ok(_) = droppable {
                 println!("Arcshift dropper calling drop_item: {:?}", old_ptr);
                 drop_item(old_ptr);
@@ -418,16 +451,22 @@ mod tests {
         let shift2 = Arc::clone(&shift1);
         let shift3 = Arc::clone(&shift1);
         let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(10_000_000).spawn(move||{
+            println!(" = On thread t1 =");
             shift1.upgrade(43);
+            println!(" = drop t1 =");
         }).unwrap();
 
         let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(10_000_000).spawn(move||{
+            println!(" = On thread t2 =");
             let mut shift = (*shift2).clone();
-            std::hint::black_box(shift.get());
+            //std::hint::black_box(shift.get());
+            println!(" = drop t2 =");
         }).unwrap();
 
         let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(10_000_000).spawn(move||{
-            shift3.upgrade(43);
+            println!(" = On thread t3 =");
+            shift3.upgrade(44);
+            println!(" = drop t3 =");
         }).unwrap();
         _=t1.join().unwrap();
         _=t2.join().unwrap();

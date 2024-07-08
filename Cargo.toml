@@ -8,6 +8,6 @@ crossbeam-channel = "0.5"
 rand="0.8"
 
 [target.'cfg(loom)'.dependencies]
-loom = "0.7"
+loom = { version = "0.7", features = ["checkpoint"] }
 
 [dev-dependencies]
