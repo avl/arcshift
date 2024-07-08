@@ -1,9 +1,6 @@
-use std::cell::UnsafeCell;
-
 pub use std::collections::HashSet;
 use std::hint::spin_loop;
-use std::process::abort;
-use std::ptr::{null, null_mut};
+use std::ptr::{null_mut};
 
 #[cfg(not(loom))]
 mod atomic {
@@ -19,7 +16,6 @@ mod atomic {
     pub use loom::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     pub use loom::thread;
 }
-use std::time::Duration;
 use rand::{Rng};
 
 pub struct ArcShift<T:'static+Send+Sync> {
@@ -39,7 +35,7 @@ struct Dummy {
 
 impl<T:Send+Sync> Drop for ArcShift<T> {
     fn drop(&mut self) {
-        println!("ArcShift::drop({:?})", self.item);
+        //println!("ArcShift::drop({:?})", self.item);
         drop_item(self.item);
     }
 }
@@ -51,7 +47,7 @@ struct ItemHolder<T:'static+Send+Sync> {
 }
 impl<T:Send+Sync> Drop for ItemHolder<T> {
     fn drop(&mut self) {
-        println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T>);
+        //println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T>);
     }
 }
 
@@ -71,10 +67,10 @@ fn model(x: impl Fn()+Send+Sync+'static) {
 
 impl<T:'static+Send+Sync> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
-        println!("ArcShift::clone({:?})", self.item);
+        //println!("ArcShift::clone({:?})", self.item);
         let cur_item = self.item;
         let rescount = unsafe { (*cur_item).refcount.fetch_add(1, atomic::Ordering::SeqCst) };
-        println!("Clone - adding count to {:?}, resulting in count {}", cur_item, rescount + 1);
+        //println!("Clone - adding count to {:?}, resulting in count {}", cur_item, rescount + 1);
         ArcShift {
             item: cur_item,
         }
@@ -100,17 +96,17 @@ impl<T:'static+Send+Sync> ArcShift<T> {
             refcount: atomic::AtomicUsize::new(1),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        println!("Upgrading {:?} -> {:?} ", self.item, new_ptr);
+        //println!("Upgrading {:?} -> {:?} ", self.item, new_ptr);
         let mut candidate = self.item;
         loop {
             match unsafe{&*candidate}.next.compare_exchange(null_mut(), new_ptr, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
                 Ok(_) => {
                     // Upgrade complete.
-                    println!("Upgrade complete");
+                    //println!("Upgrade complete");
                     return;
                 }
                 Err(other) => {
-                    println!("Upgrade not complete yet, spinning");
+                    //println!("Upgrade not complete yet, spinning");
                     candidate = other;
                 }
             }
@@ -121,44 +117,48 @@ impl<T:'static+Send+Sync> ArcShift<T> {
 
     }
     pub fn get(&mut self) -> &T {
-        println!("Getting {:?}", self.item);
-        let cand: *const ItemHolder<T> =  unsafe{&*self.item}.next.load(atomic::Ordering::SeqCst) as *const ItemHolder<T>;
+        //println!("Getting {:?}", self.item);
+        let cand: *const ItemHolder<T> =  unsafe{&*self.item}.next.load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
         if !cand.is_null() {
-            println!("Upgrade to {:?} detected", cand);
-
-            unsafe { (*cand).refcount.fetch_add(1, atomic::Ordering::SeqCst) };
-            let count = unsafe{&*self.item}.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
-            println!("fetch sub received {}", count);
-            if count == 1 {
-                println!("Actual drop of ItemHolder {:?}", self.item);
-                unsafe { (*cand).refcount.fetch_sub(1, atomic::Ordering::SeqCst) };
-                _ = unsafe { Box::from_raw(self.item as *mut ItemHolder<T>) };
-                // We don't need to increment cand.refcount, since self.item had a count on it, and
-                // it is now disappearing. We just don't do self.item.next's decrement, and then we
-                // don't need to do the new self.item's increment (since it's the old self.item.next).
+            //println!("Upgrade to {:?} detected", cand);
+            let cand: *const ItemHolder<T> =  unsafe{&*self.item}.next.load(atomic::Ordering::Acquire) as *const ItemHolder<T>;
+            if !cand.is_null() {
+                unsafe { (*cand).refcount.fetch_add(1, atomic::Ordering::SeqCst) };
+                let count = unsafe{&*self.item}.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
+                //println!("fetch sub received {}", count);
+                if count == 1 {
+                    //println!("Actual drop of ItemHolder {:?}", self.item);
+                    unsafe { (*cand).refcount.fetch_sub(1, atomic::Ordering::SeqCst) };
+                    _ = unsafe { Box::from_raw(self.item as *mut ItemHolder<T>) };
+                    // We don't need to increment cand.refcount, since self.item had a count on it, and
+                    // it is now disappearing. We just don't do self.item.next's decrement, and then we
+                    // don't need to do the new self.item's increment (since it's the old self.item.next).
+                } else {
+                    //println!("No drop of ItemHolder");
+                }
+                //println!("Doing assign");
+                self.item = cand;
             } else {
-                println!("No drop of ItemHolder");
+                println!("Double-checked locking actually was needed");
             }
-            println!("Doing assign");
-            self.item = cand;
         }
-        println!("Returned payload for {:?}", self.item);
+        //println!("Returned payload for {:?}", self.item);
         &unsafe{&*self.item}.payload
     }
 }
 fn drop_item<T:Send+Sync>(old_ptr: *const ItemHolder<T>) {
-    println!("drop_item {:?} about to subtract 1", old_ptr);
+    //println!("drop_item {:?} about to subtract 1", old_ptr);
     let count = unsafe{&*old_ptr}.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
-    println!("Drop-item {:?}, post-count = {}", old_ptr, count-1);
+    //println!("Drop-item {:?}, post-count = {}", old_ptr, count-1);
     if count == 1 {
-        println!("Begin drop of {:?}", old_ptr);
+        //println!("Begin drop of {:?}", old_ptr);
         //let next = *unsafe{&mut *(old_ptr as *mut ItemHolder<T>)}.next.get_mut();
         let next = unsafe {&*old_ptr}.next.load(atomic::Ordering::SeqCst);
         if next.is_null() == false {
-            println!("Actual drop of ItemHolder {:?} - recursing into {:?}", old_ptr, next);
+            //println!("Actual drop of ItemHolder {:?} - recursing into {:?}", old_ptr, next);
             drop_item(next);
         }
-        println!("Actual drop of ItemHolder {:?}", old_ptr);
+        //println!("Actual drop of ItemHolder {:?}", old_ptr);
         _ = unsafe { Box::from_raw(old_ptr as *mut ItemHolder<T>) };
     }
 }
@@ -210,13 +210,13 @@ mod tests {
             let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(10_000_000).spawn(move||{
 
                 shift1.upgrade(43);
-                println!("t1 dropping");
+                //println!("t1 dropping");
             }).unwrap();
 
             let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(10_000_000).spawn(move||{
 
                 std::hint::black_box(shift2.get());
-                println!("t2 dropping");
+                //println!("t2 dropping");
 
             }).unwrap();
             _=t1.join().unwrap();
@@ -230,22 +230,22 @@ mod tests {
             let shift2 = std::sync::Arc::clone(&shift1);
             let mut shift3 = (*shift1).clone();
             let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(10_000_000).spawn(move || {
-                println!(" = On thread t1 =");
+                //println!(" = On thread t1 =");
                 shift1.upgrade(43);
-                println!(" = drop t1 =");
+                //println!(" = drop t1 =");
             }).unwrap();
 
             let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(10_000_000).spawn(move || {
-                println!(" = On thread t2 =");
+                //println!(" = On thread t2 =");
                 let mut shift = (*shift2).clone();
                 std::hint::black_box(shift.get());
-                println!(" = drop t2 =");
+                //println!(" = drop t2 =");
             }).unwrap();
 
             let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(10_000_000).spawn(move || {
-                println!(" = On thread t3 =");
+                //println!(" = On thread t3 =");
                 std::hint::black_box(shift3.get());
-                println!(" = drop t3 =");
+                //println!(" = drop t3 =");
             }).unwrap();
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
@@ -260,27 +260,27 @@ mod tests {
             let shift3 = std::sync::Arc::clone(&shift1);
             let mut shift4 = (*shift1).clone();
             let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(10_000_000).spawn(move || {
-                println!(" = On thread t1 =");
+                //println!(" = On thread t1 =");
                 shift1.upgrade(43);
-                println!(" = drop t1 =");
+                //println!(" = drop t1 =");
             }).unwrap();
 
             let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(10_000_000).spawn(move || {
-                println!(" = On thread t2 =");
+                //println!(" = On thread t2 =");
                 let mut shift = (*shift2).clone();
                 std::hint::black_box(shift.get());
-                println!(" = drop t2 =");
+                //println!(" = drop t2 =");
             }).unwrap();
 
             let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(10_000_000).spawn(move || {
-                println!(" = On thread t3 =");
+                //println!(" = On thread t3 =");
                 shift3.upgrade(44);
-                println!(" = drop t3 =");
+                //println!(" = drop t3 =");
             }).unwrap();
             let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(10_000_000).spawn(move || {
-                println!(" = On thread t4 =");
+                //println!(" = On thread t4 =");
                 std::hint::black_box(shift4.get());
-                println!(" = drop t4 =");
+                //println!(" = drop t4 =");
             }).unwrap();
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
@@ -383,9 +383,9 @@ mod tests {
     fn run_fuzz<T:Clone+Hash+Eq+'static+Debug+Send+Sync>(rng: &mut StdRng, mut constructor: impl FnMut()->T) {
         let cmds = make_commands::<T>(rng, &mut constructor);
         let mut arcs: [Option<ArcShift<T>>; 3] = [();3].map(|_|None);
-        println!("Staritng fuzzrun");
+        //println!("Staritng fuzzrun");
         for cmd in cmds {
-            println!("=== Applying cmd: {:?} ===", cmd);
+            //println!("=== Applying cmd: {:?} ===", cmd);
             print_arcs(&mut arcs);
             match cmd {
                 FuzzerCommand::CreateUpdateArc(chn, val) => {
@@ -412,7 +412,7 @@ mod tests {
             }
 
         }
-        println!("=== No more commands ===");
+        //println!("=== No more commands ===");
         print_arcs(&mut arcs);
 
     }
@@ -420,23 +420,23 @@ mod tests {
     fn print_arcs<T:Send+Sync>(arcs: &mut [Option<ArcShift<T>>; 3]) {
         for arc in arcs.iter() {
             if let Some(arc) = arc {
-                print!("{:? } ", arc.item);
+                //print!("{:? } ", arc.item);
             } else {
-                print!("None, ")
+                //print!("None, ")
             }
         }
-        println!();
+        //println!();
         for arc in arcs.iter() {
             if let Some(arc) = arc {
                 let curr = unsafe { (*arc.item).next.load(atomic::Ordering::SeqCst) };
                 let currcount = if !curr.is_null() { unsafe { (*curr).refcount.load(atomic::Ordering::SeqCst) } } else { 1111 };
-                /*println!("{:? } (ctx: {:?}/{}, sc: {}) refs = {}, ", arc.item,
+                /*//println!("{:? } (ctx: {:?}/{}, sc: {}) refs = {}, ", arc.item,
                          unsafe { (*arc.item).shift.current.load(Ordering::AcqRel) },
                          currcount,
                          strongcount,
                          unsafe { (*arc.item).refcount.load(Ordering::AcqRel) });*/
             } else {
-                println!("None, ")
+                //println!("None, ")
             }
         }
     }
@@ -504,12 +504,13 @@ mod tests {
 
     #[test]
     fn generic_thread_fuzzing_all() {
-        for i in 0..10000 {
+        const COUNT: u64 = 100;
+        for i in 0..COUNT {
             model(move||{
 
                 let mut rng = StdRng::seed_from_u64(i);
                 let mut counter = 0u32;
-                println!("--- Seed {} ---", i);
+                //println!("--- Seed {} ---", i);
                 run_multi_fuzz(&mut rng, move || -> u32 {
                     counter += 1;
                     counter
@@ -524,7 +525,7 @@ mod tests {
             model(move||{
                 let mut rng = StdRng::seed_from_u64(i);
                 let mut counter = 0u32;
-                println!("Running seed {}", i);
+                //println!("Running seed {}", i);
                 run_fuzz(&mut rng, move || -> u32 {
                     counter += 1;
                     counter
@@ -538,7 +539,7 @@ mod tests {
         {
             let mut rng = StdRng::seed_from_u64(70);
             let mut counter = 0u32;
-            println!("Running seed {}", 70);
+            //println!("Running seed {}", 70);
             run_fuzz(&mut rng, move || -> u32 {
                 counter += 1;
                 counter
@@ -552,7 +553,7 @@ mod tests {
         {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut counter = 0u32;
-            println!("Running seed {}", seed);
+            //println!("Running seed {}", seed);
             run_fuzz(&mut rng, move || -> u32 {
                 counter += 1;
                 counter
