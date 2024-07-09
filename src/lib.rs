@@ -31,7 +31,7 @@
 
 pub use std::collections::HashSet;
 use std::ptr::{null_mut};
-
+use std::sync::atomic::Ordering;
 
 #[cfg(not(loom))]
 mod atomic {
@@ -90,6 +90,17 @@ impl<T:Send+Sync> Drop for ItemHolder<T> {
 }
 
 
+fn de_dummify<T:Send+Sync>(cand: *const ItemHolder<T>) -> *const ItemHolder<T> {
+    if cand as usize & 1 == 1 {
+        ((cand as *const u8).wrapping_offset(-1)) as *const ItemHolder<T>
+    } else {
+        cand
+    }
+}
+fn is_dummy<T:Send+Sync>(cand: *const ItemHolder<T>) -> bool {
+    ((cand as usize) & 1) == 1
+}
+
 impl<T:'static+Send+Sync> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         debug_println!("ArcShift::clone({:?})", self.item);
@@ -133,15 +144,26 @@ impl<T:'static+Send+Sync> ArcShift<T> {
         debug_println!("Upgrading {:?} -> {:?} ", self.item, new_ptr);
         let mut candidate = self.item;
         loop {
-            match unsafe { &*candidate }.next.compare_exchange(null_mut(), new_ptr, atomic::Ordering::AcqRel, atomic::Ordering::Acquire) {
+            let curnext  = unsafe { &*candidate }.next.load(Ordering::SeqCst);
+            let expect = if is_dummy(curnext) {
+                curnext
+            } else {
+                null_mut()
+            };
+            match unsafe { &*candidate }.next.compare_exchange(expect, (new_ptr as *mut u8).wrapping_offset(1) as *mut ItemHolder<T>, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
                 Ok(_) => {
                     // Upgrade complete.
+                    debug_println!("Did replace next of {:?} with {:?} ", candidate, new_ptr);
+                    if is_dummy(expect)
+                    {
+                        drop_item(de_dummify(expect));
+                    }
                     debug_println!("Upgrade complete");
                     return;
                 }
                 Err(other) => {
                     debug_println!("Upgrade not complete yet, spinning");
-                    candidate = other;
+                    candidate = de_dummify(other);
                 }
             }
             atomic::spin_loop();
@@ -180,7 +202,18 @@ impl<T:'static+Send+Sync> ArcShift<T> {
         if !cand.is_null() {
             loop {
                 debug_println!("Upgrade to {:?} detected", cand);
-                let cand: *const ItemHolder<T> = unsafe { &*self.item }.next.load(atomic::Ordering::Acquire) as *const ItemHolder<T>;
+                let cand: *const ItemHolder<T> = unsafe { &*self.item }.next.load(atomic::Ordering::SeqCst) as *const ItemHolder<T>;
+                let fixed_cand = de_dummify(cand);
+                let cand = match unsafe { &*self.item }.next.compare_exchange(cand as *mut _, fixed_cand as *mut _, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
+                    Ok(cand) => {
+                        de_dummify(cand)
+                    }
+                    Err(_) => {
+                        debug_println!("Failed cmpx {:?} -> {:?}", cand, fixed_cand);
+                        atomic::spin_loop();
+                        continue;
+                    }
+                };
                 if !cand.is_null() {
                     unsafe { (*cand).refcount.fetch_add(1, atomic::Ordering::Relaxed) };
                     let count = unsafe { &*self.item }.refcount.fetch_sub(1, atomic::Ordering::Acquire);
@@ -197,6 +230,7 @@ impl<T:'static+Send+Sync> ArcShift<T> {
                 } else {
                     break;
                 }
+                atomic::spin_loop();
             }
         }
         debug_println!("Returned payload for {:?}", self.item);
@@ -220,12 +254,12 @@ impl<T:'static+Send+Sync> ArcShift<T> {
 }
 fn drop_item<T:Send+Sync>(old_ptr: *const ItemHolder<T>) {
     debug_println!("drop_item {:?} about to subtract 1", old_ptr);
-    let count = unsafe{&*old_ptr}.refcount.fetch_sub(1, atomic::Ordering::Acquire);
+    let count = unsafe{&*old_ptr}.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
     debug_println!("Drop-item {:?}, post-count = {}", old_ptr, count-1);
     if count == 1 {
         debug_println!("Begin drop of {:?}", old_ptr);
         //let next = *unsafe{&mut *(old_ptr as *mut ItemHolder<T>)}.next.get_mut();
-        let next = unsafe {&*old_ptr}.next.load(atomic::Ordering::Acquire);
+        let next = de_dummify( unsafe {&*old_ptr}.next.load(atomic::Ordering::SeqCst) );
         if next.is_null() == false {
             debug_println!("Actual drop of ItemHolder {:?} - recursing into {:?}", old_ptr, next);
             drop_item(next);
