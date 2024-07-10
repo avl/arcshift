@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "arcshift",
+    "arcshift_bench",
+]
