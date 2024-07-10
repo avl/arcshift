@@ -3,4 +3,12 @@ name = "arcshift_bench"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+criterion = "0.3"
+
 [dependencies]
+arcshift = {path = "../arcshift"}
+arc-swap = "1.7"
+[[bench]]
+name = "my_benchmark"
+harness = false

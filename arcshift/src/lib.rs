@@ -21,7 +21,7 @@
 //! * When modifying the value, the old version of the value lingers in memory until
 //!   the last ArcShift has been updated. Such an update only happens when the ArcShift
 //!   is accessed using an owned (or &mut) access.
-//! * Note that the former limitation applies even if ArcShift::upgrade is called multiple times
+//! * Note that the former limitation applies even if ArcShift::update is called multiple times
 //!   in succession, without any instance actually using the value provided.
 //!
 //! The last limitation might seem unacceptable, but for many applications it is not
@@ -125,15 +125,15 @@ impl<T:'static+Send+Sync> ArcShift<T> {
             item: cur_ptr,
         }
     }
-    /// Upgrade the contents of this ArcShift, and all other instance cloned from this
+    /// Update the contents of this ArcShift, and all other instance cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
     ///
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This upgrade happens only
-    /// when the instance is dereferenced, or the 'upgrade' method is called.
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the instance is dereferenced, or the 'update' method is called.
     pub fn upgrade_shared(&self, new_payload: T) {
         let item = ItemHolder {
             payload: new_payload,
@@ -152,46 +152,56 @@ impl<T:'static+Send+Sync> ArcShift<T> {
             };
             match unsafe { &*candidate }.next.compare_exchange(expect, (new_ptr as *mut u8).wrapping_offset(1) as *mut ItemHolder<T>, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
                 Ok(_) => {
-                    // Upgrade complete.
+                    // Update complete.
                     debug_println!("Did replace next of {:?} with {:?} ", candidate, new_ptr);
                     if is_dummy(expect)
                     {
                         drop_item(de_dummify(expect));
                     }
-                    debug_println!("Upgrade complete");
+                    debug_println!("Update complete");
                     return;
                 }
                 Err(other) => {
-                    debug_println!("Upgrade not complete yet, spinning");
+                    debug_println!("Update not complete yet, spinning");
                     candidate = de_dummify(other);
                 }
             }
             atomic::spin_loop();
         }
     }
-    /// Upgrade the contents of this ArcShift, and all other instance cloned from this
+    /// Update the contents of this ArcShift, and all other instance cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
     ///
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This upgrade happens only
-    /// when the instance is dereferenced, or the 'upgrade' method is called.
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the instance is dereferenced, or the 'update' method is called.
     ///
-    /// Note, this method, in contrast to 'upgrade_shared', actually does upgrade
+    /// Note, this method, in contrast to 'upgrade_shared', actually does update
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
     /// only remaining instance, the old value that is being replaced will be dropped
     /// before this function returns.
-    pub fn upgrade(&mut self, new_payload: T) {
+    pub fn update(&mut self, new_payload: T) {
         self.upgrade_shared(new_payload);
         self.get();
+    }
+
+    /// This function makes sure to update this instance of ArcShift to the newest
+    /// value.
+    /// Calling the regular 'get' already does this, so this is rarely needed.
+    /// But if mutable access to a ArcShift is only possible at certain points in the program,
+    /// it may be clearer to call 'force_update' at those points to ensure any updates take
+    /// effect, compared to just calling 'get' and discarding the value.
+    pub fn force_update(&mut self) {
+        _ = self.get();
     }
 
     /// Return the value pointed to.
     ///
     /// This method is very fast, basically the speed of a regular pointer, unless
-    /// the value has been modified by calling one of the upgrade-methods.
+    /// the value has been modified by calling one of the update-methods.
     ///
     /// Note that this method requires 'mut self'. The reason 'mut' self is needed, is because
     /// of implementation reasons, and is what makes ArcShift 'get' very very fast, while still
@@ -201,7 +211,7 @@ impl<T:'static+Send+Sync> ArcShift<T> {
         let cand: *const ItemHolder<T> = unsafe { &*self.item }.next.load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
         if !cand.is_null() {
             loop {
-                debug_println!("Upgrade to {:?} detected", cand);
+                debug_println!("Update to {:?} detected", cand);
                 let cand: *const ItemHolder<T> = unsafe { &*self.item }.next.load(atomic::Ordering::SeqCst) as *const ItemHolder<T>;
                 let fixed_cand = de_dummify(cand);
                 let cand = match unsafe { &*self.item }.next.compare_exchange(cand as *mut _, fixed_cand as *mut _, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
@@ -237,14 +247,14 @@ impl<T:'static+Send+Sync> ArcShift<T> {
         &unsafe { &*self.item }.payload
     }
     /// This is like 'get', but never upgrades the pointer.
-    /// This means that new values supplied using one of the upgrade methods will not be
+    /// This means that new values supplied using one of the update methods will not be
     /// available.
     /// This method should be ever so slightly faster than regular 'get'.
     ///
     /// WARNING!
     /// You should probably not using this method. If acquiring a non-upgraded value is
     /// acceptable, you should consider just using regular 'Arc'.
-    /// One usecase is if you can control locations where an upgrade is required, and arrange
+    /// One usecase is if you can control locations where an update is required, and arrange
     /// for 'mut self' to be possible at those locations.
     /// But in this case, it might be better to just use 'get' and store the returned pointer
     /// (it has a similar effect).
