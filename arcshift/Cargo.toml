@@ -2,15 +2,16 @@
 name = "arcshift"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dependencies]
-crossbeam-channel = "0.5"
-rand="0.8"
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"] }
 
 [dev-dependencies]
+crossbeam-channel = "0.5"
+rand="0.8"

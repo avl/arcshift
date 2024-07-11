@@ -1,1 +1,1 @@
-LOOM_MAX_PREEMPTIONS=1 RUSTFLAGS="--cfg loom" cargo test --release  -- --nocapture
+LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test --release  -- --nocapture
