@@ -211,11 +211,11 @@ use std::ops::Deref;
 use std::panic::UnwindSafe;
 use std::process::abort;
 use std::ptr::{addr_of_mut, addr_of, null_mut};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{Ordering};
 
 #[cfg(not(loom))]
 mod atomic {
-    pub use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+    pub use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering, AtomicU8};
     pub use std::hint::spin_loop;
     #[allow(unused)]
     pub use std::thread;
@@ -223,7 +223,7 @@ mod atomic {
 
 #[cfg(loom)]
 mod atomic {
-    pub use loom::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+    pub use loom::sync::atomic::{AtomicPtr, AtomicUsize, Ordering, AtomicU8};
     #[allow(unused)]
     pub use loom::thread;
     pub use loom::hint::spin_loop;
@@ -330,7 +330,7 @@ impl<T:'static> ArcShiftLight<T> {
             payload,
             next: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(1),
-            moved_out: false,
+            moved_out: atomic::AtomicU8::new(2),
         };
         let cur_ptr = Box::into_raw(Box::new(item));
         debug_println!("Created ArcShiftLight for {:?}",  cur_ptr);
@@ -366,6 +366,7 @@ impl<T:'static> ArcShiftLight<T> {
             let mut temp = ArcShift {
                 item: curitem
             };
+            item.moved_out.store(0, Ordering::SeqCst);
             temp.reload();
             return temp;
         }
@@ -400,7 +401,11 @@ struct ItemHolder<T:'static> {
     next: atomic::AtomicPtr<ItemHolder<T>>,
     refcount: atomic::AtomicUsize,
     payload: T,
-    moved_out: bool,
+    /// State:
+    /// 0 = Nominal case. Payload has not been dropped, and there are live ArcShift-instances that can do so.
+    /// 1 = payload has been dropped. Care must be taken to not drop it again.
+    /// 2 = Payload has not been dropped, and no ArcShift-instances exist or will exist for it.
+    moved_out: atomic::AtomicU8,
 }
 
 impl<T> Drop for ItemHolder<T> {
@@ -454,7 +459,7 @@ impl<T:'static> ArcShift<T> {
             payload,
             next: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
-            moved_out: false,
+            moved_out: atomic::AtomicU8::new(0),
         };
         let cur_ptr = Box::into_raw(Box::new(item));
         ArcShift {
@@ -488,7 +493,7 @@ impl<T:'static> ArcShift<T> {
         unsafe { addr_of_mut!((*result_ptr).refcount).write(atomic::AtomicUsize::new(MAX_ROOTS)); }
         // SAFETY:
         // 'false' is a valid value ot write ot a valid mutable bool pointer
-        unsafe { addr_of_mut!((*result_ptr).moved_out).write(false); }
+        unsafe { addr_of_mut!((*result_ptr).moved_out).write(atomic::AtomicU8::new(0)); }
 
         // SAFETY:
         // input_ptr is a *mut T that has been created from a Box<T>.
@@ -550,7 +555,7 @@ impl<T:'static> ArcShift<T> {
             payload: new_payload,
             next: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
-            moved_out: false,
+            moved_out: atomic::AtomicU8::new(0),
         };
         let new_ptr = Box::into_raw(Box::new(item));
         debug_println!("Upgrading {:?} -> {:?} ", self.item, new_ptr);
@@ -663,7 +668,7 @@ impl<T:'static> ArcShift<T> {
                     // Here we're removing the count that was provided by the `self.item` object that we're doing to drop below
                     let dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
                     assert!(dbg >= MAX_ROOTS);
-                    drop_payload(self.item)
+                    drop_payload(self.item, true)
 
                 } else {
                     if count < 2*MAX_ROOTS {
@@ -691,18 +696,16 @@ impl<T:'static> ArcShift<T> {
                         let payload_item_mut = unsafe { &mut *addr_of_mut!((*(self.item as *mut ItemHolder<T>)).payload) };
                         // SAFETY:
                         // Se above comment.
-                        let moved_out_item_mut = unsafe { &mut *addr_of_mut!((*(self.item as *mut ItemHolder<T>)).moved_out) };
-                        compile_error!("There's nothing stopping the ArcShiftLight-instance from being dropped simultaneously.
-Some sort of sync is needed here. Figure out what is feasible!
-                        ")
+                        let moved_out_item_mut = unsafe { &*addr_of!((*(self.item as *mut ItemHolder<T>)).moved_out) };
+
 
                         debug_println!("Early drop optimization active! cand count: {}", dbg);
-                        if *moved_out_item_mut {
+                        if moved_out_item_mut.load(Ordering::SeqCst) == 1 {
                             println!("Already moved out!");
                             std::process::abort();
                         }
                         debug_println!("Marking {:?} as moved-out", self.item);
-                        *moved_out_item_mut = true;
+                        moved_out_item_mut.store(1, Ordering::SeqCst);
                         // SAFETY:
                         // Through extreme care, and because 'moved_out' is set above,
                         // no further drop of payload will occur, so this is safe.
@@ -879,22 +882,36 @@ Some sort of sync is needed here. Figure out what is feasible!
 /// SAFETY:
 /// The 'ptr' must be a valid pointer to an ItemHolder heap item that
 /// is okay to drop.
-fn drop_payload<T:'static>(ptr: *const ItemHolder<T>) {
+fn drop_payload<T:'static>(ptr: *const ItemHolder<T>, allow_moveout: bool) {
     // SAFETY:
     // ptr must be valid, since this is a precondition for using this method.
     // This method does not need unsafe, since it is private, and the scope for
     // unsafety is within the entire crate.
-    let item_moved_out = unsafe{*addr_of!((*ptr).moved_out)};
-    if item_moved_out {
-        // SAFETY:
-        // `ptr` is always a valid pointer.
-        // At this position we've established that we can drop the pointee.
-        _ = unsafe { Box::from_raw(ptr as *mut MaybeUninit<ItemHolder<T>>) };
-    } else {
-        // SAFETY:
-        // `ptr` is always a valid pointer.
-        // At this position we've established that we can drop the pointee.
-        _ = unsafe { Box::from_raw(ptr as *mut ItemHolder<T>) };
+    let mut sanity = 0usize;
+    loop {
+        let item_moved_out = unsafe{&*addr_of!((*ptr).moved_out)}.load(Ordering::SeqCst);
+        if item_moved_out == 1 {
+            // SAFETY:
+            // `ptr` is always a valid pointer.
+            // At this position we've established that we can drop the pointee.
+            _ = unsafe { Box::from_raw(ptr as *mut MaybeUninit<ItemHolder<T>>) };
+            break;
+        } else {
+            if !allow_moveout && item_moved_out == 0 {
+                sanity += 1;
+                if sanity > 1_000_000 {
+                    eprintln!("Internal error2!!: {}", item_moved_out);
+                    abort();
+                }
+                atomic::spin_loop();
+                continue;
+            }
+            // SAFETY:
+            // `ptr` is always a valid pointer.
+            // At this position we've established that we can drop the pointee.
+            _ = unsafe { Box::from_raw(ptr as *mut ItemHolder<T>) };
+            break;
+        }
     }
 }
 
@@ -906,7 +923,7 @@ fn drop_payload_ret<T:'static>(ptr: *const ItemHolder<T>) -> Option<T> {
     // This method does not need unsafe, since it is private, and the scope for
     // unsafety is within the entire crate.
     let item = unsafe{&*ptr};
-    if item.moved_out {
+    if item.moved_out.load(Ordering::SeqCst) == 1 {
         // SAFETY:
         // ptr must be valid to drop, since this is a precondition for using this method.
         // The contents of the payload field have already been dropped, and the rest of
@@ -951,7 +968,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>) {
         }
         debug_println!("Actual drop of ItemHolder {:?}", old_ptr);
 
-        drop_payload(old_ptr);
+        drop_payload(old_ptr, false);
     }
 }
 fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
@@ -973,7 +990,12 @@ fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
         }
         debug_println!("Actual drop of ItemHolder {:?}", old_ptr);
 
-        drop_payload(old_ptr);
+        drop_payload(old_ptr, true);
+    } else if count < 2*MAX_ROOTS {
+
+        // SAFETY:
+        // If, and only if, moved_out is 0 (not moved out), we need to set it to 2 (not moved out, owned only by ArcShiftLight).
+        _ = unsafe{&*old_ptr}.moved_out.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
 fn drop_item_ret<T>(old_ptr: *const ItemHolder<T>) -> Option<T> {
@@ -1733,6 +1755,19 @@ pub mod tests {
                 });
             });
         };
+    }
+    #[test]
+    fn generic_fuzzing_159() {
+        let seed = 159;
+        model(move||{
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut counter = 0u32;
+            println!("Running seed {}", seed);
+            run_fuzz(&mut rng, move || -> u32 {
+                counter += 1;
+                counter
+            });
+        })
     }
     #[test]
     fn generic_fuzzing_53014() {
