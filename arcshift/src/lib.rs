@@ -210,7 +210,7 @@ use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
 use std::process::abort;
-use std::ptr::{addr_of_mut, null_mut};
+use std::ptr::{addr_of_mut, addr_of, null_mut};
 use std::sync::atomic::Ordering;
 
 #[cfg(not(loom))]
@@ -692,6 +692,9 @@ impl<T:'static> ArcShift<T> {
                         // SAFETY:
                         // Se above comment.
                         let moved_out_item_mut = unsafe { &mut *addr_of_mut!((*(self.item as *mut ItemHolder<T>)).moved_out) };
+                        compile_error!("There's nothing stopping the ArcShiftLight-instance from being dropped simultaneously.
+Some sort of sync is needed here. Figure out what is feasible!
+                        ")
 
                         debug_println!("Early drop optimization active! cand count: {}", dbg);
                         if *moved_out_item_mut {
@@ -760,7 +763,7 @@ impl<T:'static> ArcShift<T> {
         }
         // SAFETY:
         // `next_self_item` is always a valid pointer
-        return &unsafe {&*next_self_item}.payload
+        &unsafe {&*next_self_item}.payload
     }
 
     /// Like 'get', but only requires a &self, not &mut self.
@@ -881,8 +884,8 @@ fn drop_payload<T:'static>(ptr: *const ItemHolder<T>) {
     // ptr must be valid, since this is a precondition for using this method.
     // This method does not need unsafe, since it is private, and the scope for
     // unsafety is within the entire crate.
-    let item = unsafe{&*ptr};
-    if item.moved_out {
+    let item_moved_out = unsafe{*addr_of!((*ptr).moved_out)};
+    if item_moved_out {
         // SAFETY:
         // `ptr` is always a valid pointer.
         // At this position we've established that we can drop the pointee.
@@ -934,14 +937,14 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>) {
     // SAFETY:
     // old_ptr must be a valid pointer, required by caller. 'drop_root_item' is not unsafe because
     // it is not public.
-    let count = unsafe{&*old_ptr}.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
+    let count = unsafe{ &*addr_of!( (*old_ptr).refcount ) } .fetch_sub(1, atomic::Ordering::SeqCst);
     assert!(count >= 1);
     debug_println!("Drop-item {:?}, post-count = {}", old_ptr, count-1);
     if count == 1 {
         debug_println!("Begin drop of {:?}", old_ptr);
         // SAFETY:
         // old_ptr must be a valid pointer
-        let next = de_dummify( unsafe {&*old_ptr}.next.load(atomic::Ordering::SeqCst) );
+        let next = de_dummify( unsafe {&*addr_of!((*old_ptr).next)}.load(atomic::Ordering::SeqCst) );
         if !next.is_null() {
             debug_println!("Actual drop of ItemHolder {:?} - recursing into {:?}", old_ptr, next);
             crate::drop_root_item(next);
@@ -1493,6 +1496,14 @@ pub mod tests {
                                 }
                             }
                         }
+                        FuzzerCommand::SharedReadArc { .. } => {
+                            if let Some(curval) = curval.as_mut() {
+                                let actual = curval.shared_get();
+                                if !thread_all_possible.contains(actual) {
+                                    panic!("Unexpected value in thread {}, got {:?} which is not in {:?}", threadnr, actual, thread_all_possible);
+                                }
+                            }
+                        }
                         FuzzerCommand::CloneArc { from:_, to:_ } => {
                             if let Some(curval) = curval.as_mut() {
                                 let cloned = curval.clone();
@@ -1539,6 +1550,7 @@ pub mod tests {
         CreateUpdateArc(u8, T),
         CreateArcRoot(u8, T),
         ReadArc{arc: u8},
+        SharedReadArc{arc: u8},
         CloneArc{from:u8,to:u8},
         CloneArcRoot{from:u8,to:u8},
         DropArc(u8),
@@ -1549,7 +1561,8 @@ pub mod tests {
         fn batch(&self) -> u8 {
             match self {
                 FuzzerCommand::CreateUpdateArc(chn, _) => {*chn}
-                FuzzerCommand::ReadArc { arc, .. } => {*arc}
+                FuzzerCommand::ReadArc { arc} => {*arc}
+                FuzzerCommand::SharedReadArc { arc } => {*arc}
                 FuzzerCommand::CloneArc { from, .. } => {*from}
                 FuzzerCommand::DropArc(chn) => {*chn}
                 FuzzerCommand::CreateArcRoot(chn, _) => {*chn}
@@ -1577,6 +1590,13 @@ pub mod tests {
                 FuzzerCommand::ReadArc { arc } => {
                     if let Some(actual) = &mut arcs[arc as usize] {
                         let actual_val = actual.get();
+
+                        std::hint::black_box(actual_val);
+                    }
+                }
+                FuzzerCommand::SharedReadArc { arc } => {
+                    if let Some(actual) = &mut arcs[arc as usize] {
+                        let actual_val = actual.shared_get();
 
                         std::hint::black_box(actual_val);
                     }
@@ -1616,7 +1636,7 @@ pub mod tests {
 
         let mut ret = Vec::new();
         for _x in 0..5 {
-            match rng.gen_range(0..9) {
+            match rng.gen_range(0..10) {
                 0 => {
                     let chn = rng.gen_range(0..3);
                     let val = constructor();
@@ -1665,6 +1685,10 @@ pub mod tests {
                     let chn = rng.gen_range(0..3);
                     ret.push(FuzzerCommand::DemoteArc(chn));
                 }
+                9 => {
+                    let chn = rng.gen_range(0..3);
+                    ret.push(FuzzerCommand::SharedReadArc{arc:chn});
+                }
                 _ => unreachable!()
             }
         }
@@ -1675,7 +1699,7 @@ pub mod tests {
     #[cfg(not(miri))]
     fn generic_thread_fuzzing_all() {
         #[cfg(loom)]
-        const COUNT: u64 = 100;
+        const COUNT: u64 = 500;
         #[cfg(not(any(loom,miri)))]
         const COUNT: u64 = 10000;
         for i in 0..COUNT {
