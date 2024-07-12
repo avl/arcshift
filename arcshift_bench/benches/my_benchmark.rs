@@ -14,12 +14,20 @@ fn mutex_bench(c: &mut Criterion) {
     ));
 }
 
-fn rwlock_bench(c: &mut Criterion) {
+fn rwlock_read_bench(c: &mut Criterion) {
     let ac = RwLock::new(42u32);
-    c.bench_function("rwlock", |b| b.iter(||{
+    c.bench_function("rwlock_read", |b| b.iter(||{
         let guard = ac.read().unwrap();
         let value: u32 = *guard;
         _ = black_box(value);
+    }
+    ));
+}
+fn rwlock_write_bench(c: &mut Criterion) {
+    let ac = RwLock::new(42u32);
+    c.bench_function("rwlock_write", |b| b.iter(||{
+        let mut guard = ac.write().unwrap();
+        *guard = 43;
     }
     ));
 }
@@ -30,6 +38,13 @@ fn arcshift_bench(c: &mut Criterion) {
         let value = ac.get();
         _ = black_box(value);
         }
+    ));
+}
+fn arcshift_update_bench(c: &mut Criterion) {
+    let mut ac = ArcShift::new(42u32);
+    c.bench_function("arcshift_update", |b| b.iter(||{
+        ac.update(42);
+    }
     ));
 }
 fn arcshift_shared_bench(c: &mut Criterion) {
@@ -62,5 +77,5 @@ fn arcswap_cached_bench(c: &mut Criterion) {
     ));
 }
 
-criterion_group!(benches, arcshift_bench, arcswap_bench, arcswap_cached_bench, mutex_bench, rwlock_bench, arcshift_shared_bench);
+criterion_group!(benches, rwlock_write_bench, arcshift_bench, arcshift_update_bench, arcswap_bench, arcswap_cached_bench, mutex_bench, rwlock_read_bench, arcshift_shared_bench);
 criterion_main!(benches);
