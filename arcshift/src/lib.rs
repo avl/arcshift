@@ -352,6 +352,7 @@ impl<T:'static> ArcShiftLight<T> {
             let next = item.next.load(Ordering::Acquire);
             if !next.is_null() {
                 curitem = de_dummify(next);
+                atomic::spin_loop();
                 continue;
             }
             let _precount = item.refcount.fetch_add(MAX_ROOTS, Ordering::Acquire);
@@ -360,6 +361,7 @@ impl<T:'static> ArcShiftLight<T> {
             if !next.is_null() {
                 let _precount = item.refcount.fetch_sub(MAX_ROOTS, Ordering::Release);
                 curitem = de_dummify(next);
+                atomic::spin_loop();
                 continue;
             }
 
@@ -394,6 +396,7 @@ impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
         debug_println!("ArcShift::drop({:?})", self.item);
         drop_item(self.item);
+        debug_println!("ArcShift::drop({:?}) DONE", self.item);
     }
 }
 #[repr(align(2))]
@@ -845,6 +848,7 @@ impl<T:'static> ArcShift<T> {
             // curitem is a pointer reachable through the next-chain from self.item,
             // and is thus a valid pointer.
             if unsafe {&*curitem}.refcount.compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                atomic::spin_loop();
                 continue;
             }
             break;
@@ -899,16 +903,21 @@ fn drop_payload<T:'static>(ptr: *const ItemHolder<T>, allow_moveout: bool) {
         } else {
             if !allow_moveout && item_moved_out == 0 {
                 sanity += 1;
+                atomic::spin_loop();
+                //loom::thread::yield_now();
+                println!("Sanity count: {}, imo = {}", sanity, item_moved_out);
                 if sanity > 1_000_000 {
                     eprintln!("Internal error2!!: {}", item_moved_out);
                     abort();
                 }
-                atomic::spin_loop();
                 continue;
             }
             // SAFETY:
             // `ptr` is always a valid pointer.
             // At this position we've established that we can drop the pointee.
+            compile_error!("The elow should never be needed:
+            unsafe {&*ptr}.moved_out.store(1, Ordering::SeqCst);
+}
             _ = unsafe { Box::from_raw(ptr as *mut ItemHolder<T>) };
             break;
         }
