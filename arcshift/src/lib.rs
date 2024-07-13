@@ -742,7 +742,7 @@ impl<T:'static> ArcShift<T> {
                     drop_payload(self.item)
 
                 } else {
-                    let cand_hold_strength ;
+
                     if count < 2*MAX_ROOTS && !is_dropped(candstate) {
                         debug_println!("early drop check count: {}", count);
                         // SAFETY:
@@ -778,9 +778,6 @@ impl<T:'static> ArcShift<T> {
                         // `cand` is always a valid pointer
                         // Here we're downgrading the count that was provided by the `self.item` object that we're doing to drop below.
                         // Previously, it was a 'strong' reference (value MAX_ROOTS), but now it's going to be a weak one (value 1).
-                        let dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS - 1, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
-                        cand_hold_strength = 1;
-                        assert!(dbg >= MAX_ROOTS);
                         // SAFETY:
                         // self.item is always a valid pointer.
                         // because count before decrease was < 2*MAX_ROOTS, we must have been the last ArcShift-instance
@@ -795,17 +792,20 @@ impl<T:'static> ArcShift<T> {
                         // Since our compare-exchange higher up succeeded,
                         // we are the only ones allowed to drop the payload value
                         unsafe { std::ptr::drop_in_place(payload_item_mut) }
-                        debug_println!("Early drop optimization active! for: {:?}, brought next-refcount to {}", self.item, dbg-(MAX_ROOTS-1));
-                    } else {
-                        cand_hold_strength = 0;
-                        compile_error!("This probably leaks memory. Try to test better.")
+                        debug_println!("Early drop optimization active! for: {:?}", self.item);
+                    }
+                    if count < 2*MAX_ROOTS  {
+                        let dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS-1, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
+                        debug_println!("For: {:?}, reduce next-refcount to {} (reduction by {})", self.item, dbg-(MAX_ROOTS-1), MAX_ROOTS);
+                        assert!(dbg >= MAX_ROOTS);
                     }
 
                     let newcount = unsafe { &*self.item }.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
                     debug_println!("Second reduction count: {} (end: {})", newcount, newcount -1);
                     if newcount == 1 {
-                        let _dbg = unsafe { (*cand).refcount.fetch_sub(cand_hold_strength, atomic::Ordering::SeqCst) }; //Can't reach 0, self.item will point to this soon
-                        debug_println!("For: {:?}, reduce next-refcount to {} (reduction by {})", self.item, _dbg-(cand_hold_strength), cand_hold_strength);
+                        let dbg = unsafe { (*cand).refcount.fetch_sub(1, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
+                        debug_println!("For: {:?}, reduce next-refcount to {} (reduction by {})", self.item, dbg-(1), MAX_ROOTS);
+                        assert!(dbg >= 1);
                         drop_payload(self.item);
                     }
                     debug_println!("No drop of ItemHolder {:?}", self.item);
