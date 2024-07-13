@@ -341,6 +341,7 @@ impl<T:'static> ArcShiftLight<T> {
 
     /// Create an ArcShift instance from this ArcShiftLight.
     pub fn get(&self) -> ArcShift<T> {
+        debug_println!("ArcShiftRoot Promoting to ArcShift {:?}", self.item);
         // SAFETY:
         // self.item is always a valid pointer
         let mut curitem = self.item;
@@ -356,10 +357,12 @@ impl<T:'static> ArcShiftLight<T> {
                 continue;
             }
             let _precount = item.refcount.fetch_add(MAX_ROOTS, Ordering::Acquire);
-            debug_println!("Promote, prev count: {}, new count {}", _precount, _precount + MAX_ROOTS);
+            assert!(_precount >= 1);
+            debug_println!("Promote {:?}, prev count: {}, new count {}", curitem, _precount, _precount + MAX_ROOTS);
             let next = item.next_and_state.load(Ordering::Acquire);
             if !next.is_null() {
                 let _precount = item.refcount.fetch_sub(MAX_ROOTS, Ordering::Release);
+                assert!(_precount > MAX_ROOTS);
                 curitem = undecorate(next);
                 atomic::spin_loop();
                 continue;
@@ -394,6 +397,8 @@ unsafe impl<T:'static+Send> Send for ArcShift<T> {}
 impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
         debug_println!("ArcShift::drop({:?})", self.item);
+        self.reload();
+        debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
         drop_item(self.item);
         debug_println!("ArcShift::drop({:?}) DONE", self.item);
     }
@@ -445,7 +450,7 @@ fn state_change<T>(ptr: &atomic::AtomicPtr<ItemHolder<T>>, prev: *const ItemHold
         abort();
     }
     let to_decorated = decorate(prev, to);
-    return ptr.compare_exchange(prev as *mut _, to_decorated as *mut _, Ordering::SeqCst, Ordering::SeqCst).is_ok();
+    ptr.compare_exchange(prev as *mut _, to_decorated as *mut _, Ordering::SeqCst, Ordering::SeqCst).is_ok()
 }
 
 fn assert_is_undecorated<T>(ptr: *const ItemHolder<T>) {
@@ -469,26 +474,18 @@ fn get_state<T>(ptr: *const ItemHolder<T>) -> Option<ItemStateEnum> {
     if ptr.is_null() {
         return None;
     }
-    debug_println!("Getting state of {:?}", ptr);
+    debug_println!("Getting state encoded in {:?}", ptr);
     // SAFETY:
     // All values `0..=3` are valid ItemStateEnum.
     // And the bitmask produces a value `0..=3`
-    Some( unsafe { std::mem::transmute( ((ptr as usize) & 3) as u8 ) } )
+    Some( unsafe { std::mem::transmute::<u8, ItemStateEnum>( ((ptr as usize) & 3) as u8 ) } )
 }
 
 fn is_dropped(state: Option<ItemStateEnum>) -> bool {
-    if let Some(ItemStateEnum::Dropped) = state {
-        true
-    } else {
-        false
-    }
+    matches!(state, Some(ItemStateEnum::Dropped))
 }
 fn is_superseded_by_tentative(state: Option<ItemStateEnum>) -> bool {
-    if let Some(ItemStateEnum::SupersededByTentative) = state {
-        true
-    } else {
-        false
-    }
+    matches!(state, Some(ItemStateEnum::SupersededByTentative))
 }
 
 impl<T:'static> Clone for ArcShift<T> {
@@ -691,6 +688,8 @@ impl<T:'static> ArcShift<T> {
             // `self.item` is always a valid pointer
 
             let candstate;
+            // SAFETY:
+            // self.item is always a valid pointer
             let mut rawcand: *const ItemHolder<T> = unsafe { &*self.item }.next_and_state.load(atomic::Ordering::SeqCst) as *const ItemHolder<T>;
             let cand = if is_superseded_by_tentative(get_state(rawcand)) {
                 let fixed_cand = decorate(rawcand, ItemStateEnum::Superseded);
@@ -721,7 +720,7 @@ impl<T:'static> ArcShift<T> {
                 // thread could come and do the same sort of cleanup we're doing, and it could
                 // overtake us and actually free 'cand' immediately after we've decremented
                 // our count for `self.item`
-                let _candcount = unsafe { (*cand).refcount.fetch_add(MAX_ROOTS, atomic::Ordering::Relaxed) };
+                let _candcount = unsafe { (*cand).refcount.fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst) };
                 debug_println!("Cand count: {}", _candcount);
 
                 // SAFETY:
@@ -729,7 +728,8 @@ impl<T:'static> ArcShift<T> {
                 let count = unsafe { &*self.item }.refcount.fetch_sub(MAX_ROOTS-1, atomic::Ordering::SeqCst);
 
 
-                debug_println!("fetch sub received self.item count {}", count);
+                //Thread 2 can be here, when thread 3 runs to end of this fun
+                debug_println!("fetch sub post self.item count {} (prev: {})", count - (MAX_ROOTS-1), count);
                 assert!(count >= MAX_ROOTS);
                 if count == MAX_ROOTS {
                     debug_println!("Actual drop of ItemHolder {:?}", self.item);
@@ -742,10 +742,21 @@ impl<T:'static> ArcShift<T> {
                     drop_payload(self.item)
 
                 } else {
+                    let cand_hold_strength ;
                     if count < 2*MAX_ROOTS && !is_dropped(candstate) {
                         debug_println!("early drop check count: {}", count);
+                        // SAFETY:
+                        // self.item is always a valid pointer
                         if !state_change( &unsafe { &*self.item }.next_and_state, rawcand, get_state(rawcand), ItemStateEnum::Dropped) {
                             debug_println!("Change-state to dropped raced for {:?}", self.item);
+                            let _candcount = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst) };
+                            debug_println!("Cand count: {}", _candcount);
+
+                            unsafe { &*self.item }.refcount.fetch_add(MAX_ROOTS-1, atomic::Ordering::SeqCst);
+
+                            // SAFETY:
+                            // `self.item` is always a valid pointer
+                            atomic::spin_loop();
                             continue;
                         }
                         // If we get here, we've changed the self.item - state (stored in self.item.next) to 'Dropped'.
@@ -768,6 +779,7 @@ impl<T:'static> ArcShift<T> {
                         // Here we're downgrading the count that was provided by the `self.item` object that we're doing to drop below.
                         // Previously, it was a 'strong' reference (value MAX_ROOTS), but now it's going to be a weak one (value 1).
                         let dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS - 1, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
+                        cand_hold_strength = 1;
                         assert!(dbg >= MAX_ROOTS);
                         // SAFETY:
                         // self.item is always a valid pointer.
@@ -775,16 +787,30 @@ impl<T:'static> ArcShift<T> {
                         // holding the heap block. Since there is a non-null 'next' pointer, no more ArcShift instances will be created.
                         // it is thus safe to take a reference to 'moved_out' and 'payload' fields, since they
                         // are never used by ArcShiftLight.
+                        // SAFETY:
+                        // self.item is always a valid pointer
                         let payload_item_mut = unsafe { &mut *addr_of_mut!((*(self.item as *mut ItemHolder<T>)).payload) };
 
+                        // SAFETY:
+                        // Since our compare-exchange higher up succeeded,
+                        // we are the only ones allowed to drop the payload value
                         unsafe { std::ptr::drop_in_place(payload_item_mut) }
-                        debug_println!("Early drop optimization active! for: {:?}", self.item);
+                        debug_println!("Early drop optimization active! for: {:?}, brought next-refcount to {}", self.item, dbg-(MAX_ROOTS-1));
+                    } else {
+                        cand_hold_strength = 0;
+                        compile_error!("This probably leaks memory. Try to test better.")
                     }
 
-                    drop_root_item(self.item);
-                    debug_println!("No drop of ItemHolder");
+                    let newcount = unsafe { &*self.item }.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
+                    debug_println!("Second reduction count: {} (end: {})", newcount, newcount -1);
+                    if newcount == 1 {
+                        let _dbg = unsafe { (*cand).refcount.fetch_sub(cand_hold_strength, atomic::Ordering::SeqCst) }; //Can't reach 0, self.item will point to this soon
+                        debug_println!("For: {:?}, reduce next-refcount to {} (reduction by {})", self.item, _dbg-(cand_hold_strength), cand_hold_strength);
+                        drop_payload(self.item);
+                    }
+                    debug_println!("No drop of ItemHolder {:?}", self.item);
                 }
-                debug_println!("Doing assign");
+                debug_println!("Doing assign to {:?}, replacing {:?}", cand, self.item);
                 self.item = cand;
             } else {
                 break;
@@ -1677,7 +1703,7 @@ pub mod tests {
         let mut arcroots: [Option<ArcShiftLight<T>>; 3] = [();3].map(|_|None);
         debug_println!("Staritng fuzzrun");
         for cmd in cmds {
-            debug_println!("=== Applying cmd: {:?} ===", cmd);
+            debug_println!("\n=== Applying cmd: {:?} ===", cmd);
             match cmd {
                 FuzzerCommand::CreateUpdateArc(chn, val) => {
                     if let Some(arc) = &mut arcs[chn as usize] {
@@ -1734,7 +1760,7 @@ pub mod tests {
     fn make_commands<T:Clone+Eq+Hash+Debug>(rng: &mut StdRng, constructor: &mut impl FnMut()->T) -> Vec<FuzzerCommand<T>> {
 
         let mut ret = Vec::new();
-        for _x in 0..5 {
+        for _x in 0..20  {
             match rng.gen_range(0..10) {
                 0 => {
                     let chn = rng.gen_range(0..3);
@@ -1798,7 +1824,7 @@ pub mod tests {
     #[cfg(not(miri))]
     fn generic_thread_fuzzing_all() {
         #[cfg(loom)]
-        const COUNT: u64 = 500;
+        const COUNT: u64 = 5000;
         #[cfg(not(any(loom,miri)))]
         const COUNT: u64 = 10000;
         for i in 0..COUNT {
@@ -1818,7 +1844,7 @@ pub mod tests {
     #[cfg(not(miri))]
     fn generic_fuzzing_all() {
         #[cfg(any(loom,miri))]
-        const COUNT: u64 = 100;
+        const COUNT: u64 = 1000;
         #[cfg(not(any(loom,miri)))]
         const COUNT: u64 = 5000000;
         for i in 0..COUNT {
@@ -1860,8 +1886,8 @@ pub mod tests {
         })
     }
     #[test]
-    fn generic_fuzzing_632624() {
-        let seed = 632624;
+    fn generic_fuzzing_3817879() {
+        let seed = 3817879;
         model(move||{
             let mut rng = StdRng::seed_from_u64(seed);
             let mut counter = 0u32;
