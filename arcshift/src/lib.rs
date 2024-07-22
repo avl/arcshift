@@ -530,7 +530,8 @@ impl<T> Deref for ArcShift<T> {
 
 impl<T:'static> ArcShift<T> {
 
-    fn drop_impl(mut self_item: *const ItemHolder<T>, drop_last_too: bool) -> Option<*const ItemHolder<T>> {
+    fn drop_impl(mut self_item: *const ItemHolder<T>, drop_last_too: bool, mut hold_strength: usize) -> Option<*const ItemHolder<T>> {
+        compile_error!(hold_strength - fix! When we traverse hte linked list, only the first item in the list might have MAX_ROOTS hold strength!)
         loop {
             if self_item.is_null() {
                 return None;
@@ -560,7 +561,7 @@ impl<T:'static> ArcShift<T> {
                     // Todo: self_item is valid pointer
                     match unsafe { &*self_item }.next_and_state.compare_exchange(rawcand as *mut _, decorate(cand, ItemStateEnum::Superseded) as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
                         Ok(_) => {
-                            debug_println!("drop_impl - Replacing {:?} with {:?} for {:?}", rawcand, cand, self_item);
+                            debug_println!("drop_impl - Replacing {:?} with {:?} for {:?}", rawcand, decorate(cand, ItemStateEnum::Superseded), self_item);
                             candstate = Some(ItemStateEnum::Superseded);
                         }
                         Err(_) => {
@@ -586,7 +587,7 @@ impl<T:'static> ArcShift<T> {
                 let count = unsafe { &*self_item }.refcount.fetch_sub(MAX_ROOTS-1, atomic::Ordering::SeqCst);
 
                 //Thread 2 can be here, when thread 3 runs to end of this fun
-                debug_println!("fetch sub post self.item count {} (prev: {}) of {:?}", count - (MAX_ROOTS-1), count, self_item);
+                debug_println!("fetch sub post self.item count {} (prev: {}) of {:?}", count as isize - ((MAX_ROOTS-1) as isize), count, self_item);
                 assert!(count >= MAX_ROOTS && count < 1_000_000_000_000);
                 if count == MAX_ROOTS {
                     if cand.is_null() {
@@ -617,6 +618,7 @@ impl<T:'static> ArcShift<T> {
                     drop_payload(self_item)
 
                 } else {
+
                     if count < 2*MAX_ROOTS && !is_dropped(candstate) && !cand.is_null() { // we never drop the last in the chain (where cand is null)
                         debug_println!("early drop check count: {}", count);
                         // SAFETY:
@@ -676,8 +678,6 @@ impl<T:'static> ArcShift<T> {
                         unsafe { std::ptr::drop_in_place(payload_item_mut) }
                         debug_println!("Early drop optimization active! for: {:?}", self_item);
                     } else {
-
-
                         //compile_error!("This probably leaks memory. Try to test better.")
                     }
 
@@ -695,18 +695,25 @@ impl<T:'static> ArcShift<T> {
                             debug_println!("Reloaded cand for {:?} was: {:?}", self_item, reloaded_cand);
                             if !reloaded_cand.is_null() {
                                 cand = undecorate(reloaded_cand);
-                                //candstate = get_state(reloaded_cand); never used
+                                candstate = get_state(reloaded_cand);
                                 //rawcand = reloaded_cand; never used
                                 let _candcount = unsafe { (*cand).refcount.fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst) };
                                 debug_println!("Reloaded cand {:?} count: {}", cand, _candcount);
                             }
                         }
+                        println!("Candstate: {:?}", candstate);
+                        let cand_ownership_strength =
+                            if candstate == Some(ItemStateEnum::Dropped) {
+                                1
+                            } else {
+                                MAX_ROOTS
+                            };
 
                         if !cand.is_null() {
-                            let _dbg = unsafe { (*cand).refcount.fetch_sub(1, atomic::Ordering::SeqCst) }; //Can't reach 0, self.item will point to this soon
+                            let _dbg = unsafe { (*cand).refcount.fetch_sub(cand_ownership_strength, atomic::Ordering::SeqCst) }; //Can't reach 0, self.item will point to this soon
                             assert!(_dbg > 0);
                             assert!(_dbg < 1_000_000_000_000);
-                            debug_println!("For: {:?}, reduce next-refcount to {} (reduction by {})", self_item, _dbg-(1), 1);
+                            debug_println!("For: {:?}, reduce next(={:?})-refcount to {} (reduction by {})", self_item, cand, _dbg-(cand_ownership_strength), cand_ownership_strength);
                         }
                         drop_payload(self_item);
                     }
