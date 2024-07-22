@@ -853,143 +853,7 @@ impl<T:'static> ArcShift<T> {
         self.item = Self::drop_impl(self.item, false).unwrap();
         let _dbg = unsafe {&*self.item}.refcount.load(Ordering::SeqCst);
         debug_println!("Post-reload refcount: {}", _dbg);
-        /*loop {
-            // SAFETY:
-            // `self.item` is always a valid pointer
 
-            let candstate;
-            // SAFETY:
-            // self.item is always a valid pointer
-            let mut rawcand: *const ItemHolder<T> = unsafe { &*self.item }.next_and_state.load(atomic::Ordering::SeqCst) as *const ItemHolder<T>;
-            let cand = if is_superseded_by_tentative(get_state(rawcand)) {
-                let fixed_cand = decorate(rawcand, ItemStateEnum::Superseded);
-                // SAFETY:
-                // `self.item` is always a valid pointer
-                match unsafe { &*self.item }.next_and_state.compare_exchange(rawcand as *mut _, fixed_cand as *mut _, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
-                    Ok(cand) => {
-                        candstate = get_state(cand);
-                        debug_println!("Changed next from {:?} -> {:?}", rawcand, fixed_cand);
-                        rawcand = fixed_cand;
-                        undecorate(cand)
-                    }
-                    Err(_) => {
-                        debug_println!("Failed cmpx {:?} -> {:?}", rawcand, fixed_cand);
-                        atomic::spin_loop();
-                        continue;
-                    }
-                }
-            } else {
-                debug_println!("state is not tentative");
-                candstate = get_state(rawcand);
-                undecorate(rawcand)
-            };
-            if !cand.is_null() {
-                // SAFETY:
-                // `cand` is always a valid pointer
-                // We need to actually add to its refcount here, since otherwise some other
-                // thread could come and do the same sort of cleanup we're doing, and it could
-                // overtake us and actually free 'cand' immediately after we've decremented
-                // our count for `self.item`
-                let _candcount = unsafe { (*cand).refcount.fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst) };
-                debug_println!("Cand count: {}", _candcount);
-
-                // SAFETY:
-                // `self.item` is always a valid pointer
-                let count = unsafe { &*self.item }.refcount.fetch_sub(MAX_ROOTS-1, atomic::Ordering::SeqCst);
-
-
-                //Thread 2 can be here, when thread 3 runs to end of this fun
-                debug_println!("fetch sub post self.item count {} (prev: {})", count - (MAX_ROOTS-1), count);
-                assert!(count >= MAX_ROOTS);
-                if count == MAX_ROOTS {
-                    debug_println!("Actual drop of ItemHolder {:?}", self.item);
-                    // SAFETY:
-                    // `cand` is always a valid pointer
-                    // Here we're removing the count that was provided by the `self.item` object that we're doing to drop below
-                    let dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
-                    assert!(dbg >= MAX_ROOTS);
-                    // refcount is actually going to be 1 here, not 0, but it doesn't matter since the object is deallocated anyway
-                    drop_payload(self.item)
-
-                } else {
-                    let cand_hold_strength ;
-                    if count < 2*MAX_ROOTS && !is_dropped(candstate) {
-                        debug_println!("early drop check count: {}", count);
-                        // SAFETY:
-                        // self.item is always a valid pointer
-                        if !state_change( &unsafe { &*self.item }.next_and_state, rawcand, get_state(rawcand), ItemStateEnum::Dropped) {
-                            debug_println!("Change-state to dropped raced for {:?}", self.item);
-                            let _candcount = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst) };
-                            debug_println!("Cand count: {}", _candcount);
-
-                            unsafe { &*self.item }.refcount.fetch_add(MAX_ROOTS-1, atomic::Ordering::SeqCst);
-
-                            // SAFETY:
-                            // `self.item` is always a valid pointer
-                            atomic::spin_loop();
-                            continue;
-                        }
-                        // If we get here, we've changed the self.item - state (stored in self.item.next) to 'Dropped'.
-                        // No-one else can do this change.
-
-                        // If this triggers, then this is the last place where a non ArcShiftLight reference
-                        // existed
-
-                        // * All other instances must have been ArcShiftLight at the time we did 'refcount.fetch_sub'
-                        // * One risk here is that ArcShiftLight::clone could have been called since then
-                        // * But 'clone' can check after-the-fact if there is a 'next', and if there is,
-                        //   it can reload, so even in this case it should be safe to take the payload
-                        // * A second risk is that the remaining ArcShiftLight instances can be dropped.
-                        //   However, this can be mitigated by deciding that ArcShiftLight instances can't drop
-                        //   values of items with next-pointers. The responsibility then falls to ArcShift
-                        //   to always drop values when it leaves an item with a next-pointer.
-
-                        // SAFETY:
-                        // `cand` is always a valid pointer
-                        // Here we're downgrading the count that was provided by the `self.item` object that we're doing to drop below.
-                        // Previously, it was a 'strong' reference (value MAX_ROOTS), but now it's going to be a weak one (value 1).
-                        let dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS - 1, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
-                        cand_hold_strength = 1;
-                        assert!(dbg >= MAX_ROOTS);
-                        // SAFETY:
-                        // self.item is always a valid pointer.
-                        // because count before decrease was < 2*MAX_ROOTS, we must have been the last ArcShift-instance
-                        // holding the heap block. Since there is a non-null 'next' pointer, no more ArcShift instances will be created.
-                        // it is thus safe to take a reference to 'moved_out' and 'payload' fields, since they
-                        // are never used by ArcShiftLight.
-                        // SAFETY:
-                        // self.item is always a valid pointer
-                        let payload_item_mut = unsafe { &mut *addr_of_mut!((*(self.item as *mut ItemHolder<T>)).payload) };
-
-                        // SAFETY:
-                        // Since our compare-exchange higher up succeeded,
-                        // we are the only ones allowed to drop the payload value
-                        unsafe { std::ptr::drop_in_place(payload_item_mut) }
-                        debug_println!("Early drop optimization active! for: {:?}, brought next-refcount to {}", self.item, dbg-(MAX_ROOTS-1));
-                    } else {
-                        cand_hold_strength = 1;
-                        //compile_error!("This probably leaks memory. Try to test better.")
-                    }
-
-                    let newcount = unsafe { &*self.item }.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
-                    debug_println!("Second reduction count: {} (end: {})", newcount, newcount -1);
-                    if newcount == 1 {
-                        let _dbg = unsafe { (*cand).refcount.fetch_sub(cand_hold_strength, atomic::Ordering::SeqCst) }; //Can't reach 0, self.item will point to this soon
-                        assert!(_dbg > 0);
-                        assert!(_dbg < 1_000_000_000_000);
-                        debug_println!("For: {:?}, reduce next-refcount to {} (reduction by {})", self.item, _dbg-(cand_hold_strength), cand_hold_strength);
-                        drop_payload(self.item);
-                    }
-                    debug_println!("No drop of ItemHolder {:?}", self.item);
-                }
-                debug_println!("Doing assign to {:?}, replacing {:?}", cand, self.item);
-                self.item = cand;
-            } else {
-                break;
-            }
-            atomic::spin_loop();
-        }
-        */
     }
 
     fn shared_get_impl(&self) -> &T {
@@ -1681,43 +1545,45 @@ pub mod tests {
     #[test]
     fn simple_threading4c() {
         model(|| {
-            let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
-            let shift2 = std::sync::Arc::clone(&shift1);
-            let shift3 = std::sync::Arc::clone(&shift1);
-            let mut shift4 = (*shift1).clone();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
-                debug_println!(" = drop t1 =");
-            }).unwrap();
+            let count = std::sync::Arc::new(AtomicUsize::new(0));
+            {
+                let shift1 = std::sync::Arc::new(ArcShift::new(InstanceSpy::new(count.clone())));
+                let shift2 = std::sync::Arc::clone(&shift1);
+                let shift3 = std::sync::Arc::clone(&shift1);
+                let mut shift4 = (*shift1).clone();
+                let count1 = count.clone();
+                let count2 = count.clone();
+                let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    shift1.update_shared(InstanceSpy::new(count1.clone()));
+                    debug_println!(" = drop t1 =");
+                }).unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t2 =");
-                let mut shift = (*shift2).clone();
-                std::hint::black_box(shift.get());
-                debug_println!(" = drop t2 =");
-            }).unwrap();
+                let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    let mut shift = (*shift2).clone();
+                    std::hint::black_box(shift.get());
+                    debug_println!(" = drop t2 =");
+                }).unwrap();
 
-            let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t3 =");
-                shift3.update_shared(44);
-                let t = std::hint::black_box((*shift3).shared_get());
-                debug_println!(" = drop t3 =");
-                return *t;
-            }).unwrap();
-            let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t4 =");
-                let t = std::hint::black_box(shift4.try_get_mut().map(|x|*x));
-                debug_println!(" = drop t4 =");
-                t
-            }).unwrap();
+                let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    shift3.update_shared(InstanceSpy::new(count2.clone()));
+                    let _t = std::hint::black_box((*shift3).shared_get());
+                    debug_println!(" = drop t3 =");
+                }).unwrap();
+                let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(1_000_000).spawn(move || {
+                    debug_println!(" = On thread t4 =");
+                    let _t = std::hint::black_box(shift4.try_get_mut());
+                    debug_println!(" = drop t4 =");
+                }).unwrap();
 
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-            let ret3 = t3.join().unwrap();
-            assert!(ret3 == 44 || ret3  == 43);
-            let ret = t4.join().unwrap();
-            assert!(ret == None || ret == Some(43) || ret == Some(44) || ret == Some(42));
+                _ = t1.join().unwrap();
+                _ = t2.join().unwrap();
+                _ = t3.join().unwrap();
+                t4.join().unwrap();
+            }
+            assert_eq!(count.load(Ordering::SeqCst), 0);
         });
     }
     #[test]
