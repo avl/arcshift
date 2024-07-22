@@ -397,10 +397,12 @@ unsafe impl<T:'static+Send> Send for ArcShift<T> {}
 impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
         debug_println!("ArcShift::drop({:?})", self.item);
-        debug_println!("Check2: {:?} next: {:?}", self.item, unsafe { &*self.item }.next_and_state.load(Ordering::SeqCst));
+        let _t = unsafe { &*self.item }.next_and_state.load(Ordering::SeqCst);
+        debug_println!("Check2: {:?} next: {:?}", self.item, _t);
 
         self.reload();
-        debug_println!("Check3: {:?} next: {:?}", self.item, unsafe { &*self.item }.next_and_state.load(Ordering::SeqCst));
+        let _t = unsafe { &*self.item }.next_and_state.load(Ordering::SeqCst);
+        debug_println!("Check3: {:?} next: {:?}", self.item, _t);
 
         debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
         drop_item(self.item);
@@ -530,8 +532,7 @@ impl<T> Deref for ArcShift<T> {
 
 impl<T:'static> ArcShift<T> {
 
-    fn drop_impl(mut self_item: *const ItemHolder<T>, drop_last_too: bool, mut hold_strength: usize) -> Option<*const ItemHolder<T>> {
-        compile_error!(hold_strength - fix! When we traverse hte linked list, only the first item in the list might have MAX_ROOTS hold strength!)
+    fn drop_impl(mut self_item: *const ItemHolder<T>, drop_last_too: bool) -> Option<*const ItemHolder<T>> {
         loop {
             if self_item.is_null() {
                 return None;
@@ -571,6 +572,7 @@ impl<T:'static> ArcShift<T> {
                     }
                 }
 
+
                 // SAFETY:
                 // `cand` is always a valid pointer
                 // We need to actually add to its refcount here, since otherwise some other
@@ -582,12 +584,13 @@ impl<T:'static> ArcShift<T> {
                     debug_println!("Cand {:?} count: {}", cand, _candcount);
                 }
 
+
                 // SAFETY:
                 // `self.item` is always a valid pointer
-                let count = unsafe { &*self_item }.refcount.fetch_sub(MAX_ROOTS-1, atomic::Ordering::SeqCst);
+                let count = unsafe { &*self_item }.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
 
                 //Thread 2 can be here, when thread 3 runs to end of this fun
-                debug_println!("fetch sub post self.item count {} (prev: {}) of {:?}", count as isize - ((MAX_ROOTS-1) as isize), count, self_item);
+                debug_println!("fetch sub post self.item count {} (prev: {}) of {:?} (hold strength: {})", count as isize - (1 as isize), count, self_item, MAX_ROOTS);
                 assert!(count >= MAX_ROOTS && count < 1_000_000_000_000);
                 if count == MAX_ROOTS {
                     if cand.is_null() {
@@ -631,7 +634,7 @@ impl<T:'static> ArcShift<T> {
                                 debug_println!("Cand count: {}", _candcount);
                             }
 
-                            unsafe { &*self_item }.refcount.fetch_add(MAX_ROOTS-1, atomic::Ordering::SeqCst);
+                            unsafe { &*self_item }.refcount.fetch_add(1, atomic::Ordering::SeqCst);
 
                             // SAFETY:
                             // `self.item` is always a valid pointer
@@ -652,15 +655,16 @@ impl<T:'static> ArcShift<T> {
                         //   However, this can be mitigated by deciding that ArcShiftLight instances can't drop
                         //   values of items with next-pointers. The responsibility then falls to ArcShift
                         //   to always drop values when it leaves an item with a next-pointer.
-
+/*
                         // SAFETY:
                         // `cand` is always a valid pointer
-                        // Here we're downgrading the count that was provided by the `self.item` object that we're doing to drop below.
+                        // Here we're downgrading the count that was provided by the `self.item` object that we're going to drop below.
                         // Previously, it was a 'strong' reference (value MAX_ROOTS), but now it's going to be a weak one (value 1).
                         if !cand.is_null() {
                             let dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS - 1, atomic::Ordering::SeqCst) }; //We know this can't bring the count to 0, so can be Relaxed
+                            debug_println!("Weakening hold on {:?} to {}", cand, dbg - (MAX_ROOTS-1));
                             assert!(dbg >= MAX_ROOTS && dbg < 1_000_000_000_000);
-                        }
+                        }*/
 
                         // SAFETY:
                         // self.item is always a valid pointer.
@@ -681,11 +685,12 @@ impl<T:'static> ArcShift<T> {
                         //compile_error!("This probably leaks memory. Try to test better.")
                     }
 
-                    let newcount = unsafe { &*self_item }.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
-                    debug_println!("Second reduction count: {} (end: {})", newcount, newcount -1);
-                    assert!(newcount >0 &&  newcount < 1_000_000_000_000);
-                    if newcount == 1 {
-                        if cand.is_null() {
+                    if true {
+                        let newcount = unsafe { &*self_item }.refcount.fetch_sub(MAX_ROOTS-1, atomic::Ordering::SeqCst);
+                        debug_println!("Second reduction count: {} (end: {})", newcount, newcount - (MAX_ROOTS-1));
+                        assert!(newcount >= MAX_ROOTS-1 &&  newcount < 1_000_000_000_000);
+                        if newcount == MAX_ROOTS-1 {
+
                             // SAFETY:
                             // `self_item` is always a valid pointer.
                             // We need to reload self_item.next_and_state here, since some other thread may have written
@@ -694,30 +699,26 @@ impl<T:'static> ArcShift<T> {
                             let reloaded_cand = unsafe{&*self_item}.next_and_state.load(Ordering::SeqCst);
                             debug_println!("Reloaded cand for {:?} was: {:?}", self_item, reloaded_cand);
                             if !reloaded_cand.is_null() {
+                                if cand.is_null() {
+                                    let _candcount = unsafe { (*undecorate(reloaded_cand)).refcount.fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst) };
+                                    debug_println!("Reloaded cand {:?} count: {}", cand, _candcount);
+                                }
                                 cand = undecorate(reloaded_cand);
                                 candstate = get_state(reloaded_cand);
                                 //rawcand = reloaded_cand; never used
-                                let _candcount = unsafe { (*cand).refcount.fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst) };
-                                debug_println!("Reloaded cand {:?} count: {}", cand, _candcount);
                             }
-                        }
-                        println!("Candstate: {:?}", candstate);
-                        let cand_ownership_strength =
-                            if candstate == Some(ItemStateEnum::Dropped) {
-                                1
-                            } else {
-                                MAX_ROOTS
-                            };
 
-                        if !cand.is_null() {
-                            let _dbg = unsafe { (*cand).refcount.fetch_sub(cand_ownership_strength, atomic::Ordering::SeqCst) }; //Can't reach 0, self.item will point to this soon
-                            assert!(_dbg > 0);
-                            assert!(_dbg < 1_000_000_000_000);
-                            debug_println!("For: {:?}, reduce next(={:?})-refcount to {} (reduction by {})", self_item, cand, _dbg-(cand_ownership_strength), cand_ownership_strength);
+                            println!("Candstate: {:?}, state valid for {:?}", candstate, self_item);
+
+                            if !cand.is_null() {
+                                let _dbg = unsafe { (*cand).refcount.fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst) }; //Can't reach 0, self.item will point to this soon
+                                assert!(_dbg > 0);
+                                assert!(_dbg < 1_000_000_000_000);
+                                debug_println!("For: {:?}, reduce next(={:?})-refcount to {} (reduction by {})", self_item, cand, _dbg-(MAX_ROOTS), MAX_ROOTS);
+                            }
+                            drop_payload(self_item);
                         }
-                        drop_payload(self_item);
                     }
-                    debug_println!("No drop of ItemHolder {:?}", self_item);
                 }
                 debug_println!("Doing assign, replacing {:?} with {:?}", self_item, cand);
                 self_item = cand;
@@ -858,7 +859,8 @@ impl<T:'static> ArcShift<T> {
                     }
                     debug_println!("Update shared complete");
                     //loom::sync::atomic::fence(Ordering::SeqCst);
-                    debug_println!("Check: {:?} next: {:?}", candidate, unsafe { &*candidate }.next_and_state.load(Ordering::SeqCst));
+                    let _t = unsafe { &*candidate }.next_and_state.load(Ordering::SeqCst);
+                    debug_println!("Check: {:?} next: {:?}", candidate, _t);
                     return;
                 }
                 Err(other) => {
@@ -1076,12 +1078,14 @@ fn drop_payload<T:'static>(ptr: *const ItemHolder<T>) {
     // unsafety is within the entire crate.
 
     if is_dropped(get_state(unsafe{&*addr_of!((*ptr).next_and_state)}.load( Ordering::SeqCst))) {
+        debug_println!("Dropping payload {:?}, but contents were already dropped", ptr);
         // SAFETY:
         // `ptr` is always a valid pointer.
         // At this position we've established that we can drop the pointee's box memory, but the
         // pointee value is already dropped.
         _ = unsafe { Box::from_raw(ptr as *mut MaybeUninit<ItemHolder<T>>) };
     } else {
+        debug_println!("Dropping payload {:?}, including contents", ptr);
         // SAFETY:
         // `ptr` is always a valid pointer.
         // At this position we've established that we can drop the pointee.
