@@ -213,7 +213,7 @@ use std::panic::UnwindSafe;
 use std::process::abort;
 use std::ptr::{addr_of_mut, addr_of, null_mut};
 use std::sync::atomic::{Ordering};
-
+use crate::ItemStateEnum::Superseded;
 
 #[cfg(not(loom))]
 mod atomic {
@@ -577,7 +577,24 @@ impl<T> Deref for ArcShift<T> {
 
 impl<T:'static> ArcShift<T> {
 
-    fn drop_impl(mut self_item: *const ItemHolder<T>, drop_last_too: bool) -> Option<(bool,*const ItemHolder<T>)> {
+    fn drop_impl(mut self_item: *const ItemHolder<T>) {
+        loop {
+            if self_item.is_null() {
+                return;
+            }
+            let count = unsafe { &*self_item }.refcount.fetch_sub(1, atomic::Ordering::SeqCst);
+            if count == MAX_ROOTS {
+                let new_item = undecorate(unsafe { &*self_item }.next_and_state.load(Ordering::SeqCst));
+                drop_payload(self_item);
+                self_item = new_item;
+                atomic::spin_loop();
+            } else {
+                return;
+            }
+        }
+    }
+
+    /*fn drop_impl(mut self_item: *const ItemHolder<T>, drop_last_too: bool) -> Option<(bool,*const ItemHolder<T>)> {
 
         let mut hold_strength = MAX_ROOTS;
         loop {
@@ -816,7 +833,7 @@ impl<T:'static> ArcShift<T> {
         }
 
 
-    }
+    }*/
 
     /// Create a new ArcShift, containing the given type.
     pub fn new(payload: T) -> ArcShift<T> {
@@ -1016,20 +1033,51 @@ impl<T:'static> ArcShift<T> {
     #[inline(never)]
     pub fn reload(&mut self) {
         verify_item(self.item);
-        let x = Self::drop_impl(self.item, false);
-        if let Some((gotlast,x)) = x {
-            if gotlast {
-                self.item = x;
-            } else {
-                self.item = x;
-            }
-        } else {
-            self.item = self.shared_get_impl();
-        }
-        verify_item(self.item);
-        let _dbg = unsafe {&*self.item}.refcount.load(Ordering::SeqCst);
-        debug_println!("Post-reload refcount: {}", _dbg);
 
+        let mut new_self = self.item;
+        verify_item(new_self);
+        loop {
+            verify_item(new_self);
+            let next = unsafe{&*new_self}.next_and_state.load(Ordering::SeqCst);;
+            if get_state(next) == Some(ItemStateEnum::SupersededByTentative) {
+                match unsafe{&*new_self}.next_and_state.compare_exchange(next, decorate(next, Superseded) as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
+                    Ok(_) => {
+                        atomic::spin_loop();
+                        continue;
+                    }
+                    Err(_) => {
+                        atomic::spin_loop();
+                        continue;
+                    }
+                }
+            }
+            if next.is_null() {
+                break;
+            }
+            verify_item(next);
+            new_self = undecorate(next);
+            atomic::spin_loop();
+        }
+        if new_self == self.item {
+            return; //Nothing to do
+        }
+
+        unsafe{&*new_self}.refcount.fetch_add(MAX_ROOTS, Ordering::SeqCst);
+
+        let mut cand = self.item;
+        while cand != new_self {
+            verify_item(cand);
+            verify_item(new_self);
+            let count = unsafe{&*cand}.refcount.fetch_sub(MAX_ROOTS, Ordering::SeqCst);
+            if count == MAX_ROOTS {
+                let newcand = undecorate( unsafe{&*cand}.next_and_state.load(Ordering::SeqCst) );
+                drop_payload(cand);
+                cand = newcand;
+            } else {
+                break;
+            }
+        }
+        self.item = new_self;
     }
 
     fn shared_get_impl(&self) -> *const ItemHolder<T> {
@@ -1277,7 +1325,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>) {
 }
 fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
     verify_item(old_ptr);
-    _ = ArcShift::drop_impl(old_ptr, true);
+    _ = ArcShift::drop_impl(old_ptr);
 }
 #[cfg(test)]
 pub mod tests {
