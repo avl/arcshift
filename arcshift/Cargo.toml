@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dependencies]
+log = "0.4.22"
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"] }
