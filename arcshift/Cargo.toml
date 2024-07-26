@@ -9,6 +9,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dependencies]
 log = "0.4.22"
+shuttle = {version = "0.7", optional = true}
+
+[features]
+validate = []
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"] }
@@ -16,3 +20,4 @@ loom = { version = "0.7", features = ["checkpoint"] }
 [dev-dependencies]
 crossbeam-channel = "0.5"
 rand="0.8"
+mutants = "0"
