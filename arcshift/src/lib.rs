@@ -25,7 +25,7 @@
 //! });
 //!
 //! let j2 = thread::spawn(move||{
-//!     println!("Value in thread 2: '{}'", *arc); //Prints either 'Hello' or 'New value', depends on scheduling
+//!     println!("Value in thread 2: '{}'", *arc); //Prints either 'Hello' or 'New value', depending on scheduling
 //! });
 //!
 //! j1.join().unwrap();
@@ -35,10 +35,10 @@
 //! # Motivation
 //!
 //! The primary raison d'être for ArcShift is to be a version of Arc which allows
-//! modifying the stored value, with very little overhead over regular Arc for cloning,
-//! dropping and accessing.
+//! modifying the stored value, with very little overhead over regular as long as
+//! updates are very infrequent.
 //!
-//! That said, for most use cases, the more mature 'arc_swap' crate is probably
+//! For most use cases, the more mature 'arc_swap' crate is probably
 //! preferable.
 //!
 //! The motivating use-case for ArcShift is reloadable assets in computer games.
@@ -49,7 +49,7 @@
 //! During game development, artists may update assets, and hot-reload is a very
 //! time-saving feature. However, a performance hit during asset-reload is acceptable.
 //! ArcShift prioritizes base performance, while accepting a penalty when updates are made.
-//! ArcShift can, under some circumstances described below, have a lingering (small) performance hit
+//! ArcShift can, under some circumstances described below, have a lingering performance hit
 //! until 'force_update' is called. See documentation for the different functions.
 //!
 //! # Properties
