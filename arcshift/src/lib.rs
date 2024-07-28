@@ -1657,6 +1657,29 @@ pub mod tests {
             assert_eq!(count.load(Ordering::Relaxed), 1);
         });
     }
+    #[test]
+    fn simple_upgrade4b() {
+        model(|| {
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            {
+                let shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+                let _shiftlight1 = shiftlight.clone();
+                let _shiftlight2 = shiftlight.clone();
+                let _shiftlight3 = shiftlight.clone();
+                let _shiftlight4 = shiftlight.clone();
+                let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
+
+                let mut shift = shiftlight.get();
+                debug_println!("== Calling update_shared ==");
+                shift.update(InstanceSpy::new(count.clone()));
+                assert_eq!(count.load(Ordering::Relaxed), 1);
+                debug_println!("== Calling drop(shift) ==");
+                drop(shift);
+                assert_eq!(count.load(Ordering::Relaxed), 1);
+            }
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+        });
+    }
 
     #[test]
     fn simple_threading2() {
@@ -2275,6 +2298,19 @@ pub mod tests {
             }
         }
     }
+
+    #[test]
+    #[should_panic(expected="Max limit of ArcShiftLight clones (524288) was reached")]
+    fn check_too_many_roots() {
+        model(||{
+            let mut temp = vec![];
+            let light = ArcShiftLight::new(1u8);
+            for _ in 0..MAX_ROOTS {
+                temp.push(light.clone());
+            }
+        });
+    }
+
     fn run_fuzz<T:Clone+Hash+Eq+'static+Debug+Send+Sync>(rng: &mut StdRng, mut constructor: impl FnMut()->T) {
         let cmds = make_commands::<T>(rng, &mut constructor);
         let mut arcs: [Option<ArcShift<T>>; 3] = [();3].map(|_|None);
