@@ -1354,39 +1354,9 @@ fn drop_payload<T:'static>(ptr: *const ItemHolder<T>) {
     }
 }
 
-// SAFETY:
-// 'ptr' must be a pointer to an ItemHolder that is fit to drop.
-/*fn drop_payload_ret<T:'static>(ptr: *const ItemHolder<T>) -> Option<T> {
-    // SAFETY:
-    // ptr must be valid, since this is a precondition for using this method.
-    // This method does not need unsafe, since it is private, and the scope for
-    // unsafety is within the entire crate.
-    if is_dropped(get_state(unsafe{&*addr_of!((*ptr).next_and_state)}.load( Ordering::SeqCst))) {
-        // SAFETY:
-        // `ptr` is always a valid pointer.
-        // At this position we've established that we can drop the pointee's box memory, but the
-        // pointee value is already dropped.
-        _ = unsafe { Box::from_raw(ptr as *mut MaybeUninit<ItemHolder<T>>) };
-        None
-    } else {
-        // SAFETY:
-        // Pointer must be a valid pointer, this is required to call this method.
-        let mut holder = *unsafe { Box::from_raw(ptr as *mut ItemHolder<T>) };
-        let payload_ptr = (&mut holder.payload) as *mut T;
-        let payload;
-        // SAFETY:
-        // payload_ptr is a payload to the memory region of 'holder' where the payload
-        // is stored. This region remains live until the end of the lifetime of 'holder'.
-        unsafe {
-            payload = payload_ptr.read();
-        }
-        std::mem::forget(holder);
-        Some(payload)
-    }
-}*/
 
-// SAFETY:
-// 'old_ptr' must be a valid ItemHolder-pointer.
+/// SAFETY:
+/// 'old_ptr' must be a valid ItemHolder-pointer.
 fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
 
     debug_println!("drop_root_item about to reduce count {:?} by {}", old_ptr, strength);
@@ -1446,7 +1416,7 @@ pub mod tests {
     }
     #[cfg(feature="shuttle")]
     fn model(x: impl Fn()+'static+Send+Sync) {
-        shuttle::check_random(x, 50);
+        shuttle::check_random(x, 250);
     }
 
 
@@ -1750,6 +1720,109 @@ pub mod tests {
             _=t2.join().unwrap();
         });
     }
+
+
+    fn generic_3thread_ops<
+        F1:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
+        F2:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
+        F3:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
+    >(f1:F1,f2:F2,f3:F3) {
+        let f1 = std::sync::Arc::new(f1);
+        let f2 = std::sync::Arc::new(f2);
+        let f3 = std::sync::Arc::new(f3);
+        model(move|| {
+            let f1 = f1.clone();
+            let f2 = f2.clone();
+            let f3 = f3.clone();
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            {
+                let shift1 = ArcShift::new(owner.create("orig"));
+                let shift2 = shift1.clone();
+                let shift3 = shift1.clone();
+                let owner_ref1 = owner.clone();
+                let owner_ref2 = owner.clone();
+                let owner_ref3 = owner.clone();
+
+                let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    f1(&*owner_ref1, shift1, "t1")
+                }).unwrap();
+
+                let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    f2(&*owner_ref2, shift2, "t2")
+                }).unwrap();
+
+                let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    f3(&*owner_ref3, shift3, "t3")
+                }).unwrap();
+                _ = t1.join().unwrap();
+                _ = t2.join().unwrap();
+                _ = t3.join().unwrap();
+            }
+            owner.validate();
+        });
+    }
+    #[test]
+    fn generic_3threading_all() {
+        let ops : Vec<fn(&SpyOwner2, ArcShift<InstanceSpy2>,&'static str) -> Option<ArcShift<InstanceSpy2>>> = vec![
+            |owner, shift, thread|{
+                shift.update_shared(owner.create(thread));
+                Some(shift)
+            },
+            |_owner,mut shift, _thread|{
+                std::hint::black_box(shift.get());
+                Some(shift)
+            },
+            |_owner,shift, _thread|{
+                std::hint::black_box(shift.shared_get());
+                Some(shift)
+            },
+            |_owner,mut shift, _thread|{
+                shift.reload();
+                Some(shift)
+            },
+            |_owner,shift, _thread|{
+                std::hint::black_box(shift.try_into_inner());
+                None
+            },
+            |_owner, _shift, _thread|{
+                None
+            },
+        ];
+        for op1 in ops.iter() {
+            for op2 in ops.iter() {
+                for op3 in ops.iter() {
+                    generic_3thread_ops(*op1,*op2,*op3)
+                }
+            }
+        }
+
+    }
+
+
+        #[test]
+    fn generic_3threading1() {
+
+
+
+        generic_3thread_ops(
+            |owner1,shift1, thread|{
+                shift1.update_shared(owner1.create(thread));
+                Some(shift1)
+            },
+            |owner2,shift2, thread|{
+                shift2.update_shared(owner2.create(thread));
+                Some(shift2)
+            },
+            |owner3,shift3, thread|{
+                shift3.update_shared(owner3.create(thread));
+                Some(shift3)
+            },
+        )
+    }
+
     #[test]
     fn simple_threading3a() {
         model(|| {
