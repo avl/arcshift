@@ -11,6 +11,8 @@
 //! ```rust
 //! # if cfg!(loom)
 //! # {
+//! # extern crate arcshift;
+//! # use arcshift::ArcShift;
 //! use std::thread;
 //!
 //!
@@ -153,7 +155,8 @@
 //! # A larger example
 //!
 //! ```rust
-//! use ArcShift::ArcShift;
+//! # extern crate arcshift;
+//! # use arcshift::ArcShift;
 //!
 //! struct CharacterModel {
 //!     /* 3D model, textures, etc*/
@@ -281,7 +284,8 @@ macro_rules! debug_println {
 /// See `crate` documentation for more information.
 ///
 /// ```rust
-/// # use crate::ArcShift;
+/// # extern crate arcshift;
+/// # use arcshift::ArcShift;
 /// let instance = ArcShift::new("test");
 /// println!("Value: {:?}", *instance);
 /// ```
@@ -296,7 +300,10 @@ impl<T> UnwindSafe for ArcShift<T> {}
 /// freed.
 ///
 /// ```rust
-/// let instance = ArcShiftLight::new("test");
+/// # extern crate arcshift;
+/// # use arcshift::ArcShiftLight;
+/// let light_instance = ArcShiftLight::new("test");
+/// let instance = light_instance.upgrade();
 /// println!("Value: {:?}", *instance);
 /// ```
 ///
