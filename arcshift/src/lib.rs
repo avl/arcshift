@@ -1,6 +1,6 @@
-//#![deny(warnings)]
-//#![forbid(clippy::undocumented_unsafe_blocks)]
-//#![deny(missing_docs)]
+#![deny(warnings)]
+#![forbid(clippy::undocumented_unsafe_blocks)]
+#![deny(missing_docs)]
 
 //! # Introduction to ArcShift
 //!
@@ -205,9 +205,8 @@
 //! }
 //! ```
 
-
-
-use std::alloc::{Layout};
+use crate::ItemStateEnum::{Dropped, Superseded};
+use std::alloc::Layout;
 #[allow(unused)]
 use std::backtrace::Backtrace;
 pub use std::collections::HashSet;
@@ -215,11 +214,8 @@ use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
 use std::process::abort;
-use std::ptr::{addr_of_mut, addr_of, null_mut};
-use std::sync::atomic::{AtomicPtr, Ordering};
-use crate::ItemStateEnum::{Dropped, Superseded};
-
-
+use std::ptr::{addr_of, addr_of_mut, null_mut};
+use std::sync::atomic::Ordering;
 
 // All atomic primitives are reexported from a
 // local module called 'atomic', so we can easily change between using
@@ -227,40 +223,39 @@ use crate::ItemStateEnum::{Dropped, Superseded};
 
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 mod atomic {
-    pub use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
     pub use std::hint::spin_loop;
+    pub use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
     #[allow(unused)]
     pub use std::thread;
 }
 
 #[cfg(feature = "shuttle")]
 mod atomic {
+    pub use shuttle::hint::spin_loop;
     pub use shuttle::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
     #[allow(unused)]
-    pub use std::sync::atomic::AtomicU64;
-    #[allow(unused)]
     pub use shuttle::thread;
-    pub use shuttle::hint::spin_loop;
+    #[allow(unused)]
+    pub use std::sync::atomic::AtomicU64;
 }
 
 #[cfg(loom)]
 mod atomic {
+    pub use loom::hint::spin_loop;
     pub use loom::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
     #[allow(unused)]
-    pub use std::sync::atomic::AtomicU64;
-    #[allow(unused)]
     pub use loom::thread;
-    pub use loom::hint::spin_loop;
-
+    #[allow(unused)]
+    pub use std::sync::atomic::AtomicU64;
 }
 
-#[cfg(all(debug_assertions,not(loom)))]
+#[cfg(all(debug_assertions, not(loom)))]
 macro_rules! debug_println {
     ($($x:tt)*) => {
         println!("{:?}: {}", atomic::thread::current().id(), format!($($x)*))
     }
 }
-#[cfg(all(debug_assertions,loom))]
+#[cfg(all(debug_assertions, loom))]
 macro_rules! debug_println {
     ($($x:tt)*) => { println!($($x)*) }
 }
@@ -271,18 +266,17 @@ const MAX_ARCSHIFT: usize = 35000000000000;
 
 #[cfg(not(debug_assertions))]
 macro_rules! debug_println {
-    ($($x:tt)*) => ({})
+    ($($x:tt)*) => {{}};
 }
 
 /// Smart pointer with similar use case as std::sync::Arc, but with
 /// the added ability to atomically replace the contents of the Arc.
 /// See crate documentation for more information.
-pub struct ArcShift<T:'static> {
+pub struct ArcShift<T: 'static> {
     item: *const ItemHolder<T>,
 }
 
 impl<T> UnwindSafe for ArcShift<T> {}
-
 
 /// ArcShiftLight is like ArcShift, except it does not provide overhead-free access.
 /// However, it has the advantage of of not preventing old versions of the payload type from being
@@ -293,21 +287,21 @@ impl<T> UnwindSafe for ArcShift<T> {}
 /// and even if all other instances of ArcShift/ArcShiftLight have been dropped.
 /// If this limitation is unacceptable, consider using ArcShiftLight<Box<T>> as your datatype,
 /// or possibly using a different crate.
-pub struct ArcShiftLight<T:'static> {
+pub struct ArcShiftLight<T: 'static> {
     item: *const ItemHolder<T>,
 }
 
 /// SAFETY:
 /// ArcShiftLight can be Send as long as T is Send.
 /// ArcShiftLight's mechanisms are compatible with both Send and Sync
-unsafe impl<T:'static> Send for ArcShiftLight<T> where T: Send {}
+unsafe impl<T: 'static> Send for ArcShiftLight<T> where T: Send {}
 
 /// SAFETY:
 /// ArcShiftLight can be Sync as long as T is Sync.
 /// ArcShiftLight's mechanisms are compatible with both Send and Sync
-unsafe impl<T:'static> Sync for ArcShiftLight<T> where T: Sync {}
+unsafe impl<T: 'static> Sync for ArcShiftLight<T> where T: Sync {}
 
-impl<T:'static> Clone for ArcShiftLight<T> {
+impl<T: 'static> Clone for ArcShiftLight<T> {
     fn clone(&self) -> Self {
         // SAFETY:
         // self.item is always a valid pointer
@@ -324,23 +318,35 @@ impl<T:'static> Clone for ArcShiftLight<T> {
             if !next.is_null() {
                 // SAFETY:
                 // If next is not null, it is always a valid pointer
-                let nextref = unsafe {&*undecorate(next)};
+                let nextref = unsafe { &*undecorate(next) };
                 curitem = nextref;
                 atomic::spin_loop();
                 continue;
             }
             let count = item.refcount.load(Ordering::Acquire);
-            let _rootcount = count&(MAX_ROOTS-1);
-            debug_println!("ArcShiftLight {:?} clone count: {} (rootcount: {})", item as *const ItemHolder<T>, count, _rootcount);
+            let _rootcount = count & (MAX_ROOTS - 1);
+            debug_println!(
+                "ArcShiftLight {:?} clone count: {} (rootcount: {})",
+                item as *const ItemHolder<T>,
+                count,
+                _rootcount
+            );
             assert_ne!(count, 0);
             Self::verify_count(count);
-            match item.refcount.compare_exchange(count, count + 1, Ordering::Release, Ordering::Relaxed) {
+            match item.refcount.compare_exchange(
+                count,
+                count + 1,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => {
-                    debug_println!("ArcShiftLight clone count successfully updated to: {}", count + 1);
+                    debug_println!(
+                        "ArcShiftLight clone count successfully updated to: {}",
+                        count + 1
+                    );
                     break;
                 }
                 Err(othercount) => {
-
                     Self::verify_count(othercount);
                     debug_println!("ArcShiftLight clone count race {:?}", curitem);
 
@@ -350,52 +356,71 @@ impl<T:'static> Clone for ArcShiftLight<T> {
             }
         }
         debug_println!("Returning new ArcShiftLight for {:?}", curitem);
-        ArcShiftLight {
-            item: curitem
-        }
+        ArcShiftLight { item: curitem }
     }
 }
-impl<T:'static> ArcShiftLight<T> {
+impl<T: 'static> ArcShiftLight<T> {
     /// Create a new ArcShift, containing the given type.
     pub fn new(payload: T) -> ArcShiftLight<T> {
         let item = ItemHolder {
-            #[cfg(feature="validate")]
+            #[cfg(feature = "validate")]
             magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
-            #[cfg(feature="validate")]
+            #[cfg(feature = "validate")]
             magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
             payload,
             next_and_state: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(1),
-
         };
         let cur_ptr = Box::into_raw(Box::new(item));
-        debug_println!("Created ArcShiftLight for {:?}",  cur_ptr);
-        ArcShiftLight {
-            item: cur_ptr,
-        }
+        debug_println!("Created ArcShiftLight for {:?}", cur_ptr);
+        ArcShiftLight { item: cur_ptr }
     }
     #[cfg_attr(test, mutants::skip)]
     fn verify_count(count: usize) {
-        if (count & (MAX_ROOTS-1)) >= MAX_ROOTS - 1 {
-            panic!("Max limit of ArcShiftLight clones ({}) was reached", MAX_ROOTS);
+        if (count & (MAX_ROOTS - 1)) >= MAX_ROOTS - 1 {
+            panic!(
+                "Max limit of ArcShiftLight clones ({}) was reached",
+                MAX_ROOTS
+            );
         }
     }
 
     /// Load 'next'.
     /// If 'next' is tentative, convert it to superseded.
+    /// 'curitem' must be a valid pointer.
     fn load_nontentative_next(curitem: *const ItemHolder<T>) -> Option<*const ItemHolder<T>> {
+        // SAFETY:
+        // curitem is a valid pointer
+        let next = unsafe { &*curitem }.next_and_state.load(Ordering::Acquire);
 
-        let next = unsafe{&*curitem}.next_and_state.load(Ordering::Acquire);
-
-        debug_println!("load_nontentative_next upgrade {:?}, next: {:?} = {:?}", curitem, next, get_state(next));
+        debug_println!(
+            "load_nontentative_next upgrade {:?}, next: {:?} = {:?}",
+            curitem,
+            next,
+            get_state(next)
+        );
         if get_state(next) == Some(ItemStateEnum::SupersededByTentative) {
-            match unsafe{&*curitem}.next_and_state.compare_exchange(next, decorate(next, ItemStateEnum::Superseded) as * mut _, Ordering::SeqCst, Ordering::SeqCst) {
+            // SAFETY:
+            // curitem is a valid pointer
+            match unsafe { &*curitem }.next_and_state.compare_exchange(
+                next,
+                decorate(next, ItemStateEnum::Superseded) as *mut _,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
                 Ok(_) => {
-                    debug_println!("ArcShiftLight {:?} tentative upgrade, returning {:?}", curitem, decorate(next, ItemStateEnum::Superseded));
+                    debug_println!(
+                        "ArcShiftLight {:?} tentative upgrade, returning {:?}",
+                        curitem,
+                        decorate(next, ItemStateEnum::Superseded)
+                    );
                     Some(decorate(next, ItemStateEnum::Superseded))
                 }
                 Err(_) => {
-                    debug_println!("Race while upgrading ArcShiftLight to ArcShift: {:?}", curitem);
+                    debug_println!(
+                        "Race while upgrading ArcShiftLight to ArcShift: {:?}",
+                        curitem
+                    );
                     atomic::spin_loop();
                     None
                 }
@@ -422,10 +447,19 @@ impl<T:'static> ArcShiftLight<T> {
                 continue;
             };
 
-            debug_println!("ArcShiftLight upgrade {:?}, next: {:?} = {:?}", curitem, next, get_state(next));
+            debug_println!(
+                "ArcShiftLight upgrade {:?}, next: {:?} = {:?}",
+                curitem,
+                next,
+                get_state(next)
+            );
 
             if !next.is_null() {
-                debug_println!("ArcShiftLight traversing chain to {:?} -> {:?}", curitem, next);
+                debug_println!(
+                    "ArcShiftLight traversing chain to {:?} -> {:?}",
+                    curitem,
+                    next
+                );
                 curitem = undecorate(next);
                 atomic::spin_loop();
                 continue;
@@ -433,49 +467,55 @@ impl<T:'static> ArcShiftLight<T> {
 
             let _precount = item.refcount.fetch_add(MAX_ROOTS, Ordering::Acquire);
             atomic::fence(Ordering::SeqCst);
-            debug_println!("Promote {:?}, prev count: {}, new count {}", curitem, _precount, _precount + MAX_ROOTS);
+            debug_println!(
+                "Promote {:?}, prev count: {}, new count {}",
+                curitem,
+                _precount,
+                _precount + MAX_ROOTS
+            );
             assert!(_precount >= 1);
             let Some(next) = Self::load_nontentative_next(curitem) else {
                 let _precount = item.refcount.fetch_sub(MAX_ROOTS, Ordering::Release);
-                assert!(_precount > MAX_ROOTS &&  _precount < 1_000_000_000_000);
+                assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
                 atomic::spin_loop();
                 continue;
             };
             if !undecorate(next).is_null() {
-                debug_println!("ArcShiftLight About to reduce count {:?} by {}, and traversing to {:?}", curitem, MAX_ROOTS, next);
+                debug_println!(
+                    "ArcShiftLight About to reduce count {:?} by {}, and traversing to {:?}",
+                    curitem,
+                    MAX_ROOTS,
+                    next
+                );
 
                 let _precount = item.refcount.fetch_sub(MAX_ROOTS, Ordering::Release);
-                assert!(_precount > MAX_ROOTS &&  _precount < 1_000_000_000_000);
+                assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
                 curitem = undecorate(next);
                 atomic::spin_loop();
                 continue;
             }
 
-            let mut temp = ArcShift {
-                item: curitem
-            };
+            let mut temp = ArcShift { item: curitem };
             temp.reload();
             return temp;
         }
     }
 }
 
-impl<T:'static> Drop for ArcShiftLight<T> {
+impl<T: 'static> Drop for ArcShiftLight<T> {
     fn drop(&mut self) {
         debug_println!("ArcShiftLight::drop: {:?}", self.item);
         drop_root_item(self.item, 1)
     }
 }
 
-
-
 /// SAFETY:
 /// If T is Sync, ArcShift<T> can also be Sync
-unsafe impl<T:'static+Sync> Sync for ArcShift<T> {}
+unsafe impl<T: 'static + Sync> Sync for ArcShift<T> {}
 
 /// SAFETY:
 /// If T is Send, ArcShift<T> can also be Send
-unsafe impl<T:'static+Send> Send for ArcShift<T> {}
+unsafe impl<T: 'static + Send> Send for ArcShift<T> {}
 
 impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
@@ -500,63 +540,102 @@ impl<T> Drop for ArcShift<T> {
 /// In practice, the align of ItemHolder is 8 anyway, but we specify it here for clarity.
 #[repr(align(4))]
 #[repr(C)] // Just to get the 'magic' first and last in memory. Shouldn't hurt.
-struct ItemHolder<T:'static> {
-    #[cfg(feature="validate")]
+struct ItemHolder<T: 'static> {
+    #[cfg(feature = "validate")]
     magic1: std::sync::atomic::AtomicU64,
     next_and_state: atomic::AtomicPtr<ItemHolder<T>>,
     refcount: atomic::AtomicUsize,
     payload: T,
-    #[cfg(feature="validate")]
+    #[cfg(feature = "validate")]
     magic2: std::sync::atomic::AtomicU64,
 }
 
-static MAGIC: std::sync::atomic::AtomicU16= std::sync::atomic::AtomicU16::new(0);
+#[cfg(feature = "validate")]
+static MAGIC: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
-impl<T:'static> ItemHolder<T> {
+impl<T: 'static> ItemHolder<T> {
     #[cfg_attr(test, mutants::skip)]
     fn verify(&self) {
-        #[cfg(feature="validate")]
+        #[cfg(feature = "validate")]
         {
             assert_is_undecorated(self as *const ItemHolder<T>);
 
             let magic1 = self.magic1.load(Ordering::SeqCst);
             let magic2 = self.magic2.load(Ordering::SeqCst);
-            if magic1>>16 != 0xbeefbeefbeef  {
-                eprintln!("Internal error - bad magic1 in {:?}: {} ({:x})", self as *const ItemHolder<T>, magic1, magic1);
-                debug_println!("Internal error - bad magic1 in {:?}: {} ({:x})", self as *const ItemHolder<T>, magic1, magic1);
+            if magic1 >> 16 != 0xbeefbeefbeef {
+                eprintln!(
+                    "Internal error - bad magic1 in {:?}: {} ({:x})",
+                    self as *const ItemHolder<T>, magic1, magic1
+                );
+                debug_println!(
+                    "Internal error - bad magic1 in {:?}: {} ({:x})",
+                    self as *const ItemHolder<T>,
+                    magic1,
+                    magic1
+                );
                 debug_println!("Backtrace: {}", Backtrace::capture());
                 panic!();
                 //abort();
             }
-            if magic2>>16 != 0x123412341234  {
-                eprintln!("Internal error - bad magic2 in {:?}: {} ({:x})", self as *const ItemHolder<T>, magic2, magic2);
-                debug_println!("Internal error - bad magic2 in {:?}: {} ({:x})", self as *const ItemHolder<T>, magic2, magic2);
+            if magic2 >> 16 != 0x123412341234 {
+                eprintln!(
+                    "Internal error - bad magic2 in {:?}: {} ({:x})",
+                    self as *const ItemHolder<T>, magic2, magic2
+                );
+                debug_println!(
+                    "Internal error - bad magic2 in {:?}: {} ({:x})",
+                    self as *const ItemHolder<T>,
+                    magic2,
+                    magic2
+                );
                 debug_println!("Backtrace: {}", Backtrace::capture());
                 panic!();
                 //abort();
             }
-            let diff = (magic1&0xffff) as isize - (magic2&0xffff) as isize;
-            #[cfg(loom)]
+            let diff = (magic1 & 0xffff) as isize - (magic2 & 0xffff) as isize;
+            #[cfg(any(loom, feature = "shuttle"))]
             {
                 if diff != 0 {
-                    eprintln!("Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})", self as *const ItemHolder<T>, magic1, magic1, magic2, magic2);
-                    debug_println!("Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})", self as *const ItemHolder<T>, magic1, magic1, magic2, magic2);
+                    eprintln!(
+                        "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
+                        self as *const ItemHolder<T>, magic1, magic1, magic2, magic2
+                    );
+                    debug_println!(
+                        "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
+                        self as *const ItemHolder<T>,
+                        magic1,
+                        magic1,
+                        magic2,
+                        magic2
+                    );
                     //println!("Backtrace: {}", Backtrace::capture());
                     abort();
                 }
             }
-            #[cfg(not(loom))]
+            #[cfg(not(any(loom, feature = "shuttle")))]
             {
                 if diff.abs() > 5 {
-                    eprintln!("Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})", self as *const ItemHolder<T>, magic1, magic1, magic2, magic2);
-                    debug_println!("Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})", self as *const ItemHolder<T>, magic1, magic1, magic2, magic2);
+                    eprintln!(
+                        "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
+                        self as *const ItemHolder<T>, magic1, magic1, magic2, magic2
+                    );
+                    debug_println!(
+                        "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
+                        self as *const ItemHolder<T>,
+                        magic1,
+                        magic1,
+                        magic2,
+                        magic2
+                    );
                     abort();
                 }
             }
             let mut magic = MAGIC.fetch_add(1, Ordering::Relaxed);
             let magic = magic as i64 as u64;
-            self.magic1.fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-            self.magic2.fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
+            self.magic1
+                .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
+            self.magic2
+                .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
             self.magic1.fetch_or(magic, Ordering::SeqCst);
             self.magic2.fetch_or(magic, Ordering::SeqCst);
         }
@@ -567,7 +646,7 @@ impl<T:'static> ItemHolder<T> {
 #[inline]
 #[cfg_attr(test, mutants::skip)]
 fn verify_item<T>(_ptr: *const ItemHolder<T>) {
-    #[cfg(feature="validate")]
+    #[cfg(feature = "validate")]
     {
         let ptr = _ptr;
         let x = undecorate(ptr);
@@ -579,7 +658,7 @@ fn verify_item<T>(_ptr: *const ItemHolder<T>) {
         if x.is_null() {
             return;
         }
-        unsafe{&*x}.verify()
+        unsafe { &*x }.verify()
     }
 }
 
@@ -588,7 +667,7 @@ impl<T> Drop for ItemHolder<T> {
     fn drop(&mut self) {
         self.verify();
         debug_println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T>);
-        #[cfg(feature="validate")]
+        #[cfg(feature = "validate")]
         {
             self.magic1 = std::sync::atomic::AtomicU64::new(0xDEADDEA1DEADDEA1);
             self.magic2 = std::sync::atomic::AtomicU64::new(0xDEADDEA2DEADDEA2);
@@ -597,7 +676,7 @@ impl<T> Drop for ItemHolder<T> {
 }
 
 #[repr(u8)]
-#[derive(Clone,Copy,Debug,PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ItemStateEnum {
     /// Pointer is not decorated
     #[allow(unused)]
@@ -617,20 +696,21 @@ enum ItemStateEnum {
     /// The item is no longer current.
     /// The payload *has* been dropped.
     /// There is a next value.
-    Dropped = 3
+    Dropped = 3,
 }
 
 /// Decorate the given pointer with the enum value.
 /// The decoration is the least significant 2 bits.
 fn decorate<T>(ptr: *const ItemHolder<T>, e: ItemStateEnum) -> *const ItemHolder<T> {
-    let curdecoration = (ptr as usize)&3;
-    ((ptr as *const u8).wrapping_offset( (e as isize)-(curdecoration as isize) )) as *const ItemHolder<T>
+    let curdecoration = (ptr as usize) & 3;
+    ((ptr as *const u8).wrapping_offset((e as isize) - (curdecoration as isize)))
+        as *const ItemHolder<T>
 }
 
 /// Abort if the pointer is decorated
 #[cfg_attr(test, mutants::skip)]
 fn assert_is_undecorated<T>(_ptr: *const ItemHolder<T>) {
-    #[cfg(feature="validate")]
+    #[cfg(feature = "validate")]
     {
         let raw = _ptr as usize & 3;
         if raw != 0 {
@@ -654,19 +734,23 @@ fn undecorate<T>(cand: *const ItemHolder<T>) -> *const ItemHolder<T> {
 
 /// Get the state encoded in the decoration, if any.
 /// Returns None if the pointer is undecorated null.
+/// The pointer must be valid.
 fn get_state<T>(ptr: *const ItemHolder<T>) -> Option<ItemStateEnum> {
     if ptr.is_null() {
         return None;
     }
     let raw = ((ptr as usize) & 3) as u8;
     if raw == 0 {
-        eprintln!("Internal error in arcshift: Encountered undecorated pointer in get_state!: {:?}", ptr);
+        eprintln!(
+            "Internal error in arcshift: Encountered undecorated pointer in get_state!: {:?}",
+            ptr
+        );
         abort();
     }
     // SAFETY:
     // All values `0..=3` are valid ItemStateEnum.
     // And the bitmask produces a value `0..=3`
-    Some( unsafe { std::mem::transmute::<u8, ItemStateEnum>( raw ) } )
+    Some(unsafe { std::mem::transmute::<u8, ItemStateEnum>(raw) })
 }
 /// Returns true if the given option is Some(Dropped)
 fn is_dropped(state: Option<ItemStateEnum>) -> bool {
@@ -677,23 +761,29 @@ fn is_superseded_by_tentative(state: Option<ItemStateEnum>) -> bool {
     matches!(state, Some(ItemStateEnum::SupersededByTentative))
 }
 
-impl<T:'static> Clone for ArcShift<T> {
+impl<T: 'static> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         debug_println!("ArcShift::clone({:?})", self.item);
         // SAFETY:
         // `self.item` is never null, and is always a valid pointer.
         // We always already have a refcount of at least 1 on entry to clone, and nothing
         // can take that away, since &mut self is needed to decrement refcount.
-        let rescount = unsafe { (*self.item).refcount.fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst) };
+        let rescount = unsafe {
+            (*self.item)
+                .refcount
+                .fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst)
+        };
         atomic::fence(Ordering::SeqCst);
-        debug_println!("Clone - adding count to {:?}, resulting in count {}", self.item, rescount + MAX_ROOTS);
+        debug_println!(
+            "Clone - adding count to {:?}, resulting in count {}",
+            self.item,
+            rescount + MAX_ROOTS
+        );
         if rescount >= MAX_ARCSHIFT {
             eprintln!("Internal error in arcshift: Max number of ArcShift instances exceeded");
             abort();
         }
-        ArcShift {
-            item: self.item,
-        }
+        ArcShift { item: self.item }
     }
 }
 impl<T> Deref for ArcShift<T> {
@@ -704,14 +794,20 @@ impl<T> Deref for ArcShift<T> {
     }
 }
 
-fn get_next_and_state<'a,T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicPtr<ItemHolder<T>> {
-    unsafe { &*addr_of!((*(ptr as *const ItemHolder<T>)).next_and_state) }
+// ptr must be a valid pointer
+fn get_next_and_state<'a, T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicPtr<ItemHolder<T>> {
+    // SAFETY:
+    // ptr is a valid pointer
+    unsafe { &*addr_of!((*ptr).next_and_state) }
 }
-fn get_refcount<'a,T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicUsize {
-    unsafe { &*addr_of!((*(ptr as *const ItemHolder<T>)).refcount) }
+// ptr must be a valid pointer
+fn get_refcount<'a, T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicUsize {
+    // SAFETY:
+    // ptr is a valid pointer
+    unsafe { &*addr_of!((*ptr).refcount) }
 }
 
-impl<T:'static> ArcShift<T> {
+impl<T: 'static> ArcShift<T> {
     /// Drop the given pointer, and return Some(T) if it was the last
     /// reference ot a non-dropped value.
     /// This only returns Some if self is the last object keeping the references
@@ -724,29 +820,42 @@ impl<T:'static> ArcShift<T> {
         let strength = MAX_ROOTS;
         loop {
             debug_println!("drop_impl_ret on {:?}", self_item);
-            debug_println!("drop_impl_ret to reduce count {:?} by {}", self_item, MAX_ROOTS);
+            debug_println!(
+                "drop_impl_ret to reduce count {:?} by {}",
+                self_item,
+                MAX_ROOTS
+            );
             // SAFETY:
             // self.item is always a valid pointer
-            let count = unsafe { &*self_item }.refcount.fetch_sub(strength, atomic::Ordering::SeqCst);
-            debug_println!("drop_impl_ret on {:?} - count: {} -> {}", self_item, count, count.wrapping_sub(strength));
+            let count = unsafe { &*self_item }
+                .refcount
+                .fetch_sub(strength, atomic::Ordering::SeqCst);
+            debug_println!(
+                "drop_impl_ret on {:?} - count: {} -> {}",
+                self_item,
+                count,
+                count.wrapping_sub(strength)
+            );
             assert!(count >= strength);
             if count == strength {
                 debug_println!("drop_impl_ret decided to drop {:?}", self_item);
-                // SAFETY:
-                // self.item is always a valid pointer
-                let new_item = undecorate(unsafe { &*self_item }.next_and_state.load(Ordering::SeqCst));
+                let new_item =
+                    // SAFETY:
+                    // self_item is always a valid pointer
+                    undecorate(unsafe { &*self_item }.next_and_state.load(Ordering::SeqCst));
                 verify_item(new_item);
                 verify_item(self_item);
                 if new_item.is_null() {
-
                     // SAFETY:
                     // self_item is always a valid pointer
-                    let mut val = unsafe { Box::from_raw(self_item as *mut MaybeUninit<ItemHolder<T>>) };
+                    let mut val =
+                        unsafe { Box::from_raw(self_item as *mut MaybeUninit<ItemHolder<T>>) };
                     // SAFETY:
                     // `val` is a valid box. The pointer created by as_mut_ptr is also valid.
                     // We then 'read' the payload. This is safe, we've marked the contents of self_item as
                     // dropped and nothing will ever access (or drop) payload later.
-                    let payload = unsafe { ((&mut {&mut *val.as_mut_ptr()}.payload) as *mut T).read() };
+                    let payload =
+                        unsafe { ((&mut { &mut *val.as_mut_ptr() }.payload) as *mut T).read() };
                     return Some(payload);
                 }
                 drop_payload_and_holder(self_item);
@@ -760,10 +869,13 @@ impl<T:'static> ArcShift<T> {
         }
     }
 
-
     fn drop_impl(mut self_item: *const ItemHolder<T>, mut strength: usize) {
         verify_item(self_item);
-        debug_println!("start of drop_impl on {:?}, strength: {}", self_item, strength);
+        debug_println!(
+            "start of drop_impl on {:?}, strength: {}",
+            self_item,
+            strength
+        );
 
         // early-drop
         //self_item = Self::early_drop_opt(self_item);
@@ -774,19 +886,26 @@ impl<T:'static> ArcShift<T> {
                 return;
             }
 
-
-
             debug_println!("drop_impl to reduce count {:?} by {}", self_item, strength);
             // SAFETY:
             // self_item is always a valid pointer
-            let count = unsafe { &*self_item }.refcount.fetch_sub(strength, atomic::Ordering::SeqCst);
-            debug_println!("drop_impl on {:?} - count: {} -> {}", self_item, count, count.wrapping_sub(strength));
+            let count = unsafe { &*self_item }
+                .refcount
+                .fetch_sub(strength, atomic::Ordering::SeqCst);
+            debug_println!(
+                "drop_impl on {:?} - count: {} -> {}",
+                self_item,
+                count,
+                count.wrapping_sub(strength)
+            );
             assert!(count >= strength);
             if count == strength {
                 debug_println!("drop_impl decided to drop {:?}", self_item);
-                // SAFETY:
-                // self_item is always a valid pointer
-                let new_item = undecorate(unsafe { &*self_item }.next_and_state.load(Ordering::SeqCst));
+                let new_item =
+                    // SAFETY:
+                    // self_item is always a valid pointer
+                    undecorate(unsafe { &*self_item }.next_and_state.load(Ordering::SeqCst));
+
                 verify_item(new_item);
                 verify_item(self_item);
                 if drop_payload_and_holder(self_item) {
@@ -807,24 +926,20 @@ impl<T:'static> ArcShift<T> {
     /// Create a new ArcShift, containing the given type.
     pub fn new(payload: T) -> ArcShift<T> {
         let item = ItemHolder {
-            #[cfg(feature="validate")]
+            #[cfg(feature = "validate")]
             magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
-            #[cfg(feature="validate")]
+            #[cfg(feature = "validate")]
             magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
             payload,
             next_and_state: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let cur_ptr = Box::into_raw(Box::new(item));
-        ArcShift {
-            item: cur_ptr,
-        }
+        ArcShift { item: cur_ptr }
     }
     /// Basically the same as doing ArcShift::new, but avoids copying the contents of 'input'
     /// to the stack, even as a temporary variable.
     pub fn from_box(input: Box<T>) -> ArcShift<T> {
-
-
         let input_ptr = Box::into_raw(input);
 
         let layout = Layout::new::<MaybeUninit<ItemHolder<T>>>();
@@ -833,32 +948,43 @@ impl<T:'static> ArcShift<T> {
         // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
         // The returned memory is uninitialized, but we will initialize the required parts of it
         // below.
-        let result_ptr = unsafe { std::alloc::alloc(layout) as *mut ItemHolder<T>};
+        let result_ptr = unsafe { std::alloc::alloc(layout) as *mut ItemHolder<T> };
 
         // SAFETY:
         // The copy is safe because MaybeUninit<ItemHolder<T>> is guaranteed to have the same
         // memory layout as ItemHolder<T>, so we're just copying a value of T to a new location.
-        unsafe { addr_of_mut!((*result_ptr).payload).copy_from(input_ptr, 1); }
+        unsafe {
+            addr_of_mut!((*result_ptr).payload).copy_from(input_ptr, 1);
+        }
         // SAFETY:
         // next is just an AtomicPtr-type, for which all bit patterns are valid.
-        unsafe { addr_of_mut!((*result_ptr).next_and_state).write(atomic::AtomicPtr::default()); }
+        unsafe {
+            addr_of_mut!((*result_ptr).next_and_state).write(atomic::AtomicPtr::default());
+        }
         // SAFETY:
         // next is just an AtomicUsize-type, for which all bit patterns are valid.
-        unsafe { addr_of_mut!((*result_ptr).refcount).write(atomic::AtomicUsize::new(MAX_ROOTS)); }
+        unsafe {
+            addr_of_mut!((*result_ptr).refcount).write(atomic::AtomicUsize::new(MAX_ROOTS));
+        }
 
-        #[cfg(feature="validate")]
-        unsafe { addr_of_mut!((*result_ptr).magic1).write(std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111)); }
-        #[cfg(feature="validate")]
-        unsafe { addr_of_mut!((*result_ptr).magic2).write(std::sync::atomic::AtomicU64::new(0x1234123412348111)); }
-
+        #[cfg(feature = "validate")]
+        unsafe {
+            addr_of_mut!((*result_ptr).magic1)
+                .write(std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111));
+        }
+        #[cfg(feature = "validate")]
+        unsafe {
+            addr_of_mut!((*result_ptr).magic2)
+                .write(std::sync::atomic::AtomicU64::new(0x1234123412348111));
+        }
 
         // SAFETY:
         // input_ptr is a *mut T that has been created from a Box<T>.
         // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-function
         // of T is not run. We must not drop T here, since we've moved it to the 'result_ptr'.
-        let _t : Box<MaybeUninit<T>> = unsafe { Box::from_raw(input_ptr as *mut MaybeUninit<T>) }; //Free the memory, but don't drop 'input'
+        let _t: Box<MaybeUninit<T>> = unsafe { Box::from_raw(input_ptr as *mut MaybeUninit<T>) }; //Free the memory, but don't drop 'input'
         ArcShift {
-            item: result_ptr as *const ItemHolder<T>
+            item: result_ptr as *const ItemHolder<T>,
         }
     }
 
@@ -874,11 +1000,12 @@ impl<T:'static> ArcShift<T> {
     pub fn try_get_mut(&mut self) -> Option<&mut T> {
         self.reload();
 
-
         // SAFETY:
         // We always have refcount for self.item, and it is guaranteed valid
-        if unsafe{&*self.item}.refcount.load(Ordering::SeqCst) == MAX_ROOTS {
-            if !undecorate(unsafe{&*self.item}.next_and_state.load(Ordering::SeqCst)).is_null() {
+        if unsafe { &*self.item }.refcount.load(Ordering::SeqCst) == MAX_ROOTS {
+            // SAFETY:
+            // We always have refcount for self.item, and it is guaranteed valid
+            if !undecorate(unsafe { &*self.item }.next_and_state.load(Ordering::SeqCst)).is_null() {
                 return None;
             }
             // SAFETY:
@@ -912,9 +1039,9 @@ impl<T:'static> ArcShift<T> {
     /// when the instance is dereferenced, or the 'update' method is called.
     pub fn update_shared(&self, new_payload: T) {
         let item = ItemHolder {
-            #[cfg(feature="validate")]
+            #[cfg(feature = "validate")]
             magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
-            #[cfg(feature="validate")]
+            #[cfg(feature = "validate")]
             magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
             payload: new_payload,
             next_and_state: atomic::AtomicPtr::default(),
@@ -932,7 +1059,7 @@ impl<T:'static> ArcShift<T> {
             // 'candidate' is either 'self.item', or one of the pointers in the linked list
             // chain. Each node in the chain has a refcount on the next node in the chain,
             // and self.item has a refcount on the first node. So all the nodes are valid.
-            let curnext  = unsafe { &*candidate }.next_and_state.load(Ordering::SeqCst);
+            let curnext = unsafe { &*candidate }.next_and_state.load(Ordering::SeqCst);
 
             let expect = if is_superseded_by_tentative(get_state(curnext)) {
                 curnext
@@ -947,20 +1074,32 @@ impl<T:'static> ArcShift<T> {
             // Candidate is still valid here, see above
             // Write a dummy-pointer, so that we can detect if it has been actually used or not,
             // and clean up at next update if not.
-            match unsafe { &*candidate }.next_and_state.compare_exchange(expect, decorate(new_ptr, ItemStateEnum::SupersededByTentative) as *mut ItemHolder<T>, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst) {
+            match unsafe { &*candidate }.next_and_state.compare_exchange(
+                expect,
+                decorate(new_ptr, ItemStateEnum::SupersededByTentative) as *mut ItemHolder<T>,
+                atomic::Ordering::SeqCst,
+                atomic::Ordering::SeqCst,
+            ) {
                 Ok(_) => {
                     verify_item(undecorate(expect));
                     // Warning!
                     // At this point, 'new_ptr' can already have been dropped, by another simultaneous
                     // update_shared-invocation.
 
-                    debug_println!("Did replace next of {:?} (={:?}) with {:?} ", candidate, expect, decorate(new_ptr, ItemStateEnum::SupersededByTentative));
-                    if is_superseded_by_tentative(get_state(expect))
-                    {
+                    debug_println!(
+                        "Did replace next of {:?} (={:?}) with {:?} ",
+                        candidate,
+                        expect,
+                        decorate(new_ptr, ItemStateEnum::SupersededByTentative)
+                    );
+                    if is_superseded_by_tentative(get_state(expect)) {
                         // If we get here, then the dummy-optimization, allowing us to reduce
                         // garbage when updates are never actually loaded, has been triggered.
-                        debug_println!("Anti-garbage optimization was in effect, dropping {:?}", expect);
-                        drop_item(undecorate(expect),MAX_ROOTS);
+                        debug_println!(
+                            "Anti-garbage optimization was in effect, dropping {:?}",
+                            expect
+                        );
+                        drop_item(undecorate(expect), MAX_ROOTS);
                     }
                     return;
                 }
@@ -1125,11 +1264,10 @@ impl<T:'static> ArcShift<T> {
 
     #[allow(warnings)]
     fn simple_early_drop_opt(mut cand: *const ItemHolder<T>) -> Option<bool> {
-
         verify_item(cand);
         // SAFETY:
         // `cand` is a valid pointer.
-        let count = unsafe{&*cand}.refcount.load(Ordering::SeqCst);
+        let count = unsafe { &*cand }.refcount.load(Ordering::SeqCst);
 
         verify_item(cand);
         // SAFETY:
@@ -1138,15 +1276,26 @@ impl<T:'static> ArcShift<T> {
             atomic::spin_loop();
             return None;
         };
-        if ((1+1)..(MAX_ROOTS)).contains(&count) {
+        if ((1 + 1)..(MAX_ROOTS)).contains(&count) {
+            debug_println!(
+                "Possibility of early drop for {:?}! (count = {}, state: {:?})",
+                cand,
+                count,
+                get_state(next_ptr)
+            );
 
-            debug_println!("Possibility of early drop for {:?}! (count = {}, state: {:?})", cand, count, get_state(next_ptr));
-
-            if !undecorate(next_ptr).is_null() && get_state(next_ptr) != Some(ItemStateEnum::Dropped) {
+            if !undecorate(next_ptr).is_null()
+                && get_state(next_ptr) != Some(ItemStateEnum::Dropped)
+            {
                 // SAFETY:
                 // `cand` is a valid pointer.
                 debug_println!("First condition for early drop fulfilled: {:?}", next_ptr);
-                match get_next_and_state(cand).compare_exchange(next_ptr as *mut _, decorate(next_ptr, Dropped) as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
+                match get_next_and_state(cand).compare_exchange(
+                    next_ptr as *mut _,
+                    decorate(next_ptr, Dropped) as *mut _,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
                     Ok(_) => {
                         // SAFETY:
                         // `cand` is a valid pointer.
@@ -1157,7 +1306,12 @@ impl<T:'static> ArcShift<T> {
                             // Ok, someone must have increased the refcount just before we did compare_exchange. Undo the compare_exchange
                             // SAFETY:
                             // `cand` is a valid pointer.
-                            match unsafe { &*cand }.next_and_state.compare_exchange(decorate(next_ptr, Dropped) as *mut _, decorate(next_ptr, Superseded) as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
+                            match unsafe { &*cand }.next_and_state.compare_exchange(
+                                decorate(next_ptr, Dropped) as *mut _,
+                                decorate(next_ptr, Superseded) as *mut _,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            ) {
                                 Ok(_) => {
                                     debug_println!("Spinning on {:?} drop sync(1)", cand);
                                     atomic::spin_loop();
@@ -1179,7 +1333,9 @@ impl<T:'static> ArcShift<T> {
                             // SAFETY:
                             // `cand` is a valid pointer, which we are allowed to drop the contents //of
                             // payload for.
-                            let payload_item_mut = unsafe { &mut *addr_of_mut!((*(cand as *mut ItemHolder<T>)).payload) };
+                            let payload_item_mut = unsafe {
+                                &mut *addr_of_mut!((*(cand as *mut ItemHolder<T>)).payload)
+                            };
                             // SAFETY:
                             // `payload_item_mut` is a valid pointer to the payload, that
                             // we are allowed to drop.
@@ -1194,11 +1350,18 @@ impl<T:'static> ArcShift<T> {
                     }
                 }
             } else {
-                debug_println!("However, first condition for early drop not fulfilled: {:?}", next_ptr);
+                debug_println!(
+                    "However, first condition for early drop not fulfilled: {:?}",
+                    next_ptr
+                );
                 return Some(false);
             }
         } else {
-            debug_println!("No early drop of {:?}, count (={}) not permitting", cand, count);
+            debug_println!(
+                "No early drop of {:?}, count (={}) not permitting",
+                cand,
+                count
+            );
             return Some(false);
         }
     }
@@ -1211,7 +1374,6 @@ impl<T:'static> ArcShift<T> {
     /// effect, compared to just calling 'get' and discarding the value.
     #[inline(never)]
     pub fn reload(&mut self) {
-
         verify_item(self.item);
         debug_println!("reload {:?}", self.item);
 
@@ -1235,9 +1397,17 @@ impl<T:'static> ArcShift<T> {
 
                 // SAFETY:
                 // `new_self` is a valid pointer.
-                let _dbgprev = unsafe{&*new_self}.refcount.fetch_add(MAX_ROOTS, Ordering::SeqCst);
+                let _dbgprev = unsafe { &*new_self }
+                    .refcount
+                    .fetch_add(MAX_ROOTS, Ordering::SeqCst);
                 atomic::fence(Ordering::SeqCst);
-                debug_println!("{:?} has no next - adding count: {} -> {}. (our strongly owned item: {:?})", new_self, _dbgprev, _dbgprev + MAX_ROOTS, self.item);
+                debug_println!(
+                    "{:?} has no next - adding count: {} -> {}. (our strongly owned item: {:?})",
+                    new_self,
+                    _dbgprev,
+                    _dbgprev + MAX_ROOTS,
+                    self.item
+                );
 
                 if _dbgprev < 1 {
                     panic!("For {:?}, count is {}", new_self, _dbgprev);
@@ -1251,8 +1421,13 @@ impl<T:'static> ArcShift<T> {
             verify_item(undecorate(next));
             // SAFETY:
             // 'next' is always a valid pointer
-            let _count = unsafe{&*undecorate(next)}.refcount.load(Ordering::SeqCst);
-            debug_println!("Moving from {:?} to {:?} ({:?} has count {})", new_self, undecorate(next),
+            let _count = unsafe { &*undecorate(next) }
+                .refcount
+                .load(Ordering::SeqCst);
+            debug_println!(
+                "Moving from {:?} to {:?} ({:?} has count {})",
+                new_self,
+                undecorate(next),
                 undecorate(next),
                 _count
             );
@@ -1260,8 +1435,6 @@ impl<T:'static> ArcShift<T> {
             verify_item(new_self);
             atomic::spin_loop();
         }
-
-
 
         let mut cand = self.item;
         let mut strength = MAX_ROOTS;
@@ -1273,12 +1446,23 @@ impl<T:'static> ArcShift<T> {
                 // This is needed so nothing drops the payload while we're looping.
                 // But if we get to here, we've inherited the refcount from the previous owner.
                 // So we need to subtract this.
-                debug_println!("Reached new_self, reload about to reduce count {:?} by {}", new_self, strength);
+                debug_println!(
+                    "Reached new_self, reload about to reduce count {:?} by {}",
+                    new_self,
+                    strength
+                );
                 // SAFETY:
                 // `new_self` is a valid pointer.
-                let _t = unsafe{&*new_self}.refcount.fetch_sub(strength, Ordering::SeqCst);
+                let _t = unsafe { &*new_self }
+                    .refcount
+                    .fetch_sub(strength, Ordering::SeqCst);
                 assert!(_t > strength);
-                debug_println!("Reached new_self (={:?}), reducing count {} -> {}", new_self, _t, _t - strength);
+                debug_println!(
+                    "Reached new_self (={:?}), reducing count {} -> {}",
+                    new_self,
+                    _t,
+                    _t - strength
+                );
                 break;
             }
             verify_item(cand);
@@ -1286,19 +1470,26 @@ impl<T:'static> ArcShift<T> {
             // SAFETY:
             // 'next' is always a valid pointer
 
-
             if strength > 1 {
-                debug_println!("reload(3) to reduce count {:?} by {}", cand, MAX_ROOTS-1);
+                debug_println!("reload(3) to reduce count {:?} by {}", cand, MAX_ROOTS - 1);
                 // SAFETY:
                 // `cand` is a valid pointer.
-                let count = unsafe { &*cand }.refcount.fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                debug_println!("{:?} release refcount {} -> {}", cand, count, count.wrapping_sub(MAX_ROOTS-1));
+                let count = unsafe { &*cand }
+                    .refcount
+                    .fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                debug_println!(
+                    "{:?} release refcount {} -> {}",
+                    cand,
+                    count,
+                    count.wrapping_sub(MAX_ROOTS - 1)
+                );
                 assert!(count >= MAX_ROOTS - 1);
                 if count == MAX_ROOTS {
                     debug_println!("Dropping payload of {:?}", cand);
-                    // SAFETY:
-                    // `cand` is a valid pointer.
-                    let newcand = undecorate(unsafe { &*cand }.next_and_state.load(Ordering::SeqCst));
+                    let newcand =
+                        // SAFETY:
+                        // `cand` is a valid pointer.
+                        undecorate(unsafe { &*cand }.next_and_state.load(Ordering::SeqCst));
 
                     // NOTE: Because we now uniquely own 'cand', nothing can do an 'anti-garbage' drop of
                     // a tentative 'cand.next_and_state', since that would require access to 'cand', which no
@@ -1321,21 +1512,43 @@ impl<T:'static> ArcShift<T> {
                 let Some(early_dropped) = Self::simple_early_drop_opt(cand) else {
                     if strength > 1 {
                         let _dbg = get_refcount(cand).fetch_add(MAX_ROOTS - 1, Ordering::SeqCst);
-                        debug_println!("{:?} release refcount race, undoing {} -> {}", cand, _dbg, _dbg.wrapping_add(MAX_ROOTS-1));
+                        debug_println!(
+                            "{:?} release refcount race, undoing {} -> {}",
+                            cand,
+                            _dbg,
+                            _dbg.wrapping_add(MAX_ROOTS - 1)
+                        );
                         assert!(_dbg > 0);
                     }
                     atomic::spin_loop();
                     continue;
                 };
-                let newcand = undecorate(unsafe { &*cand }.next_and_state.load(Ordering::SeqCst));
+                let newcand = undecorate(
+                    // SAFETY:
+                    // cand is a valid pointer
+                    unsafe { &*cand }.next_and_state.load(Ordering::SeqCst));
                 if early_dropped {
+                    // SAFETY:
+                    // newcand is a valid pointer
                     let _dbg = unsafe { &*newcand }.refcount.fetch_add(1, Ordering::SeqCst);
-                    debug_println!("Early drop, creating strong+weak ref to {:?} by going {} -> {}", newcand, _dbg, _dbg.wrapping_add(1));
+                    debug_println!(
+                        "Early drop, creating strong+weak ref to {:?} by going {} -> {}",
+                        newcand,
+                        _dbg,
+                        _dbg.wrapping_add(1)
+                    );
                 }
 
-                let count = unsafe{&*cand}.refcount.fetch_sub(1, Ordering::SeqCst);
+                // SAFETY:
+                // cand is a valid pointer
+                let count = unsafe { &*cand }.refcount.fetch_sub(1, Ordering::SeqCst);
                 assert!(count >= 1);
-                debug_println!("early-drop, no-drop-case reducing {} -> {} for {:?}", count, count.wrapping_sub(1), cand);
+                debug_println!(
+                    "early-drop, no-drop-case reducing {} -> {} for {:?}",
+                    count,
+                    count.wrapping_sub(1),
+                    cand
+                );
 
                 if count == 1 {
                     // NOTE: Because we now uniquely own 'cand', nothing can do an 'anti-garbage' drop of
@@ -1352,18 +1565,24 @@ impl<T:'static> ArcShift<T> {
                             // Nothing needs to be done, we have inherited a strong 'newcand'-reference
                         }
                         strength = MAX_ROOTS;
+                    } else if early_dropped {
+                        // SAFETY:
+                        // newcand is a valid pointer
+                        let _dbg = unsafe { &*newcand }.refcount.fetch_sub(1, Ordering::SeqCst);
+                        assert!(_dbg > 1);
+                        debug_println!(
+                            "Adjusting[1] ref to {:?} by going {} -> {}",
+                            newcand,
+                            _dbg,
+                            _dbg.wrapping_sub(1)
+                        );
+                        strength = MAX_ROOTS;
                     } else {
-                        if early_dropped {
-                            let _dbg = unsafe { &*newcand }.refcount.fetch_sub(1, Ordering::SeqCst);
-                            assert!(_dbg > 1);
-                            debug_println!("Adjusting[1] ref to {:?} by going {} -> {}", newcand, _dbg, _dbg.wrapping_sub(1));
-                            strength = MAX_ROOTS;
-                        } else {
-                            //let _dbg = unsafe { &*newcand }.refcount.fetch_add(MAX_ROOTS-1, Ordering::SeqCst);
-                            debug_println!("Adjusting[2] ref to {:?} ", newcand);
-                            strength = 1;
-                        }
+                        //let _dbg = unsafe { &*newcand }.refcount.fetch_add(MAX_ROOTS-1, Ordering::SeqCst);
+                        debug_println!("Adjusting[2] ref to {:?} ", newcand);
+                        strength = 1;
                     }
+
                     debug_println!("Racy final drop of {:?}, proceeding to {:?}", cand, newcand);
                     cand = newcand;
                     continue;
@@ -1382,8 +1601,6 @@ impl<T:'static> ArcShift<T> {
                 break;
             }
         }
-
-
 
         debug_println!("Reload moving {:?} -> {:?}", self.item, new_self);
         self.item = new_self;
@@ -1433,13 +1650,16 @@ impl<T:'static> ArcShift<T> {
         debug_println!("Getting {:?}", self.item);
         // SAFETY:
         // `self.item` is always a valid pointer
-        let cand: *const ItemHolder<T> = unsafe { &*self.item }.next_and_state.load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
+        let cand: *const ItemHolder<T> = unsafe { &*self.item }
+            .next_and_state
+            .load(atomic::Ordering::Relaxed)
+            as *const ItemHolder<T>;
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             // SAFETY:
             // the pointer returned by shared_get_impl is always valid.
             //compile_error!("this is wrong - nothing keep the returned reference alive")
-            return &unsafe {&*self.shared_get_impl()}.payload;
+            return &unsafe { &*self.shared_get_impl() }.payload;
         }
         debug_println!("Returned payload for {:?}", self.item);
         // SAFETY:
@@ -1460,7 +1680,10 @@ impl<T:'static> ArcShift<T> {
         debug_println!("Getting {:?}", self.item);
         // SAFETY:
         // `self.item` is always a valid pointer
-        let cand: *const ItemHolder<T> = unsafe { &*self.item }.next_and_state.load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
+        let cand: *const ItemHolder<T> = unsafe { &*self.item }
+            .next_and_state
+            .load(atomic::Ordering::Relaxed)
+            as *const ItemHolder<T>;
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             self.reload();
@@ -1473,7 +1696,7 @@ impl<T:'static> ArcShift<T> {
 
     #[cfg_attr(test, mutants::skip)]
     fn verify_count(count: usize) {
-        if (count&(MAX_ROOTS-1)) == MAX_ROOTS - 1 {
+        if (count & (MAX_ROOTS - 1)) == MAX_ROOTS - 1 {
             panic!("Maximum number of ArcShiftLight-instances has been reached.");
         }
     }
@@ -1503,26 +1726,26 @@ impl<T:'static> ArcShift<T> {
             // SAFETY:
             // curitem is a pointer reachable through the next-chain from self.item,
             // and is thus a valid pointer.
-            let count = unsafe {&*curitem}.refcount.load(Ordering::SeqCst);
+            let count = unsafe { &*curitem }.refcount.load(Ordering::SeqCst);
 
             Self::verify_count(count);
 
             // SAFETY:
             // curitem is a pointer reachable through the next-chain from self.item,
             // and is thus a valid pointer.
-            if unsafe {&*curitem}.refcount.compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            if unsafe { &*curitem }
+                .refcount
+                .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
                 atomic::spin_loop();
                 continue;
             }
-            debug_println!("{:?}, changed refcount {} -> {}", curitem,count, count + 1);
+            debug_println!("{:?}, changed refcount {} -> {}", curitem, count, count + 1);
             break;
         }
-        ArcShiftLight {
-            item: curitem,
-        }
+        ArcShiftLight { item: curitem }
     }
-
-
 
     /// This is like 'get', but never upgrades the pointer.
     /// This means that any new value supplied using one of the update methods will not be
@@ -1542,22 +1765,21 @@ impl<T:'static> ArcShift<T> {
         // `self.item` is always a valid pointer
         &unsafe { &*self.item }.payload
     }
-
-
 }
-
 
 /// SAFETY:
 /// The 'ptr' must be a valid pointer to an ItemHolder heap item that
 /// is okay to drop.
-fn drop_payload_and_holder<T:'static>(ptr: *const ItemHolder<T>) -> bool {
+fn drop_payload_and_holder<T: 'static>(ptr: *const ItemHolder<T>) -> bool {
     verify_item(ptr);
 
-    // SAFETY:
-    // ptr must be valid, since this is a precondition for using this method.
-    // This method does not need unsafe, since it is private, and the scope for
-    // unsafety is within the entire crate.
-    if is_dropped(get_state(unsafe{&*addr_of!((*ptr).next_and_state)}.load( Ordering::SeqCst))) {
+    if is_dropped(get_state(
+        // SAFETY:
+        // ptr must be valid, since this is a precondition for using this method.
+        // This method does not need unsafe, since it is private, and the scope for
+        // unsafety is within the entire crate.
+        unsafe { &*addr_of!((*ptr).next_and_state) }.load(Ordering::SeqCst),
+    )) {
         debug_println!("Dropping holder {:?}, but payload was already dropped", ptr);
         // SAFETY:
         // `ptr` is always a valid pointer.
@@ -1575,19 +1797,27 @@ fn drop_payload_and_holder<T:'static>(ptr: *const ItemHolder<T>) -> bool {
     }
 }
 
-
 /// SAFETY:
 /// 'old_ptr' must be a valid ItemHolder-pointer.
 fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
-
-    debug_println!("drop_root_item about to reduce count {:?} by {}", old_ptr, strength);
-    // SAFETY:
-    // old_ptr must be a valid pointer, required by caller. 'drop_root_item' is not unsafe because
-    // it is not public.
+    debug_println!(
+        "drop_root_item about to reduce count {:?} by {}",
+        old_ptr,
+        strength
+    );
     verify_item(old_ptr);
-    let count = unsafe{ &*addr_of!( (*old_ptr).refcount ) } .fetch_sub(strength, atomic::Ordering::SeqCst);
+    let count =
+        // SAFETY:
+        // old_ptr must be a valid pointer, required by caller. 'drop_root_item' is not unsafe because
+        // it is not public.
+        unsafe { &*addr_of!((*old_ptr).refcount) }.fetch_sub(strength, atomic::Ordering::SeqCst);
     atomic::fence(Ordering::SeqCst);
-    debug_println!("Drop-root-item {:?}, count {} -> {}", old_ptr, count, count.wrapping_sub(1));
+    debug_println!(
+        "Drop-root-item {:?}, count {} -> {}",
+        old_ptr,
+        count,
+        count.wrapping_sub(1)
+    );
     assert!(count >= strength && count < 1_000_000_000_000);
 
     if count == strength {
@@ -1596,20 +1826,24 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
         // old_ptr must be a valid pointer
         // It is safe to access 'old_ptr.next_and_state' here, since nothing can do a anti-garbage
         // drop of it, since nothing else has access to '*old_ptr'.
-        let next = unsafe {&*addr_of!((*old_ptr).next_and_state)}.load(atomic::Ordering::SeqCst);
+        let next = unsafe { &*addr_of!((*old_ptr).next_and_state) }.load(atomic::Ordering::SeqCst);
         let strong = drop_payload_and_holder(old_ptr);
         if !undecorate(next).is_null() {
-            debug_println!("drop_root_item, recurse {:?}, with state {:?} - recursing into {:?} w str {}", old_ptr, get_state(next), next, 1);
-            let next_strength;
-            if strong {
-                next_strength = MAX_ROOTS;
+            debug_println!(
+                "drop_root_item, recurse {:?}, with state {:?} - recursing into {:?} w str {}",
+                old_ptr,
+                get_state(next),
+                next,
+                1
+            );
+            let next_strength = if strong {
+                MAX_ROOTS
             } else {
-                next_strength = 1;
-            }
-            crate::drop_root_item(undecorate(next), next_strength);
+                1
+            };
+            drop_root_item(undecorate(next), next_strength);
         }
         debug_println!("drop_root_item, calling drop_payload {:?}", old_ptr);
-
     }
 }
 fn drop_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
@@ -1620,51 +1854,49 @@ fn drop_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
 pub mod tests {
     #![allow(dead_code)]
     #![allow(unused_imports)]
-    use std::alloc::{Layout};
+    use super::*;
+    use crossbeam_channel::bounded;
+    use log::debug;
+    use std::alloc::Layout;
     use std::fmt::Debug;
     use std::hash::Hash;
     use std::hint::black_box;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
     use std::time::Duration;
-    use crossbeam_channel::bounded;
-    use log::debug;
-    use super::*;
 
-    use rand::{Rng, SeedableRng};
     use rand::prelude::StdRng;
+    use rand::{Rng, SeedableRng};
 
-
-    #[cfg(all(not(loom), not(feature="shuttle")))]
+    #[cfg(all(not(loom), not(feature = "shuttle")))]
     fn model(x: impl FnOnce()) {
         x()
     }
-    #[cfg(all(not(loom), not(feature="shuttle")))]
+    #[cfg(all(not(loom), not(feature = "shuttle")))]
     fn model2(x: impl FnOnce(), _repro: Option<&str>) {
         x()
     }
     #[cfg(loom)]
-    fn model(x: impl Fn()+'static+Send+Sync) {
+    fn model(x: impl Fn() + 'static + Send + Sync) {
         loom::model(x)
     }
     #[cfg(loom)]
-    fn model2(x: impl Fn()+'static+Send+Sync, _repro: Option<&str>) {
+    fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
         loom::model(x)
     }
 
-    #[cfg(feature="shuttle")]
-    fn model(x: impl Fn()+'static+Send+Sync) {
+    #[cfg(feature = "shuttle")]
+    fn model(x: impl Fn() + 'static + Send + Sync) {
         shuttle::check_random(x, 5250);
     }
-    #[cfg(feature="shuttle")]
-    fn model2(x: impl Fn()+'static+Send+Sync, repro: Option<&str>) {
+    #[cfg(feature = "shuttle")]
+    fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
         if let Some(repro) = repro {
             shuttle::replay(x, repro);
         } else {
             shuttle::check_random(x, 250);
         }
     }
-
 
     #[test]
     fn simple_get() {
@@ -1699,13 +1931,13 @@ pub mod tests {
     fn simple_large() {
         model(|| {
             #[cfg(not(miri))]
-            const SIZE:usize = 10_000_000;
+            const SIZE: usize = 10_000_000;
             #[cfg(miri)]
-            const SIZE:usize = 10_000;
+            const SIZE: usize = 10_000;
 
-            let layout = Layout::new::<MaybeUninit<[u64;SIZE]>>();
+            let layout = Layout::new::<MaybeUninit<[u64; SIZE]>>();
 
-            let ptr : *mut [u64;SIZE] = unsafe { std::alloc::alloc(layout) } as *mut [u64;SIZE];
+            let ptr: *mut [u64; SIZE] = unsafe { std::alloc::alloc(layout) } as *mut [u64; SIZE];
             for i in 0..SIZE {
                 unsafe { *(&mut (*ptr)).get_unchecked_mut(i) = 42 };
             }
@@ -1731,7 +1963,7 @@ pub mod tests {
     }
     #[test]
     fn simple_upgrade0() {
-        model(||{
+        model(|| {
             let mut shift = ArcShift::new(42u32);
             assert_eq!(*shift.get(), 42u32);
             shift.update_shared(43);
@@ -1741,7 +1973,7 @@ pub mod tests {
 
     #[test]
     fn simple_upgrade2() {
-        model(||{
+        model(|| {
             let mut shift = ArcShift::new(42u32);
             assert_eq!(*shift.get(), 42u32);
             shift.update_shared(43);
@@ -1755,17 +1987,14 @@ pub mod tests {
     /// instances of it. This is used together with Loom to ensure there
     /// are no memory leaks due to race-conditions.
     struct InstanceSpy {
-        x: std::sync::Arc<std::sync::atomic::AtomicUsize>
+        x: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
     impl InstanceSpy {
         fn new(x: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> InstanceSpy {
-
             let _temp = x.fetch_add(1, Ordering::Relaxed);
             atomic::fence(Ordering::SeqCst);
             debug_println!("++ InstanceSpy ++ {}", _temp + 1);
-            InstanceSpy {
-                x,
-            }
+            InstanceSpy { x }
         }
     }
     impl Drop for InstanceSpy {
@@ -1782,7 +2011,7 @@ pub mod tests {
     impl SpyOwner2 {
         fn new() -> SpyOwner2 {
             SpyOwner2 {
-                data: std::sync::Arc::new(Mutex::new(HashSet::new()))
+                data: std::sync::Arc::new(Mutex::new(HashSet::new())),
             }
         }
         fn create(&self, name: &'static str) -> InstanceSpy2 {
@@ -1805,15 +2034,15 @@ pub mod tests {
         fn str(&self) -> &'static str {
             self.name
         }
-        fn new(x: std::sync::Arc<Mutex<HashSet<&'static str>>>, name: &'static str) -> InstanceSpy2 {
+        fn new(
+            x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
+            name: &'static str,
+        ) -> InstanceSpy2 {
             let mut guard = x.lock().unwrap();
             guard.insert(name);
             debug_println!("++ InstanceSpy ++ {:?} (added: {})", &*guard, name);
             drop(guard);
-            InstanceSpy2 {
-                x,
-                name
-            }
+            InstanceSpy2 { x, name }
         }
     }
     impl Drop for InstanceSpy2 {
@@ -1822,12 +2051,11 @@ pub mod tests {
             guard.remove(self.name);
             debug_println!("-- InstanceSpy -- {:?} - removed {}", &*guard, self.name);
             //debug_println!("Drop stacktrace: {:?}", Backtrace::capture());
-
         }
     }
     #[test]
     fn simple_upgrade3a1() {
-        model(||{
+        model(|| {
             let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
 
@@ -1844,12 +2072,11 @@ pub mod tests {
             debug_println!("==== drop shiftroot =");
             drop(shiftlight);
             assert_eq!(count.load(Ordering::SeqCst), 0);
-
         });
     }
     #[test]
     fn simple_upgrade3a0() {
-        model(||{
+        model(|| {
             let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let shift = ArcShiftLight::new(InstanceSpy::new(count.clone()));
             let mut arc = shift.get();
@@ -1862,12 +2089,11 @@ pub mod tests {
             assert_eq!(count.load(Ordering::SeqCst), 1);
             drop(shift);
             assert_eq!(count.load(Ordering::SeqCst), 0);
-
         });
     }
     #[test]
     fn simple_upgrade3b() {
-        model(||{
+        model(|| {
             let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let shift = ArcShiftLight::new(InstanceSpy::new(count.clone()));
             let mut arc = shift.get();
@@ -1881,7 +2107,6 @@ pub mod tests {
             assert_eq!(count.load(Ordering::Relaxed), 1);
             drop(shift);
             assert_eq!(count.load(Ordering::Relaxed), 0);
-
         });
     }
 
@@ -1929,77 +2154,106 @@ pub mod tests {
 
     #[test]
     fn simple_threading2() {
-
-        model(||{
+        model(|| {
             let shift = ArcShift::new(42u32);
             let shift1 = shift.clone();
             let mut shift2 = shift1.clone();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move||{
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    shift1.update_shared(43);
+                    debug_println!("t1 dropping");
+                })
+                .unwrap();
 
-                shift1.update_shared(43);
-                debug_println!("t1 dropping");
-            }).unwrap();
-
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move||{
-
-                std::hint::black_box(shift2.get());
-                debug_println!("t2 dropping");
-
-            }).unwrap();
-            _=t1.join().unwrap();
-            _=t2.join().unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    std::hint::black_box(shift2.get());
+                    debug_println!("t2 dropping");
+                })
+                .unwrap();
+            _ = t1.join().unwrap();
+            _ = t2.join().unwrap();
         });
     }
     #[test]
     fn simple_threading2b() {
-
-        model(||{
+        model(|| {
             let shift1 = ArcShiftLight::new(42u32);
             let mut shift2 = shift1.get();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move||{
-                black_box(shift1.clone());
-                debug_println!("t1 dropping");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    black_box(shift1.clone());
+                    debug_println!("t1 dropping");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move||{
-
-                std::hint::black_box(shift2.get());
-                debug_println!("t2 dropping");
-            }).unwrap();
-            _=t1.join().unwrap();
-            _=t2.join().unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    std::hint::black_box(shift2.get());
+                    debug_println!("t2 dropping");
+                })
+                .unwrap();
+            _ = t1.join().unwrap();
+            _ = t2.join().unwrap();
         });
     }
     #[test]
     fn simple_threading2c() {
-
-        model(||{
+        model(|| {
             let shift1 = ArcShiftLight::new(42u32);
             let mut shift2 = shift1.get();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move||{
-                black_box(shift1.clone());
-                debug_println!("=== t1 dropping");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    black_box(shift1.clone());
+                    debug_println!("=== t1 dropping");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move||{
-                shift2.update(43);
-                debug_println!("=== t2 dropping");
-            }).unwrap();
-            _=t1.join().unwrap();
-            _=t2.join().unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    shift2.update(43);
+                    debug_println!("=== t2 dropping");
+                })
+                .unwrap();
+            _ = t1.join().unwrap();
+            _ = t2.join().unwrap();
         });
     }
 
-
     fn generic_3thread_ops_a<
-        F1:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
-        F2:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
-        F3:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
-    >(f1:F1,f2:F2,f3:F3) {
+        F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+            + Sync
+            + Send
+            + 'static,
+        F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+            + Sync
+            + Send
+            + 'static,
+        F3: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+            + Sync
+            + Send
+            + 'static,
+    >(
+        f1: F1,
+        f2: F2,
+        f3: F3,
+    ) {
         let f1 = std::sync::Arc::new(f1);
         let f2 = std::sync::Arc::new(f2);
         let f3 = std::sync::Arc::new(f3);
-        model(move|| {
+        model(move || {
             let f1 = f1.clone();
             let f2 = f2.clone();
             let f3 = f3.clone();
@@ -2012,20 +2266,32 @@ pub mod tests {
                 let owner_ref2 = owner.clone();
                 let owner_ref3 = owner.clone();
 
-                let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t1 =");
-                    f1(&*owner_ref1, shift1, "t1")
-                }).unwrap();
+                let t1 = atomic::thread::Builder::new()
+                    .name("t1".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t1 =");
+                        f1(&*owner_ref1, shift1, "t1")
+                    })
+                    .unwrap();
 
-                let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t2 =");
-                    f2(&*owner_ref2, shift2, "t2")
-                }).unwrap();
+                let t2 = atomic::thread::Builder::new()
+                    .name("t2".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t2 =");
+                        f2(&*owner_ref2, shift2, "t2")
+                    })
+                    .unwrap();
 
-                let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t3 =");
-                    f3(&*owner_ref3, shift3, "t3")
-                }).unwrap();
+                let t3 = atomic::thread::Builder::new()
+                    .name("t3".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t3 =");
+                        f3(&*owner_ref3, shift3, "t3")
+                    })
+                    .unwrap();
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
                 _ = t3.join().unwrap();
@@ -2034,169 +2300,201 @@ pub mod tests {
         });
     }
     fn generic_3thread_ops_b<
-        F1:Fn(ArcShiftLight<InstanceSpy2>) -> Option<ArcShiftLight<InstanceSpy2>> + Sync+Send+'static,
-        F2:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
-        F3:Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>> + Sync+Send+'static,
-    >(f1:F1,f2:F2,f3:F3, repro: Option<&str>) {
+        F1: Fn(ArcShiftLight<InstanceSpy2>) -> Option<ArcShiftLight<InstanceSpy2>>
+            + Sync
+            + Send
+            + 'static,
+        F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+            + Sync
+            + Send
+            + 'static,
+        F3: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+            + Sync
+            + Send
+            + 'static,
+    >(
+        f1: F1,
+        f2: F2,
+        f3: F3,
+        repro: Option<&str>,
+    ) {
         let f1 = std::sync::Arc::new(f1);
         let f2 = std::sync::Arc::new(f2);
         let f3 = std::sync::Arc::new(f3);
-        model2(move|| {
-            let f1 = f1.clone();
-            let f2 = f2.clone();
-            let f3 = f3.clone();
-            let owner = std::sync::Arc::new(SpyOwner2::new());
-            {
-                let shift1 = ArcShiftLight::new(owner.create("orig"));
-                let shift2 = shift1.get();
-                let shift3 = shift1.get();
-                let owner_ref2 = owner.clone();
-                let owner_ref3 = owner.clone();
+        model2(
+            move || {
+                let f1 = f1.clone();
+                let f2 = f2.clone();
+                let f3 = f3.clone();
+                let owner = std::sync::Arc::new(SpyOwner2::new());
+                {
+                    let shift1 = ArcShiftLight::new(owner.create("orig"));
+                    let shift2 = shift1.get();
+                    let shift3 = shift1.get();
+                    let owner_ref2 = owner.clone();
+                    let owner_ref3 = owner.clone();
 
-                let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t1 =");
-                    f1(shift1)
-                }).unwrap();
+                    let t1 = atomic::thread::Builder::new()
+                        .name("t1".to_string())
+                        .stack_size(1_000_000)
+                        .spawn(move || {
+                            debug_println!(" = On thread t1 =");
+                            f1(shift1)
+                        })
+                        .unwrap();
 
-                let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t2 =");
-                    f2(&*owner_ref2, shift2, "t2")
-                }).unwrap();
+                    let t2 = atomic::thread::Builder::new()
+                        .name("t2".to_string())
+                        .stack_size(1_000_000)
+                        .spawn(move || {
+                            debug_println!(" = On thread t2 =");
+                            f2(&*owner_ref2, shift2, "t2")
+                        })
+                        .unwrap();
 
-                let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t3 =");
-                    f3(&*owner_ref3, shift3, "t3")
-                }).unwrap();
-                debug_println!("Begin joining threads");
-                _ = t1.join().unwrap();
-                _ = t2.join().unwrap();
-                _ = t3.join().unwrap();
-                debug_println!("Joined all threads");
-            }
-            owner.validate();
-        },repro);
+                    let t3 = atomic::thread::Builder::new()
+                        .name("t3".to_string())
+                        .stack_size(1_000_000)
+                        .spawn(move || {
+                            debug_println!(" = On thread t3 =");
+                            f3(&*owner_ref3, shift3, "t3")
+                        })
+                        .unwrap();
+                    debug_println!("Begin joining threads");
+                    _ = t1.join().unwrap();
+                    _ = t2.join().unwrap();
+                    _ = t3.join().unwrap();
+                    debug_println!("Joined all threads");
+                }
+                owner.validate();
+            },
+            repro,
+        );
     }
     #[test]
     fn generic_3threading_b_all() {
-        generic_3threading_b_all_impl(0,0,0, None);
+        generic_3threading_b_all_impl(0, 0, 0, None);
     }
-    fn generic_3threading_b_all_impl(skip1: usize, skip2:usize, skip3: usize, repro: Option<&str>) {
+    fn generic_3threading_b_all_impl(
+        skip1: usize,
+        skip2: usize,
+        skip3: usize,
+        repro: Option<&str>,
+    ) {
         let ops1: Vec<fn(ArcShiftLight<InstanceSpy2>) -> Option<ArcShiftLight<InstanceSpy2>>> = vec![
-            |shift|{
+            |shift| {
                 _ = shift.get();
                 Some(shift)
             },
-            |shift|{
+            |shift| {
                 _ = shift.clone();
                 Some(shift)
             },
-            |shift|{
+            |shift| {
                 _ = shift.get();
                 None
             },
-            |shift|{
-                Some(shift)
-            },
-            |_shift|{
-                None
-            },
+            |shift| Some(shift),
+            |_shift| None,
         ];
-        let ops23: Vec<fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>> = vec![
-            |owner, shift, thread|{
+        let ops23: Vec<
+            fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
+        > = vec![
+            |owner, shift, thread| {
                 shift.update_shared(owner.create(thread));
                 Some(shift)
             },
-            |owner, mut shift, thread|{
+            |owner, mut shift, thread| {
                 shift.update(owner.create(thread));
                 Some(shift)
             },
-            |_owner,mut shift, _thread|{
+            |_owner, mut shift, _thread| {
                 std::hint::black_box(shift.get());
                 Some(shift)
             },
-            |_owner,shift, _thread|{
+            |_owner, shift, _thread| {
                 std::hint::black_box(shift.shared_get());
                 Some(shift)
             },
-            |_owner,mut shift, _thread|{
+            |_owner, mut shift, _thread| {
                 shift.reload();
                 Some(shift)
             },
-            |_owner,shift, _thread|{
+            |_owner, shift, _thread| {
                 std::hint::black_box(shift.try_into_inner());
                 None
             },
-            |_owner, _shift, _thread|{
-                None
-            },
+            |_owner, _shift, _thread| None,
         ];
-        for (_n1,op1) in ops1.iter().enumerate().skip(skip1) {
-            for (_n2,op2) in ops23.iter().enumerate().skip(skip2) {
-                for (_n3,op3) in ops23.iter().enumerate().skip(skip3) {
+        for (_n1, op1) in ops1.iter().enumerate().skip(skip1) {
+            for (_n2, op2) in ops23.iter().enumerate().skip(skip2) {
+                for (_n3, op3) in ops23.iter().enumerate().skip(skip3) {
                     #[cfg(debug_assertions)]
                     {
                         println!("\n");
-                        println!(" ===================== {} {} {} ======================", _n1, _n2, _n3);
+                        println!(
+                            " ===================== {} {} {} ======================",
+                            _n1, _n2, _n3
+                        );
                         println!("\n");
                     }
                     generic_3thread_ops_b(*op1, *op2, *op3, repro)
                 }
             }
         }
-
     }
     #[test]
     fn run_generic_3threading_b_0_1_1() {
-        generic_3threading_b_all_impl(0,1,1,
-                                      None
-                                      //Some("9102c101b8a6b4b8d1d18fd56000000000000000019a1449939264492645da264d4a942c49924d89124ddaa42d59b22cd9b62dc9b26d59b624db8201db0060038061c3306c18b601c080610000000000000000000000")
+        generic_3threading_b_all_impl(
+            0, 1, 1,
+            None, //Some("9102c101b8a6b4b8d1d18fd56000000000000000019a1449939264492645da264d4a942c49924d89124ddaa42d59b22cd9b62dc9b26d59b624db8201db0060038061c3306c18b601c080610000000000000000000000")
         );
     }
     /*#[test]
-    fn replay_generic_3threading_b_0_1_1() {
-        generic_3threading_b_all_impl(0,1,1,
-                                      Some("
-910235b2dd8fa4d4e3898a8a010000000000000008d2a44d52a22cdaa46c9b942c
-")
-        );
-    }*/
+        fn replay_generic_3threading_b_0_1_1() {
+            generic_3threading_b_all_impl(0,1,1,
+                                          Some("
+    910235b2dd8fa4d4e3898a8a010000000000000008d2a44d52a22cdaa46c9b942c
+    ")
+            );
+        }*/
     #[test]
     fn generic_3threading_a_all() {
-        let ops : Vec<fn(&SpyOwner2, ArcShift<InstanceSpy2>,&'static str) -> Option<ArcShift<InstanceSpy2>>> = vec![
-            |owner, shift, thread|{
+        let ops: Vec<
+            fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
+        > = vec![
+            |owner, shift, thread| {
                 shift.update_shared(owner.create(thread));
                 Some(shift)
             },
-            |owner, mut shift, thread|{
+            |owner, mut shift, thread| {
                 shift.update(owner.create(thread));
                 Some(shift)
             },
-            |_owner,mut shift, _thread|{
+            |_owner, mut shift, _thread| {
                 std::hint::black_box(shift.get());
                 Some(shift)
             },
-            |_owner,shift, _thread|{
+            |_owner, shift, _thread| {
                 std::hint::black_box(shift.shared_get());
                 Some(shift)
             },
-            |_owner,mut shift, _thread|{
+            |_owner, mut shift, _thread| {
                 shift.reload();
                 Some(shift)
             },
-            |_owner,shift, _thread|{
+            |_owner, shift, _thread| {
                 std::hint::black_box(shift.try_into_inner());
                 None
             },
-            |_owner, _shift, _thread|{
-                None
-            },
+            |_owner, _shift, _thread| None,
         ];
-        for (n1,op1) in ops.iter().enumerate() {
-            for (n2,op2) in ops.iter().enumerate() {
-                for (n3,op3) in ops.iter().enumerate() {
+        for (n1, op1) in ops.iter().enumerate() {
+            for (n2, op2) in ops.iter().enumerate() {
+                for (n3, op3) in ops.iter().enumerate() {
                     //#[cfg(debug_assertions)]
                     {
-                        println!("========= {} {} {} ==========", n1,n2,n3);
+                        println!("========= {} {} {} ==========", n1, n2, n3);
                     }
                     generic_3thread_ops_a(*op1, *op2, *op3)
                 }
@@ -2204,20 +2502,18 @@ pub mod tests {
         }
     }
 
-
-        #[test]
+    #[test]
     fn generic_3threading1() {
-
         generic_3thread_ops_a(
-            |owner1,shift1, thread|{
+            |owner1, shift1, thread| {
                 shift1.update_shared(owner1.create(thread));
                 Some(shift1)
             },
-            |owner2, mut shift2, thread|{
+            |owner2, mut shift2, thread| {
                 shift2.update(owner2.create(thread));
                 Some(shift2)
             },
-            |owner3,shift3, thread|{
+            |owner3, shift3, thread| {
                 shift3.update_shared(owner3.create(thread));
                 Some(shift3)
             },
@@ -2230,24 +2526,36 @@ pub mod tests {
             let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
             let shift2 = std::sync::Arc::clone(&shift1);
             let mut shift3 = (*shift1).clone();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
-                debug_println!(" = drop t1 =");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    shift1.update_shared(43);
+                    debug_println!(" = drop t1 =");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t2 =");
-                let mut shift = (*shift2).clone();
-                std::hint::black_box(shift.get());
-                debug_println!(" = drop t2 =");
-            }).unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    let mut shift = (*shift2).clone();
+                    std::hint::black_box(shift.get());
+                    debug_println!(" = drop t2 =");
+                })
+                .unwrap();
 
-            let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.get());
-                debug_println!(" = drop t3 =");
-            }).unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    std::hint::black_box(shift3.get());
+                    debug_println!(" = drop t3 =");
+                })
+                .unwrap();
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
             _ = t3.join().unwrap();
@@ -2259,25 +2567,37 @@ pub mod tests {
             let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
             let shift2 = std::sync::Arc::clone(&shift1);
             let mut shift3 = (*shift1).clone();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t1 =");
-                let mut shift = (*shift1).clone();
-                std::hint::black_box(shift.get());
-                debug_println!(" = drop t1 =");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    let mut shift = (*shift1).clone();
+                    std::hint::black_box(shift.get());
+                    debug_println!(" = drop t1 =");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t2 =");
-                let mut shift = (*shift2).clone();
-                std::hint::black_box(shift.get());
-                debug_println!(" = drop t2 =");
-            }).unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    let mut shift = (*shift2).clone();
+                    std::hint::black_box(shift.get());
+                    debug_println!(" = drop t2 =");
+                })
+                .unwrap();
 
-            let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.get());
-                debug_println!(" = drop t3 =");
-            }).unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    std::hint::black_box(shift3.get());
+                    debug_println!(" = drop t3 =");
+                })
+                .unwrap();
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
             _ = t3.join().unwrap();
@@ -2289,23 +2609,35 @@ pub mod tests {
             let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
             let shift2 = std::sync::Arc::clone(&shift1);
             let shift3 = (*shift1).clone();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t1 =");
-                std::hint::black_box(shift1.update_shared(43));
-                debug_println!(" = drop t1 =");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    std::hint::black_box(shift1.update_shared(43));
+                    debug_println!(" = drop t1 =");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t2 =");
-                std::hint::black_box(shift2.update_shared(44));
-                debug_println!(" = drop t2 =");
-            }).unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    std::hint::black_box(shift2.update_shared(44));
+                    debug_println!(" = drop t2 =");
+                })
+                .unwrap();
 
-            let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.update_shared(45));
-                debug_println!(" = drop t3 =");
-            }).unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    std::hint::black_box(shift3.update_shared(45));
+                    debug_println!(" = drop t3 =");
+                })
+                .unwrap();
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
             _ = t3.join().unwrap();
@@ -2318,30 +2650,46 @@ pub mod tests {
             let shift2 = std::sync::Arc::clone(&shift1);
             let shift3 = std::sync::Arc::clone(&shift1);
             let mut shift4 = (*shift1).clone();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
-                debug_println!(" = drop t1 =");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    shift1.update_shared(43);
+                    debug_println!(" = drop t1 =");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t2 =");
-                let mut shift = (*shift2).clone();
-                std::hint::black_box(shift.get());
-                debug_println!(" = drop t2 =");
-            }).unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    let mut shift = (*shift2).clone();
+                    std::hint::black_box(shift.get());
+                    debug_println!(" = drop t2 =");
+                })
+                .unwrap();
 
-            let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t3 =");
-                shift3.update_shared(44);
-                debug_println!(" = drop t3 =");
-            }).unwrap();
-            let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t4 =");
-                let t = std::hint::black_box(*shift4.get());
-                debug_println!(" = drop t4 =");
-                t
-            }).unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    shift3.update_shared(44);
+                    debug_println!(" = drop t3 =");
+                })
+                .unwrap();
+            let t4 = atomic::thread::Builder::new()
+                .name("t4".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t4 =");
+                    let t = std::hint::black_box(*shift4.get());
+                    debug_println!(" = drop t4 =");
+                    t
+                })
+                .unwrap();
 
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
@@ -2358,42 +2706,57 @@ pub mod tests {
             let shift2 = std::sync::Arc::clone(&shift1);
             let shift3 = std::sync::Arc::clone(&shift1);
             let shift4 = (*shift1).clone();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
-                debug_println!(" = drop t1 =");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    shift1.update_shared(43);
+                    debug_println!(" = drop t1 =");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t2 =");
-                let mut shift = (*shift2).clone();
-                std::hint::black_box(shift.get());
-                debug_println!(" = drop t2 =");
-            }).unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    let mut shift = (*shift2).clone();
+                    std::hint::black_box(shift.get());
+                    debug_println!(" = drop t2 =");
+                })
+                .unwrap();
 
-            let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t3 =");
-                shift3.update_shared(44);
-                let t = std::hint::black_box((*shift3).shared_get());
-                debug_println!(" = drop t3 =");
-                return *t;
-            }).unwrap();
-            let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t4 =");
-                let t = std::hint::black_box(shift4.try_into_inner());
-                debug_println!(" = drop t4 =");
-                t
-            }).unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    shift3.update_shared(44);
+                    let t = std::hint::black_box((*shift3).shared_get());
+                    debug_println!(" = drop t3 =");
+                    return *t;
+                })
+                .unwrap();
+            let t4 = atomic::thread::Builder::new()
+                .name("t4".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t4 =");
+                    let t = std::hint::black_box(shift4.try_into_inner());
+                    debug_println!(" = drop t4 =");
+                    t
+                })
+                .unwrap();
 
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
             let ret3 = t3.join().unwrap();
-            assert!(ret3 == 44 || ret3  == 43);
+            assert!(ret3 == 44 || ret3 == 43);
             let ret = t4.join().unwrap();
             assert!(ret == None || ret == Some(43) || ret == Some(44) || ret == Some(42));
         });
     }
-
 
     #[test]
     fn simple_threading4c() {
@@ -2404,39 +2767,63 @@ pub mod tests {
                 let shift2 = std::sync::Arc::clone(&shift1);
                 let shift3 = std::sync::Arc::clone(&shift1);
                 let shift4 = std::sync::Arc::clone(&shift1);
-                let _t =      std::sync::Arc::clone(&shift1);
+                let _t = std::sync::Arc::clone(&shift1);
                 let count1 = count.clone();
                 let count2 = count.clone();
-                let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_00).spawn(move || {
-                    debug_println!(" = On thread t1 = {:?}", std::thread::current().id());
-                    shift1.update_shared(count1.create("t1val"));
-                    debug_println!(" = drop t1 =");
-                }).unwrap();
+                let t1 = atomic::thread::Builder::new()
+                    .name("t1".to_string())
+                    .stack_size(1_000_00)
+                    .spawn(move || {
+                        debug_println!(" = On thread t1 = {:?}", std::thread::current().id());
+                        shift1.update_shared(count1.create("t1val"));
+                        debug_println!(" = drop t1 =");
+                    })
+                    .unwrap();
 
-                let t2 = atomic::thread::Builder::new().name("t2a".to_string()).stack_size(1_000_00).spawn(move || {
-                    debug_println!(" = On thread t2 = {:?}", std::thread::current().id());
-                    let mut _shift = shift2; //.clone()
-                    //std::hint::black_box(shift.get());
-                    debug_println!(" = drop t2 =");
-                }).unwrap();
+                let t2 = atomic::thread::Builder::new()
+                    .name("t2a".to_string())
+                    .stack_size(1_000_00)
+                    .spawn(move || {
+                        debug_println!(" = On thread t2 = {:?}", std::thread::current().id());
+                        let mut _shift = shift2; //.clone()
 
-                let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_00).spawn(move || {
-                    debug_println!(" = On thread t3 = {:?}", std::thread::current().id());
-                    shift3.update_shared(count2.create("t3val"));
-                    //let _t = std::hint::black_box((*shift3).shared_get());
-                    let _dbgval = unsafe { &*shift3.item }.next_and_state.load(Ordering::SeqCst);
-                    verify_item(shift3.item);
-                    debug_println!("Checkt34c: {:?} next: {:?}", shift3.item, _dbgval);
-                    debug_println!(" = drop t3 =");
-                }).unwrap();
-                let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(1_000_00).spawn(move || {
-                    debug_println!(" = On thread t4 = {:?}", std::thread::current().id());
-                    let shift4 = &*shift4;
-                    verify_item(shift4.item);
-                    debug_println!("Checkt44c: {:?} next: {:?}", shift4.item, unsafe { &*shift4.item }.next_and_state.load(Ordering::SeqCst));
-                    let _t = std::hint::black_box(shift4);
-                    debug_println!(" = drop t4 =");
-                }).unwrap();
+                        debug_println!(" = drop t2 =");
+                    })
+                    .unwrap();
+
+                let t3 = atomic::thread::Builder::new()
+                    .name("t3".to_string())
+                    .stack_size(1_000_00)
+                    .spawn(move || {
+                        debug_println!(" = On thread t3 = {:?}", std::thread::current().id());
+                        shift3.update_shared(count2.create("t3val"));
+
+                        let _dbgval = unsafe { &*shift3.item }
+                            .next_and_state
+                            .load(Ordering::SeqCst);
+                        verify_item(shift3.item);
+                        debug_println!("Checkt34c: {:?} next: {:?}", shift3.item, _dbgval);
+                        debug_println!(" = drop t3 =");
+                    })
+                    .unwrap();
+                let t4 = atomic::thread::Builder::new()
+                    .name("t4".to_string())
+                    .stack_size(1_000_00)
+                    .spawn(move || {
+                        debug_println!(" = On thread t4 = {:?}", std::thread::current().id());
+                        let shift4 = &*shift4;
+                        verify_item(shift4.item);
+                        debug_println!(
+                            "Checkt44c: {:?} next: {:?}",
+                            shift4.item,
+                            unsafe { &*shift4.item }
+                                .next_and_state
+                                .load(Ordering::SeqCst)
+                        );
+                        let _t = std::hint::black_box(shift4);
+                        debug_println!(" = drop t4 =");
+                    })
+                    .unwrap();
 
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
@@ -2450,7 +2837,6 @@ pub mod tests {
     #[test]
     fn simple_threading4d() {
         model(|| {
-
             let count = std::sync::Arc::new(SpyOwner2::new());
             {
                 let count3 = count.clone();
@@ -2459,30 +2845,46 @@ pub mod tests {
                 let shift2 = shift1.get();
                 let shift3 = shift1.get();
                 let mut shift4 = shift1.get();
-                let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t1 =");
-                    black_box(shift1.get());
-                    debug_println!(" = drop t1 =");
-                }).unwrap();
+                let t1 = atomic::thread::Builder::new()
+                    .name("t1".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t1 =");
+                        black_box(shift1.get());
+                        debug_println!(" = drop t1 =");
+                    })
+                    .unwrap();
 
-                let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t2 =");
-                    let mut shift = shift2.clone();
-                    std::hint::black_box(shift.get());
-                    debug_println!(" = drop t2 =");
-                }).unwrap();
+                let t2 = atomic::thread::Builder::new()
+                    .name("t2".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t2 =");
+                        let mut shift = shift2.clone();
+                        std::hint::black_box(shift.get());
+                        debug_println!(" = drop t2 =");
+                    })
+                    .unwrap();
 
-                let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t3 =");
-                    shift3.update_shared(count3.create("t3val"));
-                    let _t = std::hint::black_box(shift3.shared_get());
-                    debug_println!(" = drop t3 =");
-                }).unwrap();
-                let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(1_000_000).spawn(move || {
-                    debug_println!(" = On thread t4 =");
-                    let _t = std::hint::black_box(shift4.try_get_mut());
-                    debug_println!(" = drop t4 =");
-                }).unwrap();
+                let t3 = atomic::thread::Builder::new()
+                    .name("t3".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t3 =");
+                        shift3.update_shared(count3.create("t3val"));
+                        let _t = std::hint::black_box(shift3.shared_get());
+                        debug_println!(" = drop t3 =");
+                    })
+                    .unwrap();
+                let t4 = atomic::thread::Builder::new()
+                    .name("t4".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t4 =");
+                        let _t = std::hint::black_box(shift4.try_get_mut());
+                        debug_println!(" = drop t4 =");
+                    })
+                    .unwrap();
 
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
@@ -2494,7 +2896,6 @@ pub mod tests {
 
             count.validate();
             drop(count);
-
         });
     }
     #[test]
@@ -2505,28 +2906,44 @@ pub mod tests {
             let shift2 = shift.get();
             let shift3 = shift.get();
             let shift4 = shift.get();
-            let t1 = atomic::thread::Builder::new().name("t1".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
-                debug_println!(" = drop t1 =");
-            }).unwrap();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t1 =");
+                    shift1.update_shared(43);
+                    debug_println!(" = drop t1 =");
+                })
+                .unwrap();
 
-            let t2 = atomic::thread::Builder::new().name("t2".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t2 =");
-                shift2.update_shared(44);
-                debug_println!(" = drop t2 =");
-            }).unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t2 =");
+                    shift2.update_shared(44);
+                    debug_println!(" = drop t2 =");
+                })
+                .unwrap();
 
-            let t3 = atomic::thread::Builder::new().name("t3".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t3 =");
-                shift3.update_shared(45);
-                debug_println!(" = drop t3 =");
-            }).unwrap();
-            let t4 = atomic::thread::Builder::new().name("t4".to_string()).stack_size(1_000_000).spawn(move || {
-                debug_println!(" = On thread t4 =");
-                shift4.update_shared(46);
-                debug_println!(" = drop t4 =");
-            }).unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t3 =");
+                    shift3.update_shared(45);
+                    debug_println!(" = drop t3 =");
+                })
+                .unwrap();
+            let t4 = atomic::thread::Builder::new()
+                .name("t4".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    debug_println!(" = On thread t4 =");
+                    shift4.update_shared(46);
+                    debug_println!(" = drop t4 =");
+                })
+                .unwrap();
 
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
@@ -2534,17 +2951,22 @@ pub mod tests {
             _ = t4.join().unwrap();
         });
     }
-    enum PipeItem<T:'static> {
+    enum PipeItem<T: 'static> {
         Shift(ArcShift<T>),
         Root(ArcShiftLight<T>),
     }
 
     #[cfg(not(miri))]
-    fn run_multi_fuzz<T:Clone+Hash+Eq+'static+Debug+Send+Sync>(rng: &mut StdRng,mut constructor: impl FnMut()->T) {
+    fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
+        rng: &mut StdRng,
+        mut constructor: impl FnMut() -> T,
+    ) {
         let cmds = make_commands::<T>(rng, &mut constructor);
-        let mut all_possible : HashSet<T> = HashSet::new();
+        let mut all_possible: HashSet<T> = HashSet::new();
         for cmd in cmds.iter() {
-            if let FuzzerCommand::CreateUpdateArc(_, val) | FuzzerCommand::CreateArcRoot(_, val) = cmd {
+            if let FuzzerCommand::CreateUpdateArc(_, val) | FuzzerCommand::CreateArcRoot(_, val) =
+                cmd
+            {
                 all_possible.insert(val.clone());
             }
         }
@@ -2552,7 +2974,7 @@ pub mod tests {
         let mut senders = vec![];
         let mut receivers = vec![];
         for _ in 0..3 {
-            let (sender,receiver) = bounded::<PipeItem<T>>(cmds.len());
+            let (sender, receiver) = bounded::<PipeItem<T>>(cmds.len());
             senders.push(sender);
             receivers.push(receiver);
             batches.push(Vec::new());
@@ -2564,10 +2986,11 @@ pub mod tests {
         let mut jhs = Vec::new();
 
         let senders = std::sync::Arc::new(senders);
-        let all_possible : std::sync::Arc<HashSet<T>>= std::sync::Arc::new(all_possible);
+        let all_possible: std::sync::Arc<HashSet<T>> = std::sync::Arc::new(all_possible);
         for (threadnr, (cmds, receiver)) in batches.into_iter().zip(receivers).enumerate() {
             let thread_senders = std::sync::Arc::clone(&senders);
-            let thread_all_possible:std::sync::Arc<HashSet<T>> = std::sync::Arc::clone(&all_possible);
+            let thread_all_possible: std::sync::Arc<HashSet<T>> =
+                std::sync::Arc::clone(&all_possible);
             let jh = atomic::thread::Builder::new().name(format!("thread{}", threadnr)).spawn(move||{
 
                 let mut curval : Option<ArcShift<T>> = None;
@@ -2640,23 +3063,20 @@ pub mod tests {
                 }
             }).unwrap();
             jhs.push(jh);
-
         }
         for jh in jhs {
             jh.join().unwrap();
         }
-
     }
-
 
     #[derive(Debug)]
     enum FuzzerCommand<T> {
         CreateUpdateArc(u8, T),
         CreateArcRoot(u8, T),
-        ReadArc{arc: u8},
-        SharedReadArc{arc: u8},
-        CloneArc{from:u8,to:u8},
-        CloneArcRoot{from:u8,to:u8},
+        ReadArc { arc: u8 },
+        SharedReadArc { arc: u8 },
+        CloneArc { from: u8, to: u8 },
+        CloneArcRoot { from: u8, to: u8 },
         DropArc(u8),
         PromoteRoot(u8),
         DemoteArc(u8),
@@ -2664,24 +3084,24 @@ pub mod tests {
     impl<T> FuzzerCommand<T> {
         fn batch(&self) -> u8 {
             match self {
-                FuzzerCommand::CreateUpdateArc(chn, _) => {*chn}
-                FuzzerCommand::ReadArc { arc} => {*arc}
-                FuzzerCommand::SharedReadArc { arc } => {*arc}
-                FuzzerCommand::CloneArc { from, .. } => {*from}
-                FuzzerCommand::DropArc(chn) => {*chn}
-                FuzzerCommand::CreateArcRoot(chn, _) => {*chn}
-                FuzzerCommand::CloneArcRoot { from, .. } => {*from}
-                FuzzerCommand::PromoteRoot(chn) => {*chn}
-                FuzzerCommand::DemoteArc(chn) => {*chn}
+                FuzzerCommand::CreateUpdateArc(chn, _) => *chn,
+                FuzzerCommand::ReadArc { arc } => *arc,
+                FuzzerCommand::SharedReadArc { arc } => *arc,
+                FuzzerCommand::CloneArc { from, .. } => *from,
+                FuzzerCommand::DropArc(chn) => *chn,
+                FuzzerCommand::CreateArcRoot(chn, _) => *chn,
+                FuzzerCommand::CloneArcRoot { from, .. } => *from,
+                FuzzerCommand::PromoteRoot(chn) => *chn,
+                FuzzerCommand::DemoteArc(chn) => *chn,
             }
         }
     }
 
     #[test]
-    #[cfg(not(any(loom,miri,feature="shuttle")))] //Neither loom nor shuttle allows this many iterations
-    #[should_panic(expected="Max limit of ArcShiftLight clones (524288) was reached")]
+    #[cfg(not(any(loom, miri, feature = "shuttle")))] //Neither loom nor shuttle allows this many iterations
+    #[should_panic(expected = "Max limit of ArcShiftLight clones (524288) was reached")]
     fn check_too_many_roots() {
-        model(||{
+        model(|| {
             let mut temp = vec![];
             let light = ArcShiftLight::new(1u8);
             for _ in 0..MAX_ROOTS {
@@ -2692,14 +3112,16 @@ pub mod tests {
     }
     #[test]
     #[cfg(not(miri))] // We shouldn't run miri on this, since this test uses unsafe code to leak memory.
-    #[should_panic(expected="Max limit of ArcShiftLight clones (524288) was reached")]
+    #[should_panic(expected = "Max limit of ArcShiftLight clones (524288) was reached")]
     fn check_too_many_roots2() {
-        model(||{
+        model(|| {
             let mut temp = vec![];
             let light = ArcShiftLight::new(1u8);
             // When running under 'shuttle', we can't do too many steps, so we can't
             // exhaust all MAX_ROOTS-items naturally, we have to cheat like this.
-            unsafe{&*light.item}.refcount.fetch_add(MAX_ROOTS-2, Ordering::SeqCst);
+            unsafe { &*light.item }
+                .refcount
+                .fetch_add(MAX_ROOTS - 2, Ordering::SeqCst);
             for _ in 0..10 {
                 temp.push(light.clone());
                 atomic::spin_loop();
@@ -2707,10 +3129,13 @@ pub mod tests {
         });
     }
 
-    fn run_fuzz<T:Clone+Hash+Eq+'static+Debug+Send+Sync>(rng: &mut StdRng, mut constructor: impl FnMut()->T) {
+    fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
+        rng: &mut StdRng,
+        mut constructor: impl FnMut() -> T,
+    ) {
         let cmds = make_commands::<T>(rng, &mut constructor);
-        let mut arcs: [Option<ArcShift<T>>; 3] = [();3].map(|_|None);
-        let mut arcroots: [Option<ArcShiftLight<T>>; 3] = [();3].map(|_|None);
+        let mut arcs: [Option<ArcShift<T>>; 3] = [(); 3].map(|_| None);
+        let mut arcroots: [Option<ArcShiftLight<T>>; 3] = [(); 3].map(|_| None);
         debug_println!("Starting fuzzrun");
         for cmd in cmds {
             debug_println!("\n=== Applying cmd: {:?} ===", cmd);
@@ -2761,16 +3186,16 @@ pub mod tests {
                     }
                 }
             }
-
         }
         debug_println!("=== No more commands ===");
-
     }
 
-    fn make_commands<T:Clone+Eq+Hash+Debug>(rng: &mut StdRng, constructor: &mut impl FnMut()->T) -> Vec<FuzzerCommand<T>> {
-
+    fn make_commands<T: Clone + Eq + Hash + Debug>(
+        rng: &mut StdRng,
+        constructor: &mut impl FnMut() -> T,
+    ) -> Vec<FuzzerCommand<T>> {
         let mut ret = Vec::new();
-        for _x in 0..20  {
+        for _x in 0..20 {
             match rng.gen_range(0..10) {
                 0 => {
                     let chn = rng.gen_range(0..3);
@@ -2779,16 +3204,17 @@ pub mod tests {
                 }
                 1 => {
                     let chn = rng.gen_range(0..3);
-                    ret.push(FuzzerCommand::ReadArc{arc:chn});
+                    ret.push(FuzzerCommand::ReadArc { arc: chn });
                 }
-                2 => { //Clone
+                2 => {
+                    //Clone
                     let from = rng.gen_range(0..3);
                     let mut to = rng.gen_range(0..3);
                     if from == to {
                         to = (from + 1) % 3;
                     }
 
-                    ret.push(FuzzerCommand::CloneArc{from, to});
+                    ret.push(FuzzerCommand::CloneArc { from, to });
                 }
                 3 => {
                     let chn = rng.gen_range(0..3);
@@ -2810,7 +3236,7 @@ pub mod tests {
                         to = (from + 1) % 3;
                     }
 
-                    ret.push(FuzzerCommand::CloneArcRoot{from, to});
+                    ret.push(FuzzerCommand::CloneArcRoot { from, to });
                 }
                 7 => {
                     let chn = rng.gen_range(0..3);
@@ -2822,9 +3248,9 @@ pub mod tests {
                 }
                 9 => {
                     let chn = rng.gen_range(0..3);
-                    ret.push(FuzzerCommand::SharedReadArc{arc:chn});
+                    ret.push(FuzzerCommand::SharedReadArc { arc: chn });
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
         ret
@@ -2833,13 +3259,12 @@ pub mod tests {
     #[test]
     #[cfg(not(miri))]
     fn generic_thread_fuzzing_all() {
-        #[cfg(any(loom, feature="shuttle"))]
+        #[cfg(any(loom, feature = "shuttle"))]
         const COUNT: u64 = 10000;
-        #[cfg(not(any(loom,miri,feature="shuttle")))]
+        #[cfg(not(any(loom, miri, feature = "shuttle")))]
         const COUNT: u64 = 100000;
         for i in 0..COUNT {
-            model(move||{
-
+            model(move || {
                 let mut rng = StdRng::seed_from_u64(i);
                 let mut counter = 0u32;
                 debug_println!("--- Seed {} ---", i);
@@ -2851,14 +3276,14 @@ pub mod tests {
         }
     }
     #[test]
-    #[cfg(all(not(loom), not(feature="shuttle")))] //No point in running loom on this test, it's not multi-threaded
+    #[cfg(all(not(loom), not(feature = "shuttle")))] //No point in running loom on this test, it's not multi-threaded
     fn generic_fuzzing_all() {
         #[cfg(miri)]
         const COUNT: u64 = 100;
         #[cfg(not(any(miri)))]
         const COUNT: u64 = 5000000;
         for i in 0..COUNT {
-            model(move||{
+            model(move || {
                 let mut rng = StdRng::seed_from_u64(i);
                 let mut counter = 0u32;
                 debug_println!("Running seed {}", i);
@@ -2867,12 +3292,12 @@ pub mod tests {
                     counter
                 });
             });
-        };
+        }
     }
     #[test]
     fn generic_fuzzing_159() {
         let seed = 159;
-        model(move||{
+        model(move || {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut counter = 0u32;
             debug_println!("Running seed {}", seed);
@@ -2885,7 +3310,7 @@ pub mod tests {
     #[test]
     fn generic_fuzzing_53014() {
         let seed = 53014;
-        model(move||{
+        model(move || {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut counter = 0u32;
             debug_println!("Running seed {}", seed);
@@ -2898,7 +3323,7 @@ pub mod tests {
     #[test]
     fn generic_fuzzing_3817879() {
         let seed = 3817879;
-        model(move||{
+        model(move || {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut counter = 0u32;
             debug_println!("Running seed {}", seed);
