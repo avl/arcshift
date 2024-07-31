@@ -661,6 +661,18 @@ impl<T: 'static> ItemHolder<T> {
                 panic!();
                 //abort();
             }
+            #[cfg(not(any(loom, feature = "shuttle")))]
+            {
+                let m1 = magic1 & 0xffff;
+                let m2 = magic2 & 0xffff;
+                if m1 != 0x8111 || m2 != 0x8111 {
+                    eprintln!(
+                        "Internal error - bad magic in {:?} {:x} {:x}",
+                        self as *const ItemHolder<T>, m1, m2
+                    );
+                }
+            }
+
             #[cfg(any(loom, feature = "shuttle"))]
             {
                 let diff = (magic1 & 0xffff) as isize - (magic2 & 0xffff) as isize;
