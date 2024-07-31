@@ -619,7 +619,7 @@ struct ItemHolder<T: 'static> {
     magic2: std::sync::atomic::AtomicU64,
 }
 
-#[cfg(feature = "validate")]
+#[cfg(all(any(loom, feature = "shuttle"), feature = "validate"))]
 static MAGIC: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
 impl<T: 'static> ItemHolder<T> {
@@ -661,9 +661,9 @@ impl<T: 'static> ItemHolder<T> {
                 panic!();
                 //abort();
             }
-            let diff = (magic1 & 0xffff) as isize - (magic2 & 0xffff) as isize;
             #[cfg(any(loom, feature = "shuttle"))]
             {
+                let diff = (magic1 & 0xffff) as isize - (magic2 & 0xffff) as isize;
                 if diff != 0 {
                     eprintln!(
                         "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
@@ -680,33 +680,15 @@ impl<T: 'static> ItemHolder<T> {
                     //println!("Backtrace: {}", Backtrace::capture());
                     abort();
                 }
+                let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
+                let magic = magic as i64 as u64;
+                self.magic1
+                    .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
+                self.magic2
+                    .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
+                self.magic1.fetch_or(magic, Ordering::SeqCst);
+                self.magic2.fetch_or(magic, Ordering::SeqCst);
             }
-            #[cfg(not(any(loom, feature = "shuttle")))]
-            {
-                if diff.abs() > 5 {
-                    eprintln!(
-                        "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
-                        self as *const ItemHolder<T>, magic1, magic1, magic2, magic2
-                    );
-                    debug_println!(
-                        "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
-                        self as *const ItemHolder<T>,
-                        magic1,
-                        magic1,
-                        magic2,
-                        magic2
-                    );
-                    abort();
-                }
-            }
-            let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
-            let magic = magic as i64 as u64;
-            self.magic1
-                .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-            self.magic2
-                .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-            self.magic1.fetch_or(magic, Ordering::SeqCst);
-            self.magic2.fetch_or(magic, Ordering::SeqCst);
         }
     }
 }

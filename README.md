@@ -1,3 +1,5 @@
+![build](https://github.com/avl/arcshift/actions/workflows/rust.yml/badge.svg)
+
 # Arcshift
 
 Arcshift is smart pointer type similar to Arc, with the distinction that it allows updating
