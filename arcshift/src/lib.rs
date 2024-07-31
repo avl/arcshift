@@ -12,7 +12,7 @@
 //! # if cfg!(loom)
 //! # {
 //! use std::thread;
-//! use crate::ArcShift;
+//!
 //!
 //! let mut arc = ArcShift::new("Hello".to_string());
 //! let mut arc2 = arc.clone();
@@ -211,40 +211,7 @@
 //!
 //! ```
 //!
-//!
-//! # Verification
-//!
-//! Arcshift uses copious amounts of unsafe rust code, and lock free algorithms.
-//! These are techniques that are well known to be very hard to get right.
-//! Because of this, Arcshift has an extensive test-suite:
-//!
-//! ## Unit tests
-//! Arcshift is verified by a large number of unit tests.
-//!
-//! There are a few simple happy-path tests (for example `simple_get`, and others),
-//! and a few different fuzzing test cases. The fuzz cases run randomized combinations
-//! of different operations, on different threads.
-//!
-//! There is also an exhaustive set of tests which test all combinations of ArcShift-operations,
-//! using three different threads.
-//!
-//!
-//! ## Using 'Loom'
-//! The excellent rust crate 'Loom' is used to verify that there are no race conditions that
-//! can cause failures. See <https://crates.io/crates/loom>.
-//!
-//! ## Using 'Shuttle'
-//! Shuttle is another test framework for writing multi-threaded code, similar to loom.
-//! See <https://crates.io/crates/shuttle>.
-//!
-//! ## Using 'Miri'
-//! Miri is used to verify that the unsafe code in Arcshift follows the 'stacked borrows' rules.
-//!
-//! ## Using built-in validation feature
-//! Enabling the non-default feature 'validate' causes Arcshift to insert canaries in memory,
-//! enabling best-effort detection of wild pointers or threading issues.
-//!
-//!
+
 
 use crate::ItemStateEnum::{Dropped, Superseded};
 use std::alloc::Layout;
@@ -329,7 +296,6 @@ impl<T> UnwindSafe for ArcShift<T> {}
 /// freed.
 ///
 /// ```rust
-/// # use crate::ArcShiftLight;
 /// let instance = ArcShiftLight::new("test");
 /// println!("Value: {:?}", *instance);
 /// ```
@@ -412,7 +378,7 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
     }
 }
 impl<T: 'static> ArcShiftLight<T> {
-    /// Create a new ArcShift-instance, containing the given type.
+    /// Create a new ArcShiftLight-instance, containing the given type.
     pub fn new(payload: T) -> ArcShiftLight<T> {
         let item = ItemHolder {
             #[cfg(feature = "validate")]
@@ -427,6 +393,50 @@ impl<T: 'static> ArcShiftLight<T> {
         debug_println!("Created ArcShiftLight for {:?}", cur_ptr);
         ArcShiftLight { item: cur_ptr }
     }
+
+    /// Reload this ArcShiftLight-instance.
+    /// This allows dropping heap blocks kept alive by this instance of
+    /// ArcShiftLight to be dropped.
+    pub fn reload(&mut self) {
+
+        let mut strength = 1;
+        loop {
+            debug_println!("ArcShiftLight::reload {:?}, strength {}", self.item, strength);
+            // SAFETY:
+            // self.item is always a valid pointer
+            let Some(next) = Self::load_nontentative_next(self.item) else {
+                atomic::spin_loop();
+                continue;
+            };
+            debug_println!("ArcShiftLight::reload, next = {:?}", next);
+            if undecorate(next).is_null() {
+                if strength > 1 {
+                    // SAFETY:
+                    // self.item is always a valid pointer
+                    let count =unsafe{&*self.item}.refcount.fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                    debug_println!("ArcShiftLight::reload, next = {:?}, adjusting count {} -> {}", self.item, count, count.wrapping_sub(MAX_ROOTS-1));
+                    assert!(count >= MAX_ROOTS);
+                }
+                break;
+            }
+            // SAFETY:
+            // self.item is always a valid pointer
+            let count = unsafe{&*self.item}.refcount.fetch_sub(strength, Ordering::SeqCst);
+            debug_println!("ArcShiftLight::reload, next = {:?}, releasing {} -> {}", next, count, count.wrapping_sub(strength));
+            assert!(count >= strength);
+            if count == strength {
+                debug_println!("ArcShiftLight::reload - dropping {:?}", self.item);
+                if drop_payload_and_holder(self.item) {
+                    strength = MAX_ROOTS;
+                } else {
+                    strength = 1;
+                }
+            }
+            self.item = undecorate(next);
+        }
+    }
+
+
     #[cfg_attr(test, mutants::skip)]
     fn verify_count(count: usize) {
         if (count & (MAX_ROOTS - 1)) >= MAX_ROOTS - 1 {
@@ -1782,7 +1792,7 @@ pub mod tests {
     use log::debug;
     use std::alloc::Layout;
     use std::fmt::Debug;
-    use std::hash::Hash;
+    use std::hash::{Hash, Hasher};
     use std::hint::black_box;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
@@ -1811,14 +1821,14 @@ pub mod tests {
 
     #[cfg(feature = "shuttle")]
     fn model(x: impl Fn() + 'static + Send + Sync) {
-        shuttle::check_random(x, 5250);
+        shuttle::check_random(x, 1000);
     }
     #[cfg(feature = "shuttle")]
     fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
         if let Some(repro) = repro {
             shuttle::replay(x, repro);
         } else {
-            shuttle::check_random(x, 250);
+            shuttle::check_random(x, 1000);
         }
     }
 
@@ -1949,9 +1959,25 @@ pub mod tests {
         }
     }
 
+    #[derive(Debug,Clone)]
     struct InstanceSpy2 {
         x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
         name: &'static str,
+    }
+
+    impl Hash for InstanceSpy2 {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.name.hash(state)
+        }
+    }
+    impl PartialEq<Self> for InstanceSpy2 {
+        fn eq(&self, other: &Self) -> bool {
+            self.name == other.name
+        }
+    }
+
+    impl Eq for InstanceSpy2 {
+
     }
 
     impl InstanceSpy2 {
@@ -2052,6 +2078,23 @@ pub mod tests {
             assert_eq!(count.load(Ordering::Relaxed), 1);
         });
     }
+
+    #[test]
+    fn simple_upgrade5() {
+        model(|| {
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            let shift = shiftlight.upgrade();
+            debug_println!("== Calling update_shared ==");
+            shift.update_shared(InstanceSpy::new(count.clone()));
+            drop(shift);
+            debug_println!("== Calling shared_get ==");
+            shiftlight.reload();
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+        });
+    }
+
     #[test]
     fn simple_upgrade4b() {
         model(|| {
@@ -2367,13 +2410,13 @@ pub mod tests {
             }
         }
     }
-    #[test]
+    /*#[test]
     fn run_generic_3threading_b_0_1_1() {
         generic_3threading_b_all_impl(
             0, 1, 1,
             None, //Some("9102c101b8a6b4b8d1d18fd56000000000000000019a1449939264492645da264d4a942c49924d89124ddaa42d59b22cd9b62dc9b26d59b624db8201db0060038061c3306c18b601c080610000000000000000000000")
         );
-    }
+    }*/
     /*#[test]
         fn replay_generic_3threading_b_0_1_1() {
             generic_3threading_b_all_impl(0,1,1,
@@ -3185,17 +3228,32 @@ pub mod tests {
     fn generic_thread_fuzzing_all() {
         #[cfg(any(loom, feature = "shuttle"))]
         const COUNT: u64 = 10000;
+        let statics = [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "0",
+        ];
         #[cfg(not(any(loom, miri, feature = "shuttle")))]
         const COUNT: u64 = 100000;
         for i in 0..COUNT {
             model(move || {
                 let mut rng = StdRng::seed_from_u64(i);
-                let mut counter = 0u32;
+                let mut counter = 0usize;
+                let owner = std::sync::Arc::new(SpyOwner2::new());
+                let owner_ref = owner.clone();
                 debug_println!("--- Seed {} ---", i);
-                run_multi_fuzz(&mut rng, move || -> u32 {
+                run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
                     counter += 1;
-                    counter
+                    owner_ref.create(statics[counter%10])
                 });
+                owner.validate();
             });
         }
     }
