@@ -4,7 +4,7 @@
 
 //! # Introduction to ArcShift
 //!
-//! ArcShift is a data type similar to Arc, except that it allows updating
+//! [`ArcShift`] is a data type similar to [`std::sync::Arc`], except that it allows updating
 //! the value pointed to.
 //!
 //! ## Example
@@ -12,20 +12,20 @@
 //! # if cfg!(loom)
 //! # {
 //! use std::thread;
-//! use arcshift::ArcShift;
+//! use crate::ArcShift;
 //!
 //! let mut arc = ArcShift::new("Hello".to_string());
 //! let mut arc2 = arc.clone();
 //!
 //!
 //! let j1 = thread::spawn(move||{
-//!     println!("Value in thread 1: '{}'", *arc2); //Prints 'Hello'
-//!     arc2.update("New value".to_string());
-//!     println!("Updated value in thread 1: '{}'", *arc2); //Prints 'New value'
+//!     println!("Value in thread 1: '{}'", *arc); //Prints 'Hello'
+//!     arc.update("New value".to_string());
+//!     println!("Updated value in thread 1: '{}'", *arc); //Prints 'New value'
 //! });
 //!
 //! let j2 = thread::spawn(move||{
-//!     println!("Value in thread 2: '{}'", *arc); //Prints either 'Hello' or 'New value', depending on scheduling
+//!     println!("Value in thread 2: '{}'", *arc2); //Prints either 'Hello' or 'New value', depending on scheduling
 //! });
 //!
 //! j1.join().unwrap();
@@ -34,7 +34,7 @@
 //! ```
 //! # Motivation
 //!
-//! The primary raison d'être for ArcShift is to be a version of Arc which allows
+//! The primary raison d'être for [`ArcShift`] is to be a version of Arc which allows
 //! modifying the stored value, with very little overhead over regular Arc, as long as
 //! updates are very infrequent.
 //!
@@ -44,7 +44,8 @@
 //! The motivating use-case for ArcShift is reloadable assets in computer games.
 //! During normal usage, assets do not change. All benchmarks and play experience will
 //! be dependent only on this baseline performance. Ideally, we therefore want to have
-//! a very small performance penalty for the case when assets are *not* updated.
+//! a very small performance penalty for the case when assets are *not* updated. However,
+//! ArcShift can, of course, be useful in other domains as well.
 //!
 //! During game development, artists may update assets, and hot-reload is a very
 //! time-saving feature. However, a performance hit during asset-reload is acceptable.
@@ -62,10 +63,10 @@
 //!
 //! # Strong points
 //! * Easy to use (similar to Arc)
-//! * All functions are Lock free
+//! * All functions are lock free (see <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
 //! * For use cases where no modification of values occurs, performance is very good.
-//! * Modifying values is reasonably fast (think, 10-50 nanoseconds + cost of memory access).
-//! * The function 'shared_non_reloading_get' allows access almost without any overhead at all.
+//! * Modifying values is reasonably fast (think, 10-50 nanoseconds).
+//! * The function [`ArcShift::shared_non_reloading_get`] allows access almost without any overhead at all.
 //!   (Only overhead is ever so slightly worse cache performance, because of the reference
 //!   counters.)
 //! * ArcShift does not rely on any threadlocal variables to achieve its performance.
@@ -76,17 +77,19 @@
 //! * When modifying the value, the old version of the value lingers in memory until
 //!   the last ArcShift has been updated. Such an update only happens when the ArcShift
 //!   is accessed using an owned (or &mut) access (like 'get' or 'force_reload'). This can
-//!   be avoided by using the ArcShiftLight-type for long-lived never-reloaded instances.
+//!   be avoided by using the [`ArcShiftLight`]-type for long-lived never-reloaded instances.
 //! * Modifying the value is approximately 10x more expensive than modifying `Arc<RwLock<T>>`
 //! * When the value is modified, the next subsequent access is slower than an `Arc<RwLock<T>>`
+//!   access
 //! * ArcShift is its own datatype. It is no way compatible with `Arc<T>`.
 //! * At most 524287 instances of ArcShiftLight can be created for each value.
 //! * At most 35000000000000 instances of ArcShift can be created for each value.
 //! * ArcShift instances should ideally be owned (or be mutably accessible) to dereference.
+//! * ArcShift does not support an analog to [`std::sync::Arc`]'s [`std::sync::Weak`].
 //!
 //! The last limitation might seem unacceptable, but for many applications it is not
-//! hard to make sure each thread/scope has its own instance of ArcShift. Remember that
-//! cloning ArcShift is reasonably fast.
+//! hard to make sure each thread/scope has its own instance of ArcShift pointing to
+//! the resource. Remember that cloning ArcShift instances is reasonably fast.
 //!
 //! # Implementation
 //!
@@ -105,7 +108,7 @@
 //!
 //! ArcShiftLight-instances also keep pointers to the heap blocks mentioned above, but value T
 //! in the block can be dropped while being held by an ArcShiftLight. This means that ArcShiftLight-
-//! instances always consume std::mem::size_of::<T>() bytes of memory, even when the value they
+//! instances always consume `std::mem::size_of::<T>()` bytes of memory, even when the value they
 //! point to has been dropped.
 //!
 //!
@@ -114,7 +117,7 @@
 //! Be aware that ArcShift instances that are just "lying around" without ever being reloaded,
 //! will keep old values around, taking up memory. This is a fundamental drawback of the approach
 //! taken by ArcShift. One workaround is to replace long-lived non-reloaded instances of
-//! ArcShift with ArcShiftLight. This alleviates the problem.
+//! [`ArcShift`] with [`ArcShiftLight`]. This alleviates the problem.
 //!
 //! You may also prefer to use the 'ArcSwap' crate (by a different author).
 //! It does not have this limitation, as long as its 'Cache' type is not used.
@@ -132,9 +135,9 @@
 //! to even be able to hit this limit. If the limit is somehow reached, there will be a best effort
 //! attempt at aborting the program. This is similar to how the rust std library handles overflow
 //! of the reference counter on std::sync::Arc. Just as with std::core::Arc, the overflow
-//! will be detected in practice. For ArcShift, the overflow will be detected as long as the machine
-//! has an even remotely fair scheduler, and less than 100 billion threads (though the conditions
-//! for detection of std::core::Arc-overflow are even more assured).
+//! will be detected in practice, though there is no guarantee. For ArcShift, the overflow will be
+//! detected as long as the machine has an even remotely fair scheduler, and less than 100 billion
+//! threads (though the conditions for detection of std::core::Arc-overflow are even more assured).
 //!
 //! # Comparison to ArcSwap
 //! ArcSwap ('arc_swap') is a different crate (by a different author).
@@ -142,15 +145,15 @@
 //! in many use cases. ArcSwap does not rely on having mutable access to its instances.
 //! If updates do occur, and mutable accesses to ArcShift cannot be provided, ArcSwap is likely
 //! going to be much faster because of its ingenious use of thread_locals (and other tricks).
-//! Only in the case where data is modified extremely rarely (allowing the use of
-//! 'shared_get') or where mutable ArcShift instances can be used (allowing the very fast
-//! non-shared &mut self 'get' function), will ArcShift be faster than ArcSwap.
+//! Only in the case where data is modified extremely rarely (and using
+//! `ArcShift::shared_get`) or where mutable ArcShift instances can be used (allowing the very fast
+//! non-shared &mut self `ArcShift::get` function), will ArcShift be faster than ArcSwap.
 //!
 //!
 //! # A larger example
 //!
 //! ```rust
-//! use arcshift::ArcShift;
+//! use ArcShift::ArcShift;
 //!
 //! struct CharacterModel {
 //!     /* 3D model, textures, etc*/
@@ -203,13 +206,50 @@
 //!         // Do stuff with 'model_ref'
 //!     }
 //! }
+//!
+//!
+//!
 //! ```
+//!
+//!
+//! # Verification
+//!
+//! Arcshift uses copious amounts of unsafe rust code, and lock free algorithms.
+//! These are techniques that are well known to be very hard to get right.
+//! Because of this, Arcshift has an extensive test-suite:
+//!
+//! ## Unit tests
+//! Arcshift is verified by a large number of unit tests.
+//!
+//! There are a few simple happy-path tests (for example `simple_get`, and others),
+//! and a few different fuzzing test cases. The fuzz cases run randomized combinations
+//! of different operations, on different threads.
+//!
+//! There is also an exhaustive set of tests which test all combinations of ArcShift-operations,
+//! using three different threads.
+//!
+//!
+//! ## Using 'Loom'
+//! The excellent rust crate 'Loom' is used to verify that there are no race conditions that
+//! can cause failures. See <https://crates.io/crates/loom>.
+//!
+//! ## Using 'Shuttle'
+//! Shuttle is another test framework for writing multi-threaded code, similar to loom.
+//! See <https://crates.io/crates/shuttle>.
+//!
+//! ## Using 'Miri'
+//! Miri is used to verify that the unsafe code in Arcshift follows the 'stacked borrows' rules.
+//!
+//! ## Using built-in validation feature
+//! Enabling the non-default feature 'validate' causes Arcshift to insert canaries in memory,
+//! enabling best-effort detection of wild pointers or threading issues.
+//!
+//!
 
 use crate::ItemStateEnum::{Dropped, Superseded};
 use std::alloc::Layout;
 #[allow(unused)]
 use std::backtrace::Backtrace;
-pub use std::collections::HashSet;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
@@ -271,7 +311,13 @@ macro_rules! debug_println {
 
 /// Smart pointer with similar use case as std::sync::Arc, but with
 /// the added ability to atomically replace the contents of the Arc.
-/// See crate documentation for more information.
+/// See `crate` documentation for more information.
+///
+/// ```rust
+/// # use crate::ArcShift;
+/// let instance = ArcShift::new("test");
+/// println!("Value: {:?}", *instance);
+/// ```
 pub struct ArcShift<T: 'static> {
     item: *const ItemHolder<T>,
 }
@@ -279,13 +325,19 @@ pub struct ArcShift<T: 'static> {
 impl<T> UnwindSafe for ArcShift<T> {}
 
 /// ArcShiftLight is like ArcShift, except it does not provide overhead-free access.
-/// However, it has the advantage of of not preventing old versions of the payload type from being
+/// However, it has the advantage of not preventing old versions of the payload type from being
 /// freed.
 ///
+/// ```rust
+/// # use crate::ArcShiftLight;
+/// let instance = ArcShiftLight::new("test");
+/// println!("Value: {:?}", *instance);
+/// ```
+///
 /// WARNING! Because of implementation reasons, each instance of ArcShiftLight will claim
-/// a little bit more memory than size_of::<T>, even if the value inside it has been moved out,
+/// a memory equal to `size_of::<T>` (plus a bit), even if the value inside it has been moved out,
 /// and even if all other instances of ArcShift/ArcShiftLight have been dropped.
-/// If this limitation is unacceptable, consider using ArcShiftLight<Box<T>> as your datatype,
+/// If this limitation is unacceptable, consider using `ArcShiftLight<Box<T>>` as your datatype,
 /// or possibly using a different crate.
 pub struct ArcShiftLight<T: 'static> {
     item: *const ItemHolder<T>,
@@ -360,7 +412,7 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
     }
 }
 impl<T: 'static> ArcShiftLight<T> {
-    /// Create a new ArcShift, containing the given type.
+    /// Create a new ArcShift-instance, containing the given type.
     pub fn new(payload: T) -> ArcShiftLight<T> {
         let item = ItemHolder {
             #[cfg(feature = "validate")]
@@ -432,7 +484,7 @@ impl<T: 'static> ArcShiftLight<T> {
     }
 
     /// Create an ArcShift instance from this ArcShiftLight.
-    pub fn get(&self) -> ArcShift<T> {
+    pub fn upgrade(&self) -> ArcShift<T> {
         debug_println!("ArcShiftLight Promoting to ArcShift {:?}", self.item);
         // SAFETY:
         // self.item is always a valid pointer
@@ -510,11 +562,11 @@ impl<T: 'static> Drop for ArcShiftLight<T> {
 }
 
 /// SAFETY:
-/// If T is Sync, ArcShift<T> can also be Sync
+/// If `T` is `Sync`, `ArcShift<T>` can also be `Sync`
 unsafe impl<T: 'static + Sync> Sync for ArcShift<T> {}
 
 /// SAFETY:
-/// If T is Send, ArcShift<T> can also be Send
+/// If `T` is `Send`, `ArcShift<T>` can also be `Send`
 unsafe impl<T: 'static + Send> Send for ArcShift<T> {}
 
 impl<T> Drop for ArcShift<T> {
@@ -630,7 +682,7 @@ impl<T: 'static> ItemHolder<T> {
                     abort();
                 }
             }
-            let mut magic = MAGIC.fetch_add(1, Ordering::Relaxed);
+            let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
             let magic = magic as i64 as u64;
             self.magic1
                 .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
@@ -651,7 +703,7 @@ fn verify_item<T>(_ptr: *const ItemHolder<T>) {
         let ptr = _ptr;
         let x = undecorate(ptr);
         if x != ptr {
-            panic!("Internal error in arcshift: Pointer given to verify was decorated, it shouldn't have been! {:?} (={:?})", ptr, get_state(ptr));
+            panic!("Internal error in ArcShift: Pointer given to verify was decorated, it shouldn't have been! {:?} (={:?})", ptr, get_state(ptr));
             //eprintln!("Backtrace: {}", Backtrace::capture());
             //abort();
         }
@@ -714,7 +766,7 @@ fn assert_is_undecorated<T>(_ptr: *const ItemHolder<T>) {
     {
         let raw = _ptr as usize & 3;
         if raw != 0 {
-            eprintln!("Internal error in arcshift - unexpected decorated pointer");
+            eprintln!("Internal error in ArcShift - unexpected decorated pointer");
             abort();
         }
     }
@@ -742,7 +794,7 @@ fn get_state<T>(ptr: *const ItemHolder<T>) -> Option<ItemStateEnum> {
     let raw = ((ptr as usize) & 3) as u8;
     if raw == 0 {
         eprintln!(
-            "Internal error in arcshift: Encountered undecorated pointer in get_state!: {:?}",
+            "Internal error in ArcShift: Encountered undecorated pointer in get_state!: {:?}",
             ptr
         );
         abort();
@@ -780,7 +832,7 @@ impl<T: 'static> Clone for ArcShift<T> {
             rescount + MAX_ROOTS
         );
         if rescount >= MAX_ARCSHIFT {
-            eprintln!("Internal error in arcshift: Max number of ArcShift instances exceeded");
+            eprintln!("Internal error in ArcShift: Max number of ArcShift instances exceeded");
             abort();
         }
         ArcShift { item: self.item }
@@ -923,7 +975,7 @@ impl<T: 'static> ArcShift<T> {
         }
     }
 
-    /// Create a new ArcShift, containing the given type.
+    /// Create a new ArcShift instance, containing the given type.
     pub fn new(payload: T) -> ArcShift<T> {
         let item = ItemHolder {
             #[cfg(feature = "validate")]
@@ -937,8 +989,9 @@ impl<T: 'static> ArcShift<T> {
         let cur_ptr = Box::into_raw(Box::new(item));
         ArcShift { item: cur_ptr }
     }
-    /// Basically the same as doing ArcShift::new, but avoids copying the contents of 'input'
-    /// to the stack, even as a temporary variable.
+    /// Basically the same as doing [`ArcShift::new`], but avoids copying the contents of 'input'
+    /// to the stack, even as a temporary variable. This can be useful, if the type is too large
+    /// to fit on the stack.
     pub fn from_box(input: Box<T>) -> ArcShift<T> {
         let input_ptr = Box::into_raw(input);
 
@@ -1018,7 +1071,8 @@ impl<T: 'static> ArcShift<T> {
 
     /// Try to move the value out of the ArcShift instance.
     /// This only succeeds if the self instance is the only instance
-    /// holding the value.
+    /// holding the value. Any other instances of ArcShift or ArcShiftLight holding the
+    /// same value will cause this method to return None.
     pub fn try_into_inner(mut self) -> Option<T> {
         self.reload();
 
@@ -1035,8 +1089,7 @@ impl<T: 'static> ArcShift<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
-    /// when the instance is dereferenced, or the 'update' method is called.
+    /// ArcShift instance is dropped or reloaded.
     pub fn update_shared(&self, new_payload: T) {
         let item = ItemHolder {
             #[cfg(feature = "validate")]
@@ -1118,7 +1171,7 @@ impl<T: 'static> ArcShift<T> {
             atomic::spin_loop();
         }
     }
-    /// Update the contents of this ArcShift, and all other instance cloned from this
+    /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
     ///
@@ -1126,141 +1179,17 @@ impl<T: 'static> ArcShift<T> {
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance upgrades to the new value. This update happens only
-    /// when the instance is dereferenced, or the 'update' method is called.
+    /// when the last instance is dropped or reloaded.
     ///
-    /// Note, this method, in contrast to 'upgrade_shared', actually does update
+    /// Note, this method, in contrast to 'upgrade_shared', actually does reload
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
-    /// only remaining instance, the old value that is being replaced will be dropped
+    /// last remaining instance, the old value that is being replaced will be dropped
     /// before this function returns.
     pub fn update(&mut self, new_payload: T) {
         self.update_shared(new_payload);
         debug_println!("self.reload()");
         self.reload();
     }
-
-    /// Possibly drops the payload of `cand`, if it has no other
-    /// strong users.
-    ///
-    /// The value returned is the value of `cand.next_and_ptr`, with a refcount of `MAX_ROOTS`
-    ///
-    /// SAFETY:
-    /// `cand` must be a valid pointer, with a strong refcount.
-    /*#[allow(warnings)]
-    fn early_drop_opt(mut cand: *const ItemHolder<T>) -> *const ItemHolder<T> {
-        let origptr = cand;
-        let mut strength = MAX_ROOTS;
-        loop {
-            verify_item(cand);
-            // SAFETY:
-            // `cand` is a valid pointer.
-            let count = unsafe{&*cand}.refcount.load(Ordering::SeqCst);
-
-
-            debug_println!("early_drop orig={:?} Considering dropping payload {:?}, pre count = {}", origptr, cand, count);
-            assert!(count >= strength);
-            verify_item(cand);
-            // SAFETY:
-            // `cand` is a valid pointer.
-            let Some(next_ptr) = ArcShiftLight::load_nontentative_next(cand) else {
-                atomic::spin_loop();
-                continue;
-            };
-            if ((strength+1)..(strength + MAX_ROOTS)).contains(&count) {
-
-                debug_println!("Possibility of early drop for {:?}! (count = {}, state: {:?})", cand, count, get_state(next_ptr));
-
-                if !undecorate(next_ptr).is_null() && get_state(next_ptr) != Some(ItemStateEnum::Dropped) {
-                    // SAFETY:
-                    // `cand` is a valid pointer.
-                    debug_println!("First condition for early drop fulfilled: {:?}", next_ptr);
-                    match unsafe { &*cand }.next_and_state.compare_exchange(next_ptr as *mut _, decorate(next_ptr, Dropped) as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
-                        Ok(_) => {
-                            // SAFETY:
-                            // `cand` is a valid pointer.
-                            let count = unsafe { &*cand }.refcount.load(Ordering::SeqCst);
-                            debug_println!("Early drop count: {:?} : {}", next_ptr, count);
-                            if count >= strength + MAX_ROOTS {
-                                debug_println!("Simultaneous count increase detected {:?}", cand);
-                                // Ok, someone must have increased the refcount just before we compxchgd
-                                // SAFETY:
-                                // `cand` is a valid pointer.
-                                match unsafe { &*cand }.next_and_state.compare_exchange(decorate(next_ptr, Dropped) as *mut _, decorate(next_ptr, Superseded) as *mut _, Ordering::SeqCst, Ordering::SeqCst) {
-                                    Ok(_) => {
-                                        debug_println!("Spinning on {:?} drop sync(1)", cand);
-                                        atomic::spin_loop();
-                                        continue;
-                                    }
-                                    Err(_) => {
-                                        debug_println!("Spinning on {:?} drop sync(2)", cand);
-                                        atomic::spin_loop();
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                // Ok, we're the last owner. We can drop the payload
-                                verify_item(cand);
-
-
-                                // SAFETY:
-                                // Since our compare-exchange higher up succeeded,
-                                // we are the only ones allowed to drop the payload value
-                                let newcand = undecorate(next_ptr);
-
-                                assert_eq!(newcand, undecorate(next_ptr));
-
-                                verify_item(newcand);
-                                debug_println!("Drop-opt drop_in_place({:?})", cand);
-                                // SAFETY:
-                                // `cand` is a valid pointer, which we are allowed to drop the contents //of
-                                // payload for.
-                                let payload_item_mut = unsafe { &mut *addr_of_mut!((*(cand as *mut ItemHolder<T>)).payload) };
-                                // SAFETY:
-                                // `payload_item_mut` is a valid pointer to the payload, that
-                                // we are allowed to drop.
-                                unsafe { std::ptr::drop_in_place(payload_item_mut) }
-                                debug_println!("Next {:?}", newcand);
-
-                                let nextnext = undecorate(unsafe{&*newcand}.next_and_state.load(Ordering::SeqCst));
-                                if nextnext.is_null() {
-                                    let _dbg = unsafe { &*newcand }.refcount.fetch_add(1, Ordering::SeqCst);
-                                    debug_println!("Slightly strengthened ref {:?}.{:?} {} -> {}", cand, newcand, _dbg , _dbg + 1);
-                                    drop_item(origptr, MAX_ROOTS);
-
-                                    return newcand;
-                                } else {
-                                    let newcand = undecorate(next_ptr);
-                                    cand = undecorate(next_ptr);
-                                    let _dbg = unsafe { &*newcand }.refcount.fetch_sub(MAX_ROOTS-1, Ordering::SeqCst);
-                                    strength = 1;
-
-                                    assert!(_dbg >= MAX_ROOTS);
-                                    debug_println!("Weakened ref {:?}.{:?} {} -> {}", cand, newcand, _dbg , _dbg - (MAX_ROOTS-1));
-                                    continue;
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            debug_println!("Spinning on {:?} drop sync(3)", cand);
-                            atomic::spin_loop();
-                            continue;
-                        }
-                    }
-                } else {
-                    debug_println!("However, first condition for early drop not fulfilled: {:?}", next_ptr);
-                    break;
-                }
-            } else {
-                debug_println!("No early drop of {:?}, count(={}) not permitting", cand, count);
-                break;
-            }
-            unreachable!();
-        }
-        if cand != origptr {
-            let _dbg = unsafe { &*cand }.refcount.fetch_add(MAX_ROOTS, Ordering::SeqCst);
-            drop_item(origptr, MAX_ROOTS);
-        }
-        return cand;
-    }*/
 
     #[allow(warnings)]
     fn simple_early_drop_opt(mut cand: *const ItemHolder<T>) -> Option<bool> {
@@ -1366,11 +1295,11 @@ impl<T: 'static> ArcShift<T> {
         }
     }
 
-    /// This function makes sure to update this instance of ArcShift to the newest
-    /// value.
-    /// Calling the regular 'get' already does this, so this is rarely needed.
+    /// This function makes sure to update this instance of ArcShift to the newest value.
+    ///
+    /// Calling the regular [`ArcShift::get`] already does this, so this is rarely needed.
     /// But if mutable access to a ArcShift is only possible at certain points in the program,
-    /// it may be clearer to call 'force_update' at those points to ensure any updates take
+    /// it may be clearer to call `reload` at those points to ensure any updates take
     /// effect, compared to just calling 'get' and discarding the value.
     #[inline(never)]
     pub fn reload(&mut self) {
@@ -1381,7 +1310,6 @@ impl<T: 'static> ArcShift<T> {
         verify_item(new_self);
         loop {
             verify_item(new_self);
-            //TODO: Don't upgrade to non-tentative during Drop!
 
             // SAFETY:
             // `new_self` is a valid pointer.
@@ -1466,9 +1394,6 @@ impl<T: 'static> ArcShift<T> {
                 break;
             }
             verify_item(cand);
-
-            // SAFETY:
-            // 'next' is always a valid pointer
 
             if strength > 1 {
                 debug_println!("reload(3) to reduce count {:?} by {}", cand, MAX_ROOTS - 1);
@@ -1614,10 +1539,6 @@ impl<T: 'static> ArcShift<T> {
             // SAFETY:
             // `next_self_item` is always a valid pointer, because each node in the chain
             // has increased refcount on the next node in the chain.
-            // The logic we're doing here is a part of the optimization which makes it possible to
-            // do update multiple times in succession without ever introducing lingering garbage.
-            // This is done by setting the LSB of the pointer to the new ItemHolder, marking it
-            // as a dummy. At first actual use, the dummy bit is cleared (using `de_dummify`).
             verify_item(next_self_item);
             // SAFETY:
             // `next_self_item` is a valid pointer.
@@ -1641,11 +1562,14 @@ impl<T: 'static> ArcShift<T> {
     /// Like 'get', but only requires a &self, not &mut self.
     ///
     /// WARNING!
-    /// This does not free old values after update. Call 'get' or 'force_update' to ensure this.
+    /// This does not free old values after update. Call `ArcShift::get` or `ArcShift::reload` to ensure this.
     /// Also, the run time of this method is proportional to the number of updates which have
-    /// taken place without a 'get' or 'force_update'. The overhead is basically the price of
+    /// taken place without a 'get' or 'reload'. The overhead is basically the price of
     /// one memory access per new available version - a few nanoseconds per version if data is in
     /// CPU cache.
+    ///
+    /// Because of this, it is not advisable to do an unbounded number of updates, if
+    /// ArcShift instances exist that only use 'shared_get', and never do reloads.
     pub fn shared_get(&self) -> &T {
         debug_println!("Getting {:?}", self.item);
         // SAFETY:
@@ -1669,12 +1593,12 @@ impl<T: 'static> ArcShift<T> {
 
     /// Return the value pointed to.
     ///
-    /// This method is very fast, basically the speed of a regular pointer, unless
+    /// This method is very fast, basically the speed of a regular reference, unless
     /// the value has been modified by calling one of the update-methods.
     ///
     /// Note that this method requires 'mut self'. The reason 'mut' self is needed, is because
     /// of implementation reasons, and is what makes ArcShift 'get' very fast, while still
-    /// allowing modification.
+    /// allowing the pointed-to value to be modified.
     #[inline(always)]
     pub fn get(&mut self) -> &T {
         debug_println!("Getting {:?}", self.item);
@@ -1750,14 +1674,13 @@ impl<T: 'static> ArcShift<T> {
     /// This is like 'get', but never upgrades the pointer.
     /// This means that any new value supplied using one of the update methods will not be
     /// available.
-    /// This method should be ever so slightly faster than regular 'get'.
+    /// This method is ever so slightly faster than regular 'get'.
     ///
     /// WARNING!
-    /// You should probably not be using this method. If acquiring a non-upgraded value is
-    /// acceptable, you should consider just using regular 'Arc'.
-    /// One usecase is if you can control locations where an update is required, and arrange
-    /// for 'mut self' to be possible at those locations.
-    /// But in this case, it might be better to just use 'get' and store the returned pointer
+    /// You should probably not be using this method.
+    /// One use-case is if you can control locations where an update is possible, and arrange
+    /// for '&mut self' to be available so that `ArcShift::reload` can be called at those locations.
+    /// But in this case, it might be better to just use `ArcShift::get` and keep the returned pointer
     /// (it has a similar effect).
     #[inline(always)]
     pub fn shared_non_reloading_get(&self) -> &T {
@@ -1784,7 +1707,7 @@ fn drop_payload_and_holder<T: 'static>(ptr: *const ItemHolder<T>) -> bool {
         // SAFETY:
         // `ptr` is always a valid pointer.
         // At this position we've established that we can drop the pointee's box memory, but the
-        // pointee value is already dropped.
+        // pointee value has already been dropped.
         _ = unsafe { Box::from_raw(ptr as *mut MaybeUninit<ItemHolder<T>>) };
         false
     } else {
@@ -1864,6 +1787,7 @@ pub mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
     use std::time::Duration;
+    use std::collections::HashSet;
 
     use rand::prelude::StdRng;
     use rand::{Rng, SeedableRng};
@@ -2060,7 +1984,7 @@ pub mod tests {
             let shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
 
             debug_println!("==== running shift.get() = ");
-            let mut shift = shiftlight.get();
+            let mut shift = shiftlight.upgrade();
             debug_println!("==== running arc.update() = ");
             shift.update(InstanceSpy::new(count.clone()));
 
@@ -2079,7 +2003,7 @@ pub mod tests {
         model(|| {
             let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let shift = ArcShiftLight::new(InstanceSpy::new(count.clone()));
-            let mut arc = shift.get();
+            let mut arc = shift.upgrade();
             for _ in 0..10 {
                 arc.update(InstanceSpy::new(count.clone()));
                 debug_println!("Instance count: {}", count.load(Ordering::SeqCst));
@@ -2096,7 +2020,7 @@ pub mod tests {
         model(|| {
             let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let shift = ArcShiftLight::new(InstanceSpy::new(count.clone()));
-            let mut arc = shift.get();
+            let mut arc = shift.upgrade();
             for _ in 0..10 {
                 arc.update(InstanceSpy::new(count.clone()));
                 black_box(arc.clone());
@@ -2115,7 +2039,7 @@ pub mod tests {
         model(|| {
             let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
-            let shift = shiftlight.get();
+            let shift = shiftlight.upgrade();
             debug_println!("== Calling update_shared ==");
             shift.update_shared(InstanceSpy::new(count.clone()));
             debug_println!("== Calling shared_get ==");
@@ -2140,7 +2064,7 @@ pub mod tests {
                 let _shiftlight4 = shiftlight.clone();
                 let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
 
-                let mut shift = shiftlight.get();
+                let mut shift = shiftlight.upgrade();
                 debug_println!("== Calling update_shared ==");
                 shift.update(InstanceSpy::new(count.clone()));
                 assert_eq!(count.load(Ordering::Relaxed), 1);
@@ -2183,7 +2107,7 @@ pub mod tests {
     fn simple_threading2b() {
         model(|| {
             let shift1 = ArcShiftLight::new(42u32);
-            let mut shift2 = shift1.get();
+            let mut shift2 = shift1.upgrade();
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)
@@ -2209,7 +2133,7 @@ pub mod tests {
     fn simple_threading2c() {
         model(|| {
             let shift1 = ArcShiftLight::new(42u32);
-            let mut shift2 = shift1.get();
+            let mut shift2 = shift1.upgrade();
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)
@@ -2329,8 +2253,8 @@ pub mod tests {
                 let owner = std::sync::Arc::new(SpyOwner2::new());
                 {
                     let shift1 = ArcShiftLight::new(owner.create("orig"));
-                    let shift2 = shift1.get();
-                    let shift3 = shift1.get();
+                    let shift2 = shift1.upgrade();
+                    let shift3 = shift1.upgrade();
                     let owner_ref2 = owner.clone();
                     let owner_ref3 = owner.clone();
 
@@ -2383,7 +2307,7 @@ pub mod tests {
     ) {
         let ops1: Vec<fn(ArcShiftLight<InstanceSpy2>) -> Option<ArcShiftLight<InstanceSpy2>>> = vec![
             |shift| {
-                _ = shift.get();
+                _ = shift.upgrade();
                 Some(shift)
             },
             |shift| {
@@ -2391,7 +2315,7 @@ pub mod tests {
                 Some(shift)
             },
             |shift| {
-                _ = shift.get();
+                _ = shift.upgrade();
                 None
             },
             |shift| Some(shift),
@@ -2842,15 +2766,15 @@ pub mod tests {
                 let count3 = count.clone();
                 let shift1 = std::sync::Arc::new(ArcShiftLight::new(count.create("orig")));
 
-                let shift2 = shift1.get();
-                let shift3 = shift1.get();
-                let mut shift4 = shift1.get();
+                let shift2 = shift1.upgrade();
+                let shift3 = shift1.upgrade();
+                let mut shift4 = shift1.upgrade();
                 let t1 = atomic::thread::Builder::new()
                     .name("t1".to_string())
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t1 =");
-                        black_box(shift1.get());
+                        black_box(shift1.upgrade());
                         debug_println!(" = drop t1 =");
                     })
                     .unwrap();
@@ -2902,10 +2826,10 @@ pub mod tests {
     fn simple_threading4e() {
         model(|| {
             let shift = std::sync::Arc::new(ArcShiftLight::new(42u32));
-            let shift1 = shift.get();
-            let shift2 = shift.get();
-            let shift3 = shift.get();
-            let shift4 = shift.get();
+            let shift1 = shift.upgrade();
+            let shift2 = shift.upgrade();
+            let shift3 = shift.upgrade();
+            let shift4 = shift.upgrade();
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)
@@ -3051,7 +2975,7 @@ pub mod tests {
                         }
                         FuzzerCommand::PromoteRoot(_) => {
                             if let Some(root) = curvalroot.as_ref() {
-                                curval = Some(root.get());
+                                curval = Some(root.upgrade());
                             }
                         }
                         FuzzerCommand::DemoteArc(_) => {
@@ -3177,7 +3101,7 @@ pub mod tests {
                 }
                 FuzzerCommand::PromoteRoot(chn) => {
                     if let Some(root) = arcroots[chn as usize].as_ref() {
-                        arcs[chn as usize] = Some(root.get());
+                        arcs[chn as usize] = Some(root.upgrade());
                     }
                 }
                 FuzzerCommand::DemoteArc(chn) => {
