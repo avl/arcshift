@@ -35,19 +35,23 @@ For docs, <https://docs.rs/arcshift/> .
 ## Origin story
 
 I created ArcShift because I wanted to have a low-overhead way to store resources in a computer game project.
-The idea is that assets such as 3-models, textures etc are seldom modified, and putting them in an std::sync::Arc
-seems reasonable. However, if a Arc<T> is given to a function, there is no way to modify the value T, short of
-using Arc<Mutex<T>>. However, Mutex access is far from free, even if the mutex is uncontended.
+The idea is that assets such as 3d-models, textures etc are seldom modified, and putting them in an std::sync::Arc
+seems reasonable. 
+However, once something is put into an Arc, and that Arc is propagated through the system,
+there is no way to modify the value. On solution is to use `Arc<Mutex<T>>`.
+However, Mutex access is far from free, even if the mutex is uncontended. If the value is only
+rarely updated, paying mutex overhead on each access is undesirable.
 
 ### ArcSwap
 
 After some googling, I found the crate <https://docs.rs/arc-swap/> . However, it wasn't exactly what
-I was looking for. ArcSwap is a container for Arc<T>-objects, which allows swapping out the contained
+I was looking for. ArcSwap is a container for `Arc<T>`-objects, which allows swapping out the contained
 Arc-object without requiring a &mut-reference.
 
-What I wanted was simply an Arc<T> where the value T could be updated.
+What I wanted was simply an `Arc<T>` where the value T could be updated.
 
-Now, it's possible to achieve something like this using ArcSwap, by constructing an Arc<ArcSwap<Arc<T>>> .
+I know it's possible to achieve something like this using ArcSwap, by constructing an 
+`Arc<ArcSwap<Arc<T>>>`, but it is not as convenient as I would have liked.
 
 ArcSwap is a fantastic crate, and it is much more mature than ArcShift.
 However, for example if the following conditions are fulfilled, ArcShift may give similar
@@ -63,16 +67,17 @@ the ArcShift analog to ArcSwap is ArcShiftLight.
 
 The requirements for ArcShift are:
 
- * Regular shared read access should be exactly as fast as for Arc<T>
+ * Regular shared read access should be exactly as fast as for `Arc<T>`, as long as 
+   writes have not occurred.
  * Writes can be expensive (but of course not slower than necessary)
  * The implementation should be lock free (so we never have to suspend a thread)
  * The API must be 100% safe and sound.
- * When values are updated, previous values should be dropped when possible 
- * It should be possible to have 'light' variants which do not provide as fast access,
-   but on the other hand does not keep older values alive.
+ * When values are updated, previous values should be dropped as soon as possible. 
+ * It should be possible to have 'lightweight' handles to the data which do not provide fast access,
+   but on the other hand do not keep older values alive.
 
 Regarding the last two points, any type which provides overhead-free access to T will
-have to keep such a T alive at all time, since otherwise some sort of synchronization (which is expensive)
+have to keep a T alive at all time, since otherwise some sort of synchronization (which is expensive)
 would be needed before access was granted.
 
 ### The Solution Idea
@@ -154,10 +159,10 @@ There is also an exhaustive set of tests which test all combinations of ArcShift
 on three concurrent threads.
 
 
-## Using built-in validation feature
+## Custom validation features
 Enabling the non-default feature 'validate' causes Arcshift to insert canaries in memory,
 enabling best-effort detection of wild pointers or threading issues.
-
+The feature 'debug' enables verbose debug-output to stdout.
 
 # Lessons learned
 
@@ -166,16 +171,17 @@ While developing Arcshift, I've learned a few lessons.
 ## Lock-free algorithms really are hard
 
 It is well known that lock free algorithms are difficult to get right. However,
-after personally stepping on a few rakes, this truth has become more real to me.
+after personally stepping on the rakes, this truth has become more real to me.
 
 ### Lock-free bug example #1
-One bug I had, which in hindsight is extremely obvious, is (broken) code I had, which
+One bug I had, which in hindsight is extremely obvious, is (broken) code which
 looked a bit like this:
 
 ```rust
     
 let count = get_refcount(item)
-        .fetch_sub(STRONG_COUNT, Ordering::SeqCst);
+    .fetch_sub(STRONG_COUNT, Ordering::SeqCst);
+
 if count == STRONG_COUNT {
     drop_item(item);
 } else if count < 2*STRONG_COUNT { //WRONG!
@@ -188,9 +194,10 @@ The idea is that we have a strong refcount to the node 'item'. We subtract this 
 If the previous refcount value (returned by AtomicUsize::fetch_sub) is STRONG_COUNT, that means our 
 reference was the only remaining reference, and we can now drop 'item'. This works.
 
-The next condition, tries to check if the previous refcount was < 2 * STRONG_COUNT. If so,
+The next condition tries to check if the previous refcount was < 2 * STRONG_COUNT. If so,
 this should mean that there were no other strong counts to the node, and we can thus drop
-the payload of 'item' (but not the entire node).
+the payload of 'item' (but not the entire node). The idea is that non-current nodes never
+gain refcounts, so the item can't go back to being strongly linked.
 
 However, this does absolutely not work!
 
@@ -199,7 +206,7 @@ After the line `.fetch_sub(STRONG_COUNT, Ordering::SeqCst);`, absolutely nothing
 can execute `drop_payload(item)`. 
 
 This is in fact a pattern that is worth remembering. After reducing a refcount on a reference counted
-pointer, you do no longer have access to the pointee.
+pointer, the pointer is completely invalid and must not be touched again!
 
 ### Lock-free bug example #2
 
@@ -236,15 +243,15 @@ For std library 'Arc', the number of threads needed to trigger a bug on a 64-bit
 which is something that will clearly never happen in practice.
 
 For ArcShiftLight, MAX_WEAK_COUNT is only 2^19, and half of that (2^18 = 262144) is a large, but realistically possible
-number of threads. The 64-bit linux machine I'm writing this on has 
+number of threads. The 64-bit linux machine I'm writing this on has:
 
 ```bash
 > cat /proc/sys/kernel/threads-max
-506892
+506892  #<- maximum 506892 threads 
 ```
 
 Because of this, ArcShiftLight does not use atomic 'add' to increase the weak count, but instead uses
-`AtomicUsize::compare_exchange` instead. 
+`AtomicUsize::compare_exchange`. 
 
 For the strong count, for ArcShift, the 'overrun-area' approach is used
 instead. The overrun-area is about 180 billion strong counts.
@@ -298,7 +305,7 @@ program threads. By default (at time of writing), `--many-seeds` defaults to 64 
 The set of seeds can be controlled by specifying a range, like `--many-seeds=0..1000`, to try
 more variants.
 
-One problem I encountered was in troubleshooting race conditions. Miri will provide a lot of useful
+One problem I encountered was in troubleshooting memory leaks. Miri will provide a lot of useful
 information, like where the leaked memory was allocated. However, this was often not much of a clue
 in the arcshift test bench. The test bench has a lot of debug output, giving the memory address
 of each allocated node. However, miri does not print the address of leaked memory, making it harder
@@ -334,7 +341,7 @@ fences (loom::sync::atomic::fence) can be used to achieve the same result.
 Shuttle is a tool to detect threading errors in rust code. See https://crates.io/crates/shuttle .
 
 Shuttle is a little bit like loom, but uses randomized scheduling instead of exhaustively trying
-all possible interleavings. In contrast with loom, shuttle *only* supports SeqCst ordering. 
+all possible interleavings. In contrast to loom, shuttle *only* supports SeqCst ordering. 
 
 This means that shuttle is less powerful than loom. However, it can handle larger models, since
 it is faster and less ambitious. Just like loom it supports replaying found failing execution traces.
@@ -344,15 +351,16 @@ it is faster and less ambitious. Just like loom it supports replaying found fail
 
 Cargo mutants is a tool which can be used to ensure that a test bench has enough coverage.
 
-It works by modifying the code under test, and ensuring that the test bench fails.
+It works by modifying the code under test, and ensuring that any such modification causes
+at least one test in the test bench to fail.
 
 Having code pass 'cargo mutants' is a lot of work. First of all, test coverage must be near 100%
-But this is not enough - the test bench must also fail under the modifications done by cargo mutants.
+But this is not enough - the tests must also fail under the modifications done by cargo mutants.
 
 Cargo mutants is quite hard to work with, but it does definitely bring something unique to the table.
 For smaller code bases with very high ideals for correctness (like arcshift), it provides a lot of value.
-However, I'm not convinced having a policy of 'always pass cargo mutants check' is suitable for
-all code bases.
+
+
 
 ### Cargo mutants, challenge #1
 One challenge I had with cargo mutants was with the following code:
@@ -377,7 +385,7 @@ match get_next_and_state(candidate).compare_exchange(...)
 In the Err-branch, we need to run another iteration of the algorithm. But because of the logic
 of things, we can make more or less progress. Executing the first leg of the if-statement
 gives us slightly better performance. I.e, the code is an optimization. However, 'cargo mutants' 
-notices that the test bench  passes even if the if-condition is changed to 'false'.
+notices that the test bench passes even if the if-condition is changed to 'false'.
 
 One solution to this problem would be to introduce a performance test case, to make it so that
 the test case fails if the optimization here is removed. However, measuring the performance
@@ -394,7 +402,8 @@ mutants identifies that removing the code for handling ArcShift instance count o
 fail the test suite. However, triggering such an overflow would require creating 2*45 instances 
 of ArcShift. Unfortunately, this requires at least 280 TB of RAM.
 
-In the end, I just added an exception for this logic.
+In the end, I just added an exception for this logic. Sanity checks which are not expected
+to be possible to trigger can probably usually just be added to the cargo mutants ignore list.
 
 ## Thoughts on focusing too much on failing test cases
 
@@ -416,31 +425,21 @@ the semantics of weak/strong refcounts.
 
 In arcshift, the rules are like this:
 
-1: Each ArcShiftLight-instance holds a weak (value 1) refcount on its primary node.
-2: Each ArcShift-instance holds a strong (value 2^19) refcount on its primary node.
-3: Each node with a live (non-dropped) payload holds a strong refcount on its next node (if it has one).
-4: Each node with a dropped payload must have a next node.
-5: Each node with a dropped payload holds a weak refcount on its next node.
-6: When attaining a strong reference to a node, its 'next' pointer must be checked after increasing the refcount.
+1. Each ArcShiftLight-instance holds a weak (value 1) refcount on its primary node.
+2. Each ArcShift-instance holds a strong (value 2^19) refcount on its primary node.
+3. Each node with a live (non-dropped) payload holds a strong refcount on its next node (if it has one).
+4. Each node with a dropped payload must have a next node.
+5. Each node with a dropped payload holds a weak refcount on its next node.
+6. When obtaining a strong reference to a node, its 'next' pointer must be checked after increasing the refcount.
    If 'next' has a value, it must be used instead (decreasing and increasing refcounts appropriately).
-7: When deciding to drop a payload, the node must be marked as dropped (affecting the next-ptr), and then 
+7. When deciding to drop a payload, the node must be marked as dropped (affecting the next-ptr), and then 
    the refcount must be checked. If there are strong counts, the drop must be undone. Rule 6&7 ensure
-   that there can never be strong links to a node with dropped payload
-8: Because a node with a non-dropped payload always has a strong link to the next node, that next
+   that there can never be strong links to a node with a dropped payload
+8. Because a node with a non-dropped payload always has a strong link to the next node, that next
    node cannot be dropped. By induction, all nodes 'to the right of' a non-dropped node are also non-dropped.
 
 Before nailing these rules down, I had a very hard time fixing bugs where ArcShift and ArcShiftLight
 instances were being reloaded and dropped simultaneously.
-
-
-
-
-
-
-
-
-
-
 
 
 

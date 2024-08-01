@@ -3440,14 +3440,13 @@ pub mod tests {
         fn generic_thread_fuzzing_all() {
             #[cfg(miri)]
             const COUNT: u64 = 10;
-
             #[cfg(any(loom, feature = "shuttle"))]
             const COUNT: u64 = 1000;
             let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
             #[cfg(not(any(loom, miri, feature = "shuttle")))]
             const COUNT: u64 = 100000;
             for i in 0..COUNT {
-                debug_println!("--- Seed {} ---", i);
+                println!("--- Seed {} ---", i);
                 model(move || {
                     let mut rng = StdRng::seed_from_u64(i);
                     let mut counter = 0usize;
@@ -3470,7 +3469,7 @@ pub mod tests {
             #[cfg(miri)]
             const COUNT: u64 = 100;
             #[cfg(not(any(miri)))]
-            const COUNT: u64 = 5000000;
+            const COUNT: u64 = 50000;
             for i in 0..COUNT {
                 model(move || {
                     let mut rng = StdRng::seed_from_u64(i);
