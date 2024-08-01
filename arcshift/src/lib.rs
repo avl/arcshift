@@ -434,22 +434,37 @@ impl<T: 'static> ArcShiftLight<T> {
                     );
                     assert!(count >= MAX_ROOTS);
                 }
+                if strength == 0 {
+                    let count = get_refcount(self.item).fetch_add(1, Ordering::SeqCst);
+                    debug_println!(
+                        "ArcShiftLight::reload2b, next = {:?}, adjusting count {} -> {}",
+                        self.item,
+                        count,
+                        count.wrapping_sub(MAX_ROOTS - 1)
+                    );
+                    assert!(count >= 1);
+                }
                 break;
             }
-            let count = get_refcount(self.item).fetch_sub(strength, Ordering::SeqCst);
-            debug_println!(
-                "ArcShiftLight::reload, next = {:?}, releasing {} -> {}",
-                next,
-                count,
-                count.wrapping_sub(strength)
-            );
-            assert!(count >= strength);
-            if count == strength {
-                debug_println!("ArcShiftLight::reload - dropping {:?}", self.item);
-                if drop_payload_and_holder(self.item) {
-                    strength = MAX_ROOTS;
+
+            if strength > 0 {
+                let count = get_refcount(self.item).fetch_sub(strength, Ordering::SeqCst);
+                    debug_println!(
+                    "ArcShiftLight::reload, next = {:?}, releasing {} -> {}",
+                    next,
+                    count,
+                    count.wrapping_sub(strength)
+                );
+                assert!(count >= strength);
+                if count == strength {
+                    debug_println!("ArcShiftLight::reload - dropping {:?}", self.item);
+                    if drop_payload_and_holder(self.item) {
+                        strength = MAX_ROOTS;
+                    } else {
+                        strength = 1;
+                    }
                 } else {
-                    strength = 1;
+                    strength = 0;
                 }
             }
             self.item = undecorate(next);
@@ -1247,15 +1262,41 @@ impl<T: 'static> ArcShift<T> {
                         );
                         drop_item(undecorate(expect));
                     }
+                    compile_error!("The below doesn't work, since 'new_ptr' can  be tentative. But if we make it non-tentative, then the anti-garbage optimization dies")
+                    loop {
+                        let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
+                            atomic::spin_loop();
+                            continue;
+                        };
+                        if early_dropped {
+                            debug_println!("\n----------------------------------------------------------\n");
+                            let _dbg = get_refcount(new_ptr).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                            debug_println!("Early_drop_adjust for {:?}.{:?} {} -> {}", candidate, new_ptr, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
+                            assert!(_dbg > MAX_ROOTS-1);
+                        }
+                        break;
+                    }
+
                     return;
                 }
                 Err(other) => {
                     verify_item(candidate);
                     verify_item(new_ptr);
                     if !is_superseded_by_tentative(get_state(other)) {
+
+                        /*let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
+                            atomic::spin_loop();
+                            continue;
+                        };
+                        if early_dropped {
+                            let _dbg = get_refcount(other).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                            debug_println!("Early_drop_adjust2 for {:?} {} -> {}", new_ptr, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
+                        }*/
+
                         verify_item(undecorate(other));
                         debug_println!("Update not complete - but advancing to {:?}", other);
                         candidate = undecorate(other);
+
                     } else {
                         debug_println!("Update not complete yet, spinning on {:?}", candidate);
                     }
@@ -1375,6 +1416,7 @@ impl<T: 'static> ArcShift<T> {
                             // `payload_item_mut` is a valid pointer to the payload, that
                             // we are allowed to drop.
                             unsafe { std::ptr::drop_in_place(payload_item_mut) }
+                            debug_println!("Performed early drop for {:?}", cand);
                             return Some(true);
                         }
                     }
@@ -1855,7 +1897,7 @@ pub mod tests {
         if let Some(repro) = repro {
             shuttle::replay(x, repro);
         } else {
-            shuttle::check_random(x, 1000);
+            shuttle::check_random(x, 10000);
         }
     }
 
@@ -1885,6 +1927,15 @@ pub mod tests {
         model(|| {
             let shift = ArcShiftLight::new(42u32);
             _ = shift.clone();
+        });
+    }
+    #[test]
+    fn simple_update_light() {
+        model(|| {
+            let mut shift = ArcShiftLight::new(42u32);
+            shift.update(43);
+            shift.update_box(Box::new(43));
+            assert_eq!(*shift.upgrade().get(), 43);
         });
     }
 
@@ -2157,6 +2208,27 @@ pub mod tests {
                 assert_eq!(count.load(Ordering::Relaxed), 1);
                 debug_println!("== Calling drop(shift) ==");
                 drop(shift);
+                assert_eq!(count.load(Ordering::Relaxed), 1);
+            }
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+        });
+    }
+    #[test]
+    fn simple_upgrade4c() {
+        model(|| {
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            {
+                let mut shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+                let _shiftlight1 = shiftlight.clone();
+                let _shiftlight2 = shiftlight.clone();
+                let _shiftlight3 = shiftlight.clone();
+                let _shiftlight4 = shiftlight.clone();
+                let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
+
+                debug_println!("== Calling update_shared ==");
+                shiftlight.update(InstanceSpy::new(count.clone()));
+                assert_eq!(count.load(Ordering::Relaxed), 1);
+                debug_println!("== Calling drop(shift) ==");
                 assert_eq!(count.load(Ordering::Relaxed), 1);
             }
             assert_eq!(count.load(Ordering::Relaxed), 0);
@@ -2523,6 +2595,7 @@ pub mod tests {
             },
         )
     }
+
     #[test]
     fn generic_3threading2() {
         generic_3thread_ops_b(
@@ -2534,14 +2607,13 @@ pub mod tests {
                 shift2.update(owner2.create(thread));
                 Some(shift2)
             },
-            |owner3, shift3, thread| {
-                shift3.update_shared(owner3.create(thread));
+            |owner3, mut shift3, thread| {
+                shift3.update(owner3.create(thread));
                 Some(shift3)
             },
             None
         );
     }
-
     #[test]
     fn simple_threading3a() {
         model(|| {
