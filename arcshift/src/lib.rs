@@ -215,7 +215,6 @@
 //! ```
 //!
 
-
 use crate::ItemStateEnum::{Dropped, Superseded};
 use std::alloc::Layout;
 #[allow(unused)]
@@ -236,7 +235,6 @@ use std::sync::atomic::Ordering;
 // marking more functions unsafe buys us very little.
 // Note! The API of this crate is 100% safe and it should be impossible to trigger UB through it.
 
-
 // All atomic primitives are reexported from a
 // local module called 'atomic', so we can easily change between using
 // types from 'std' (normal case) and types from shuttle/loom testing libraries.
@@ -249,7 +247,6 @@ mod atomic {
     #[allow(unused)]
     pub use std::thread;
 }
-
 
 /// Declarations for verifying Arcshift using 'shuttle'
 #[cfg(feature = "shuttle")]
@@ -274,13 +271,13 @@ mod atomic {
 }
 
 /// Define a macro for debug-output, only used in debug-builds.
-#[cfg(all(feature="debug", not(loom)))]
+#[cfg(all(feature = "debug", not(loom)))]
 macro_rules! debug_println {
     ($($x:tt)*) => {
         println!("{:?}: {}", atomic::thread::current().id(), format!($($x)*))
     }
 }
-#[cfg(all(feature="debug", loom))]
+#[cfg(all(feature = "debug", loom))]
 macro_rules! debug_println {
     ($($x:tt)*) => { println!($($x)*) }
 }
@@ -289,7 +286,7 @@ macro_rules! debug_println {
 const MAX_ROOTS: usize = 524288;
 const MAX_ARCSHIFT: usize = 35000000000000;
 
-#[cfg(not(feature="debug"))]
+#[cfg(not(feature = "debug"))]
 macro_rules! debug_println {
     ($($x:tt)*) => {{}};
 }
@@ -345,7 +342,6 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
     fn clone(&self) -> Self {
         let mut curitem = self.item;
         loop {
-
             let Some(next) = Self::load_nontentative_next(curitem) else {
                 atomic::spin_loop();
                 continue;
@@ -415,10 +411,13 @@ impl<T: 'static> ArcShiftLight<T> {
     /// This allows dropping heap blocks kept alive by this instance of
     /// ArcShiftLight to be dropped.
     pub fn reload(&mut self) {
-
         let mut strength = 1;
         loop {
-            debug_println!("ArcShiftLight::reload {:?}, strength {}", self.item, strength);
+            debug_println!(
+                "ArcShiftLight::reload {:?}, strength {}",
+                self.item,
+                strength
+            );
             let Some(next) = Self::load_nontentative_next(self.item) else {
                 atomic::spin_loop();
                 continue;
@@ -427,13 +426,23 @@ impl<T: 'static> ArcShiftLight<T> {
             if undecorate(next).is_null() {
                 if strength > 1 {
                     let count = get_refcount(self.item).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                    debug_println!("ArcShiftLight::reload, next = {:?}, adjusting count {} -> {}", self.item, count, count.wrapping_sub(MAX_ROOTS-1));
+                    debug_println!(
+                        "ArcShiftLight::reload, next = {:?}, adjusting count {} -> {}",
+                        self.item,
+                        count,
+                        count.wrapping_sub(MAX_ROOTS - 1)
+                    );
                     assert!(count >= MAX_ROOTS);
                 }
                 break;
             }
             let count = get_refcount(self.item).fetch_sub(strength, Ordering::SeqCst);
-            debug_println!("ArcShiftLight::reload, next = {:?}, releasing {} -> {}", next, count, count.wrapping_sub(strength));
+            debug_println!(
+                "ArcShiftLight::reload, next = {:?}, releasing {} -> {}",
+                next,
+                count,
+                count.wrapping_sub(strength)
+            );
             assert!(count >= strength);
             if count == strength {
                 debug_println!("ArcShiftLight::reload - dropping {:?}", self.item);
@@ -446,7 +455,6 @@ impl<T: 'static> ArcShiftLight<T> {
             self.item = undecorate(next);
         }
     }
-
 
     #[cfg_attr(test, mutants::skip)]
     fn verify_count(count: usize) {
@@ -531,7 +539,10 @@ impl<T: 'static> ArcShiftLight<T> {
             let precount = get_refcount(curitem).fetch_add(MAX_ROOTS, Ordering::Acquire);
             if precount >= MAX_ARCSHIFT {
                 let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::Release);
-                panic!("Maximum supported ArcShift instance count reached: {}", MAX_ARCSHIFT);
+                panic!(
+                    "Maximum supported ArcShift instance count reached: {}",
+                    MAX_ARCSHIFT
+                );
             }
             atomic::fence(Ordering::SeqCst);
             debug_println!(
@@ -620,8 +631,8 @@ impl<T: 'static> ItemHolder<T> {
         {
             assert_is_undecorated(ptr);
 
-            let atomic_magic1 = unsafe { &*addr_of!( (*ptr).magic1) };
-            let atomic_magic2 = unsafe { &*addr_of!( (*ptr).magic2) };
+            let atomic_magic1 = unsafe { &*addr_of!((*ptr).magic1) };
+            let atomic_magic2 = unsafe { &*addr_of!((*ptr).magic2) };
 
             let magic1 = atomic_magic1.load(Ordering::SeqCst);
             let magic2 = atomic_magic2.load(Ordering::SeqCst);
@@ -660,10 +671,7 @@ impl<T: 'static> ItemHolder<T> {
                 let m1 = magic1 & 0xffff;
                 let m2 = magic2 & 0xffff;
                 if m1 != 0x8111 || m2 != 0x8111 {
-                    eprintln!(
-                        "Internal error - bad magic in {:?} {:x} {:x}",
-                        ptr, m1, m2
-                    );
+                    eprintln!("Internal error - bad magic in {:?} {:x} {:x}", ptr, m1, m2);
                 }
             }
 
@@ -688,10 +696,8 @@ impl<T: 'static> ItemHolder<T> {
                 }
                 let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
                 let magic = magic as i64 as u64;
-                atomic_magic1
-                    .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-                atomic_magic2
-                    .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
+                atomic_magic1.fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
+                atomic_magic2.fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
                 atomic_magic1.fetch_or(magic, Ordering::SeqCst);
                 atomic_magic2.fetch_or(magic, Ordering::SeqCst);
             }
@@ -822,9 +828,7 @@ fn is_superseded_by_tentative(state: Option<ItemStateEnum>) -> bool {
 impl<T: 'static> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         debug_println!("ArcShift::clone({:?})", self.item);
-        let rescount =
-            get_refcount(self.item)
-                .fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst);
+        let rescount = get_refcount(self.item).fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst);
 
         atomic::fence(Ordering::SeqCst);
         debug_println!(
@@ -879,8 +883,7 @@ impl<T: 'static> ArcShift<T> {
                 self_item,
                 MAX_ROOTS
             );
-            let count = get_refcount(self_item)
-                .fetch_sub(strength, atomic::Ordering::SeqCst);
+            let count = get_refcount(self_item).fetch_sub(strength, atomic::Ordering::SeqCst);
             debug_println!(
                 "drop_impl_ret on {:?} - count: {} -> {}",
                 self_item,
@@ -890,8 +893,7 @@ impl<T: 'static> ArcShift<T> {
             assert!(count >= strength);
             if count == strength {
                 debug_println!("drop_impl_ret decided to drop {:?}", self_item);
-                let new_item =
-                    undecorate(get_next_and_state(self_item).load(Ordering::SeqCst));
+                let new_item = undecorate(get_next_and_state(self_item).load(Ordering::SeqCst));
                 verify_item(new_item);
                 verify_item(self_item);
                 if new_item.is_null() {
@@ -936,8 +938,7 @@ impl<T: 'static> ArcShift<T> {
             }
 
             debug_println!("drop_impl to reduce count {:?} by {}", self_item, strength);
-            let count = get_refcount(self_item)
-                .fetch_sub(strength, atomic::Ordering::SeqCst);
+            let count = get_refcount(self_item).fetch_sub(strength, atomic::Ordering::SeqCst);
             debug_println!(
                 "drop_impl on {:?} - count: {} -> {}",
                 self_item,
@@ -947,8 +948,7 @@ impl<T: 'static> ArcShift<T> {
             assert!(count >= strength);
             if count == strength {
                 debug_println!("drop_impl decided to drop {:?}", self_item);
-                let new_item =
-                    undecorate(get_next_and_state(self_item).load(Ordering::SeqCst));
+                let new_item = undecorate(get_next_and_state(self_item).load(Ordering::SeqCst));
 
                 verify_item(new_item);
                 verify_item(self_item);
@@ -1288,11 +1288,9 @@ impl<T: 'static> ArcShift<T> {
                     return; //Nothing to do
                 }
 
-                let dbgprev = get_refcount(new_self)
-                    .fetch_add(MAX_ROOTS, Ordering::SeqCst);
+                let dbgprev = get_refcount(new_self).fetch_add(MAX_ROOTS, Ordering::SeqCst);
                 if dbgprev > MAX_ARCSHIFT {
-                    get_refcount(new_self)
-                        .fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst);
+                    get_refcount(new_self).fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst);
                     panic!("Maximum ArcShift instance count reached");
                 }
                 atomic::fence(Ordering::SeqCst);
@@ -1314,8 +1312,7 @@ impl<T: 'static> ArcShift<T> {
             }
 
             verify_item(undecorate(next));
-            let _count = get_refcount(undecorate(next))
-                .load(Ordering::SeqCst);
+            let _count = get_refcount(undecorate(next)).load(Ordering::SeqCst);
             debug_println!(
                 "Moving from {:?} to {:?} ({:?} has count {})",
                 new_self,
@@ -1343,8 +1340,7 @@ impl<T: 'static> ArcShift<T> {
                     new_self,
                     strength
                 );
-                let _t = get_refcount(new_self)
-                    .fetch_sub(strength, Ordering::SeqCst);
+                let _t = get_refcount(new_self).fetch_sub(strength, Ordering::SeqCst);
                 assert!(_t > strength);
                 debug_println!(
                     "Reached new_self (={:?}), reducing count {} -> {}",
@@ -1358,8 +1354,7 @@ impl<T: 'static> ArcShift<T> {
 
             if strength > 1 {
                 debug_println!("reload(3) to reduce count {:?} by {}", cand, MAX_ROOTS - 1);
-                let count = get_refcount(cand)
-                    .fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                let count = get_refcount(cand).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
                 debug_println!(
                     "{:?} release refcount {} -> {}",
                     cand,
@@ -1369,8 +1364,7 @@ impl<T: 'static> ArcShift<T> {
                 assert!(count >= MAX_ROOTS - 1);
                 if count == MAX_ROOTS {
                     debug_println!("Dropping payload of {:?}", cand);
-                    let newcand =
-                        undecorate(get_next_and_state(cand).load(Ordering::SeqCst));
+                    let newcand = undecorate(get_next_and_state(cand).load(Ordering::SeqCst));
 
                     // NOTE: Because we now uniquely own 'cand', nothing can do an 'anti-garbage' drop of
                     // a tentative 'cand.next_and_state', since that would require access to 'cand', which no
@@ -1404,8 +1398,7 @@ impl<T: 'static> ArcShift<T> {
                     atomic::spin_loop();
                     continue;
                 };
-                let newcand = undecorate(
-                    get_next_and_state(cand).load(Ordering::SeqCst));
+                let newcand = undecorate(get_next_and_state(cand).load(Ordering::SeqCst));
                 if early_dropped {
                     let _dbg = get_refcount(newcand).fetch_add(1, Ordering::SeqCst);
                     debug_println!(
@@ -1515,9 +1508,7 @@ impl<T: 'static> ArcShift<T> {
         // SAFETY:
         // `self.item` is always a valid pointer
         let cand: *const ItemHolder<T> =
-            get_next_and_state(self.item)
-            .load(atomic::Ordering::Relaxed)
-            as *const ItemHolder<T>;
+            get_next_and_state(self.item).load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             // SAFETY:
@@ -1542,9 +1533,8 @@ impl<T: 'static> ArcShift<T> {
     #[inline(always)]
     pub fn get(&mut self) -> &T {
         debug_println!("Getting {:?}", self.item);
-        let cand: *const ItemHolder<T> = get_next_and_state(self.item)
-            .load(atomic::Ordering::Relaxed)
-            as *const ItemHolder<T>;
+        let cand: *const ItemHolder<T> =
+            get_next_and_state(self.item).load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             self.reload();
@@ -1623,9 +1613,7 @@ impl<T: 'static> ArcShift<T> {
 fn drop_payload_and_holder<T: 'static>(ptr: *const ItemHolder<T>) -> bool {
     verify_item(ptr);
 
-    if is_dropped(get_state(
-        get_next_and_state(ptr).load(Ordering::SeqCst),
-    )) {
+    if is_dropped(get_state(get_next_and_state(ptr).load(Ordering::SeqCst))) {
         debug_println!("Dropping holder {:?}, but payload was already dropped", ptr);
         // SAFETY:
         // `ptr` is always a valid pointer.
@@ -1652,8 +1640,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
         strength
     );
     verify_item(old_ptr);
-    let count =
-        get_refcount(old_ptr).fetch_sub(strength, atomic::Ordering::SeqCst);
+    let count = get_refcount(old_ptr).fetch_sub(strength, atomic::Ordering::SeqCst);
     atomic::fence(Ordering::SeqCst);
     debug_println!(
         "Drop-root-item {:?}, count {} -> {}",
@@ -1675,11 +1662,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
                 next,
                 1
             );
-            let next_strength = if strong {
-                MAX_ROOTS
-            } else {
-                1
-            };
+            let next_strength = if strong { MAX_ROOTS } else { 1 };
             drop_root_item(undecorate(next), next_strength);
         }
         debug_println!("drop_root_item, calling drop_payload {:?}", old_ptr);
@@ -1696,13 +1679,13 @@ pub mod tests {
     use super::*;
     use crossbeam_channel::bounded;
     use std::alloc::Layout;
+    use std::collections::HashSet;
     use std::fmt::Debug;
     use std::hash::{Hash, Hasher};
     use std::hint::black_box;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
     use std::time::Duration;
-    use std::collections::HashSet;
 
     use rand::prelude::StdRng;
     use rand::{Rng, SeedableRng};
@@ -1864,7 +1847,7 @@ pub mod tests {
         }
     }
 
-    #[derive(Debug,Clone)]
+    #[derive(Debug, Clone)]
     struct InstanceSpy2 {
         x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
         name: &'static str,
@@ -1881,9 +1864,7 @@ pub mod tests {
         }
     }
 
-    impl Eq for InstanceSpy2 {
-
-    }
+    impl Eq for InstanceSpy2 {}
 
     impl InstanceSpy2 {
         fn str(&self) -> &'static str {
@@ -2301,7 +2282,7 @@ pub mod tests {
         for (_n1, op1) in ops1.iter().enumerate().skip(skip1) {
             for (_n2, op2) in ops23.iter().enumerate().skip(skip2) {
                 for (_n3, op3) in ops23.iter().enumerate().skip(skip3) {
-                    #[cfg(feature="debug")]
+                    #[cfg(feature = "debug")]
                     {
                         println!("\n");
                         println!(
@@ -2315,21 +2296,6 @@ pub mod tests {
             }
         }
     }
-    /*#[test]
-    fn run_generic_3threading_b_0_1_1() {
-        generic_3threading_b_all_impl(
-            0, 1, 1,
-            None, //Some("9102c101b8a6b4b8d1d18fd56000000000000000019a1449939264492645da264d4a942c49924d89124ddaa42d59b22cd9b62dc9b26d59b624db8201db0060038061c3306c18b601c080610000000000000000000000")
-        );
-    }*/
-    /*#[test]
-        fn replay_generic_3threading_b_0_1_1() {
-            generic_3threading_b_all_impl(0,1,1,
-                                          Some("
-    910235b2dd8fa4d4e3898a8a010000000000000008d2a44d52a22cdaa46c9b942c
-    ")
-            );
-        }*/
     #[test]
     fn generic_3threading_a_all() {
         let ops: Vec<
@@ -2670,8 +2636,7 @@ pub mod tests {
                         debug_println!(" = On thread t3 = {:?}", std::thread::current().id());
                         shift3.update_shared(count2.create("t3val"));
 
-                        let _dbgval = get_next_and_state(shift3.item)
-                            .load(Ordering::SeqCst);
+                        let _dbgval = get_next_and_state(shift3.item).load(Ordering::SeqCst);
                         verify_item(shift3.item);
                         debug_println!("Checkt34c: {:?} next: {:?}", shift3.item, _dbgval);
                         debug_println!(" = drop t3 =");
@@ -2687,8 +2652,7 @@ pub mod tests {
                         debug_println!(
                             "Checkt44c: {:?} next: {:?}",
                             shift4.item,
-                            get_next_and_state(shift4.item)
-                                .load(Ordering::SeqCst)
+                            get_next_and_state(shift4.item).load(Ordering::SeqCst)
                         );
                         let _t = std::hint::black_box(shift4);
                         debug_println!(" = drop t4 =");
@@ -2989,8 +2953,7 @@ pub mod tests {
             let light = ArcShiftLight::new(1u8);
             // When running under 'shuttle', we can't do too many steps, so we can't
             // exhaust all MAX_ROOTS-items naturally, we have to cheat like this.
-            get_refcount(light.item)
-                .fetch_add(MAX_ROOTS - 2, Ordering::SeqCst);
+            get_refcount(light.item).fetch_add(MAX_ROOTS - 2, Ordering::SeqCst);
             for _ in 0..10 {
                 temp.push(light.clone());
                 atomic::spin_loop();
@@ -3130,18 +3093,7 @@ pub mod tests {
     fn generic_thread_fuzzing_all() {
         #[cfg(any(loom, feature = "shuttle"))]
         const COUNT: u64 = 10000;
-        let statics = [
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "6",
-            "7",
-            "8",
-            "9",
-            "0",
-        ];
+        let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
         #[cfg(not(any(loom, miri, feature = "shuttle")))]
         const COUNT: u64 = 100000;
         for i in 0..COUNT {
@@ -3153,7 +3105,7 @@ pub mod tests {
                 debug_println!("--- Seed {} ---", i);
                 run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
                     counter += 1;
-                    owner_ref.create(statics[counter%10])
+                    owner_ref.create(statics[counter % 10])
                 });
                 owner.validate();
             });

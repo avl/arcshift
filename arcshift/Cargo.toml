@@ -15,10 +15,15 @@ categories = ["memory-management", "data-structures"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dependencies]
+# Feature only intended for development
 shuttle = {version = "0.7", optional = true}
 
 [features]
+# Feature to enable extra validation, at a memory and performance cost.
+# Only intended for internal use, for verification.
 validate = []
+# Feature to enable extra debug output on stdout.
+# Only intended for internal use, for verification and troubleshooting.
 debug = []
 
 [target.'cfg(loom)'.dependencies]
