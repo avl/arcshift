@@ -335,7 +335,7 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
             // SAFETY:
             // curitem is always a pointer reachable through the next-chain beginning at
             // self.item, and is thus always a valid pointer.
-            let item = unsafe { &*curitem };
+
             let Some(next) = Self::load_nontentative_next(curitem) else {
                 atomic::spin_loop();
                 continue;
@@ -348,17 +348,17 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
                 atomic::spin_loop();
                 continue;
             }
-            let count = item.refcount.load(Ordering::Acquire);
+            let count = get_refcount(curitem).load(Ordering::Acquire);
             let _rootcount = count & (MAX_ROOTS - 1);
             debug_println!(
                 "ArcShiftLight {:?} clone count: {} (rootcount: {})",
-                item as *const ItemHolder<T>,
+                curitem,
                 count,
                 _rootcount
             );
             assert_ne!(count, 0);
             Self::verify_count(count);
-            match item.refcount.compare_exchange(
+            match get_refcount(curitem).compare_exchange(
                 count,
                 count + 1,
                 Ordering::Release,
@@ -420,7 +420,7 @@ impl<T: 'static> ArcShiftLight<T> {
                 if strength > 1 {
                     // SAFETY:
                     // self.item is always a valid pointer
-                    let count =unsafe{&*self.item}.refcount.fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                    let count =get_refcount(self.item).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
                     debug_println!("ArcShiftLight::reload, next = {:?}, adjusting count {} -> {}", self.item, count, count.wrapping_sub(MAX_ROOTS-1));
                     assert!(count >= MAX_ROOTS);
                 }
@@ -428,7 +428,7 @@ impl<T: 'static> ArcShiftLight<T> {
             }
             // SAFETY:
             // self.item is always a valid pointer
-            let count = unsafe{&*self.item}.refcount.fetch_sub(strength, Ordering::SeqCst);
+            let count = get_refcount(self.item).fetch_sub(strength, Ordering::SeqCst);
             debug_println!("ArcShiftLight::reload, next = {:?}, releasing {} -> {}", next, count, count.wrapping_sub(strength));
             assert!(count >= strength);
             if count == strength {
@@ -460,7 +460,7 @@ impl<T: 'static> ArcShiftLight<T> {
     fn load_nontentative_next(curitem: *const ItemHolder<T>) -> Option<*const ItemHolder<T>> {
         // SAFETY:
         // curitem is a valid pointer
-        let next = unsafe { &*curitem }.next_and_state.load(Ordering::Acquire);
+        let next = get_next_and_state(curitem).load(Ordering::Acquire);
 
         debug_println!(
             "load_nontentative_next upgrade {:?}, next: {:?} = {:?}",
@@ -471,7 +471,7 @@ impl<T: 'static> ArcShiftLight<T> {
         if get_state(next) == Some(ItemStateEnum::SupersededByTentative) {
             // SAFETY:
             // curitem is a valid pointer
-            match unsafe { &*curitem }.next_and_state.compare_exchange(
+            match get_next_and_state(curitem).compare_exchange(
                 next,
                 decorate(next, ItemStateEnum::Superseded) as *mut _,
                 Ordering::SeqCst,
@@ -507,10 +507,6 @@ impl<T: 'static> ArcShiftLight<T> {
         // self.item is always a valid pointer
         let mut curitem = self.item;
         loop {
-            // SAFETY:
-            // curitem is a pointer reachable through the next-chain beginning at self.item,
-            // and is thus always a valid pointer.
-            let item = unsafe { &*curitem };
             let Some(next) = Self::load_nontentative_next(curitem) else {
                 atomic::spin_loop();
                 continue;
@@ -534,7 +530,7 @@ impl<T: 'static> ArcShiftLight<T> {
                 continue;
             }
 
-            let _precount = item.refcount.fetch_add(MAX_ROOTS, Ordering::Acquire);
+            let _precount = get_refcount(curitem).fetch_add(MAX_ROOTS, Ordering::Acquire);
             atomic::fence(Ordering::SeqCst);
             debug_println!(
                 "Promote {:?}, prev count: {}, new count {}",
@@ -544,7 +540,7 @@ impl<T: 'static> ArcShiftLight<T> {
             );
             assert!(_precount >= 1);
             let Some(next) = Self::load_nontentative_next(curitem) else {
-                let _precount = item.refcount.fetch_sub(MAX_ROOTS, Ordering::Release);
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::Release);
                 assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
                 atomic::spin_loop();
                 continue;
@@ -557,7 +553,7 @@ impl<T: 'static> ArcShiftLight<T> {
                     next
                 );
 
-                let _precount = item.refcount.fetch_sub(MAX_ROOTS, Ordering::Release);
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::Release);
                 assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
                 curitem = undecorate(next);
                 atomic::spin_loop();
@@ -591,7 +587,7 @@ impl<T> Drop for ArcShift<T> {
         verify_item(self.item);
         // SAFETY:
         // self.item is always a valid pointer
-        let _tc = unsafe { &*self.item }.refcount.load(Ordering::SeqCst);
+        let _tc = get_refcount(self.item).load(Ordering::SeqCst);
         verify_item(self.item);
         debug_println!("ArcShift::drop({:?}), count = {}", self.item, _tc);
 
@@ -599,7 +595,7 @@ impl<T> Drop for ArcShift<T> {
         debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
         // SAFETY:
         // self.item is always a valid pointer
-        let _t = unsafe { &*self.item }.next_and_state.load(Ordering::SeqCst);
+        let _t = get_next_and_state(self.item).load(Ordering::SeqCst);
         drop_item(self.item, MAX_ROOTS);
         debug_println!("ArcShift::drop({:?}) DONE", self.item);
     }
@@ -624,21 +620,24 @@ static MAGIC: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0
 
 impl<T: 'static> ItemHolder<T> {
     #[cfg_attr(test, mutants::skip)]
-    fn verify(&self) {
+    fn verify(ptr: *const ItemHolder<T>) {
         #[cfg(feature = "validate")]
         {
-            assert_is_undecorated(self as *const ItemHolder<T>);
+            assert_is_undecorated(ptr);
 
-            let magic1 = self.magic1.load(Ordering::SeqCst);
-            let magic2 = self.magic2.load(Ordering::SeqCst);
+            let atomic_magic1 = unsafe { &*addr_of!( (*ptr).magic1) };
+            let atomic_magic2 = unsafe { &*addr_of!( (*ptr).magic2) };
+
+            let magic1 = atomic_magic1.load(Ordering::SeqCst);
+            let magic2 = atomic_magic2.load(Ordering::SeqCst);
             if magic1 >> 16 != 0xbeefbeefbeef {
                 eprintln!(
                     "Internal error - bad magic1 in {:?}: {} ({:x})",
-                    self as *const ItemHolder<T>, magic1, magic1
+                    ptr, magic1, magic1
                 );
                 debug_println!(
                     "Internal error - bad magic1 in {:?}: {} ({:x})",
-                    self as *const ItemHolder<T>,
+                    ptr,
                     magic1,
                     magic1
                 );
@@ -649,11 +648,11 @@ impl<T: 'static> ItemHolder<T> {
             if magic2 >> 16 != 0x123412341234 {
                 eprintln!(
                     "Internal error - bad magic2 in {:?}: {} ({:x})",
-                    self as *const ItemHolder<T>, magic2, magic2
+                    ptr, magic2, magic2
                 );
                 debug_println!(
                     "Internal error - bad magic2 in {:?}: {} ({:x})",
-                    self as *const ItemHolder<T>,
+                    ptr,
                     magic2,
                     magic2
                 );
@@ -668,7 +667,7 @@ impl<T: 'static> ItemHolder<T> {
                 if m1 != 0x8111 || m2 != 0x8111 {
                     eprintln!(
                         "Internal error - bad magic in {:?} {:x} {:x}",
-                        self as *const ItemHolder<T>, m1, m2
+                        ptr, m1, m2
                     );
                 }
             }
@@ -679,11 +678,11 @@ impl<T: 'static> ItemHolder<T> {
                 if diff != 0 {
                     eprintln!(
                         "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
-                        self as *const ItemHolder<T>, magic1, magic1, magic2, magic2
+                        ptr, magic1, magic1, magic2, magic2
                     );
                     debug_println!(
                         "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
-                        self as *const ItemHolder<T>,
+                        ptr,
                         magic1,
                         magic1,
                         magic2,
@@ -694,14 +693,15 @@ impl<T: 'static> ItemHolder<T> {
                 }
                 let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
                 let magic = magic as i64 as u64;
-                self.magic1
+                atomic_magic1
                     .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-                self.magic2
+                atomic_magic2
                     .fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-                self.magic1.fetch_or(magic, Ordering::SeqCst);
-                self.magic2.fetch_or(magic, Ordering::SeqCst);
+                atomic_magic1.fetch_or(magic, Ordering::SeqCst);
+                atomic_magic2.fetch_or(magic, Ordering::SeqCst);
             }
         }
+        _ = ptr;
     }
 }
 
@@ -721,14 +721,14 @@ fn verify_item<T>(_ptr: *const ItemHolder<T>) {
         if x.is_null() {
             return;
         }
-        unsafe { &*x }.verify()
+        ItemHolder::verify(x)
     }
 }
 
 #[cfg_attr(test, mutants::skip)] // This is only used for validation and test, it has no behaviour
 impl<T> Drop for ItemHolder<T> {
     fn drop(&mut self) {
-        self.verify();
+        ItemHolder::verify(self as *mut ItemHolder<T>);
         debug_println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T>);
         #[cfg(feature = "validate")]
         {
@@ -831,11 +831,10 @@ impl<T: 'static> Clone for ArcShift<T> {
         // `self.item` is never null, and is always a valid pointer.
         // We always already have a refcount of at least 1 on entry to clone, and nothing
         // can take that away, since &mut self is needed to decrement refcount.
-        let rescount = unsafe {
-            (*self.item)
-                .refcount
-                .fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst)
-        };
+        let rescount =
+            get_refcount(self.item)
+                .fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst);
+
         atomic::fence(Ordering::SeqCst);
         debug_println!(
             "Clone - adding count to {:?}, resulting in count {}",
@@ -890,8 +889,7 @@ impl<T: 'static> ArcShift<T> {
             );
             // SAFETY:
             // self.item is always a valid pointer
-            let count = unsafe { &*self_item }
-                .refcount
+            let count = get_refcount(self_item)
                 .fetch_sub(strength, atomic::Ordering::SeqCst);
             debug_println!(
                 "drop_impl_ret on {:?} - count: {} -> {}",
@@ -905,7 +903,7 @@ impl<T: 'static> ArcShift<T> {
                 let new_item =
                     // SAFETY:
                     // self_item is always a valid pointer
-                    undecorate(unsafe { &*self_item }.next_and_state.load(Ordering::SeqCst));
+                    undecorate(get_next_and_state(self_item).load(Ordering::SeqCst));
                 verify_item(new_item);
                 verify_item(self_item);
                 if new_item.is_null() {
@@ -952,8 +950,7 @@ impl<T: 'static> ArcShift<T> {
             debug_println!("drop_impl to reduce count {:?} by {}", self_item, strength);
             // SAFETY:
             // self_item is always a valid pointer
-            let count = unsafe { &*self_item }
-                .refcount
+            let count = get_refcount(self_item)
                 .fetch_sub(strength, atomic::Ordering::SeqCst);
             debug_println!(
                 "drop_impl on {:?} - count: {} -> {}",
@@ -967,7 +964,7 @@ impl<T: 'static> ArcShift<T> {
                 let new_item =
                     // SAFETY:
                     // self_item is always a valid pointer
-                    undecorate(unsafe { &*self_item }.next_and_state.load(Ordering::SeqCst));
+                    undecorate(get_next_and_state(self_item).load(Ordering::SeqCst));
 
                 verify_item(new_item);
                 verify_item(self_item);
@@ -1066,10 +1063,10 @@ impl<T: 'static> ArcShift<T> {
 
         // SAFETY:
         // We always have refcount for self.item, and it is guaranteed valid
-        if unsafe { &*self.item }.refcount.load(Ordering::SeqCst) == MAX_ROOTS {
+        if get_refcount(self.item).load(Ordering::SeqCst) == MAX_ROOTS {
             // SAFETY:
             // We always have refcount for self.item, and it is guaranteed valid
-            if !undecorate(unsafe { &*self.item }.next_and_state.load(Ordering::SeqCst)).is_null() {
+            if !undecorate(get_next_and_state(self.item).load(Ordering::SeqCst)).is_null() {
                 return None;
             }
             // SAFETY:
@@ -1123,7 +1120,7 @@ impl<T: 'static> ArcShift<T> {
             // 'candidate' is either 'self.item', or one of the pointers in the linked list
             // chain. Each node in the chain has a refcount on the next node in the chain,
             // and self.item has a refcount on the first node. So all the nodes are valid.
-            let curnext = unsafe { &*candidate }.next_and_state.load(Ordering::SeqCst);
+            let curnext = get_next_and_state(candidate).load(Ordering::SeqCst);
 
             let expect = if is_superseded_by_tentative(get_state(curnext)) {
                 curnext
@@ -1138,7 +1135,7 @@ impl<T: 'static> ArcShift<T> {
             // Candidate is still valid here, see above
             // Write a dummy-pointer, so that we can detect if it has been actually used or not,
             // and clean up at next update if not.
-            match unsafe { &*candidate }.next_and_state.compare_exchange(
+            match get_next_and_state(candidate).compare_exchange(
                 expect,
                 decorate(new_ptr, ItemStateEnum::SupersededByTentative) as *mut ItemHolder<T>,
                 atomic::Ordering::SeqCst,
@@ -1207,7 +1204,7 @@ impl<T: 'static> ArcShift<T> {
         verify_item(cand);
         // SAFETY:
         // `cand` is a valid pointer.
-        let count = unsafe { &*cand }.refcount.load(Ordering::SeqCst);
+        let count = get_refcount(cand).load(Ordering::SeqCst);
 
         verify_item(cand);
         // SAFETY:
@@ -1239,14 +1236,14 @@ impl<T: 'static> ArcShift<T> {
                     Ok(_) => {
                         // SAFETY:
                         // `cand` is a valid pointer.
-                        let count = unsafe { &*cand }.refcount.load(Ordering::SeqCst);
+                        let count = get_refcount(cand).load(Ordering::SeqCst);
                         debug_println!("Early drop count: {:?} : {}", next_ptr, count);
                         if count >= MAX_ROOTS {
                             debug_println!("Simultaneous count increase detected {:?}", cand);
                             // Ok, someone must have increased the refcount just before we did compare_exchange. Undo the compare_exchange
                             // SAFETY:
                             // `cand` is a valid pointer.
-                            match unsafe { &*cand }.next_and_state.compare_exchange(
+                            match get_next_and_state(cand).compare_exchange(
                                 decorate(next_ptr, Dropped) as *mut _,
                                 decorate(next_ptr, Superseded) as *mut _,
                                 Ordering::SeqCst,
@@ -1267,9 +1264,6 @@ impl<T: 'static> ArcShift<T> {
                             // Ok, we're the last owner. We can drop the payload
                             verify_item(cand);
 
-                            //let _dbg = unsafe{&*undecorate(next_ptr)}.refcount.fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                            //debug_println!("Drop-opt drop_in_place({:?}) (reduce {:?} {} -> {})", cand, next_ptr, _dbg, _dbg - (MAX_ROOTS-1));;
-                            //assert!(_dbg > MAX_ROOTS - 1);
                             // SAFETY:
                             // `cand` is a valid pointer, which we are allowed to drop the contents //of
                             // payload for.
@@ -1336,8 +1330,7 @@ impl<T: 'static> ArcShift<T> {
 
                 // SAFETY:
                 // `new_self` is a valid pointer.
-                let _dbgprev = unsafe { &*new_self }
-                    .refcount
+                let _dbgprev = get_refcount(new_self)
                     .fetch_add(MAX_ROOTS, Ordering::SeqCst);
                 atomic::fence(Ordering::SeqCst);
                 debug_println!(
@@ -1360,8 +1353,7 @@ impl<T: 'static> ArcShift<T> {
             verify_item(undecorate(next));
             // SAFETY:
             // 'next' is always a valid pointer
-            let _count = unsafe { &*undecorate(next) }
-                .refcount
+            let _count = get_refcount(undecorate(next))
                 .load(Ordering::SeqCst);
             debug_println!(
                 "Moving from {:?} to {:?} ({:?} has count {})",
@@ -1392,8 +1384,7 @@ impl<T: 'static> ArcShift<T> {
                 );
                 // SAFETY:
                 // `new_self` is a valid pointer.
-                let _t = unsafe { &*new_self }
-                    .refcount
+                let _t = get_refcount(new_self)
                     .fetch_sub(strength, Ordering::SeqCst);
                 assert!(_t > strength);
                 debug_println!(
@@ -1410,8 +1401,7 @@ impl<T: 'static> ArcShift<T> {
                 debug_println!("reload(3) to reduce count {:?} by {}", cand, MAX_ROOTS - 1);
                 // SAFETY:
                 // `cand` is a valid pointer.
-                let count = unsafe { &*cand }
-                    .refcount
+                let count = get_refcount(cand)
                     .fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
                 debug_println!(
                     "{:?} release refcount {} -> {}",
@@ -1425,7 +1415,7 @@ impl<T: 'static> ArcShift<T> {
                     let newcand =
                         // SAFETY:
                         // `cand` is a valid pointer.
-                        undecorate(unsafe { &*cand }.next_and_state.load(Ordering::SeqCst));
+                        undecorate(get_next_and_state(cand).load(Ordering::SeqCst));
 
                     // NOTE: Because we now uniquely own 'cand', nothing can do an 'anti-garbage' drop of
                     // a tentative 'cand.next_and_state', since that would require access to 'cand', which no
@@ -1462,11 +1452,11 @@ impl<T: 'static> ArcShift<T> {
                 let newcand = undecorate(
                     // SAFETY:
                     // cand is a valid pointer
-                    unsafe { &*cand }.next_and_state.load(Ordering::SeqCst));
+                    get_next_and_state(cand).load(Ordering::SeqCst));
                 if early_dropped {
                     // SAFETY:
                     // newcand is a valid pointer
-                    let _dbg = unsafe { &*newcand }.refcount.fetch_add(1, Ordering::SeqCst);
+                    let _dbg = get_refcount(newcand).fetch_add(1, Ordering::SeqCst);
                     debug_println!(
                         "Early drop, creating strong+weak ref to {:?} by going {} -> {}",
                         newcand,
@@ -1477,7 +1467,7 @@ impl<T: 'static> ArcShift<T> {
 
                 // SAFETY:
                 // cand is a valid pointer
-                let count = unsafe { &*cand }.refcount.fetch_sub(1, Ordering::SeqCst);
+                let count = get_refcount(cand).fetch_sub(1, Ordering::SeqCst);
                 assert!(count >= 1);
                 debug_println!(
                     "early-drop, no-drop-case reducing {} -> {} for {:?}",
@@ -1504,7 +1494,7 @@ impl<T: 'static> ArcShift<T> {
                     } else if early_dropped {
                         // SAFETY:
                         // newcand is a valid pointer
-                        let _dbg = unsafe { &*newcand }.refcount.fetch_sub(1, Ordering::SeqCst);
+                        let _dbg = get_refcount(newcand).fetch_sub(1, Ordering::SeqCst);
                         assert!(_dbg > 1);
                         debug_println!(
                             "Adjusting[1] ref to {:?} by going {} -> {}",
@@ -1514,7 +1504,6 @@ impl<T: 'static> ArcShift<T> {
                         );
                         strength = MAX_ROOTS;
                     } else {
-                        //let _dbg = unsafe { &*newcand }.refcount.fetch_add(MAX_ROOTS-1, Ordering::SeqCst);
                         debug_println!("Adjusting[2] ref to {:?} ", newcand);
                         strength = 1;
                     }
@@ -1585,8 +1574,8 @@ impl<T: 'static> ArcShift<T> {
         debug_println!("Getting {:?}", self.item);
         // SAFETY:
         // `self.item` is always a valid pointer
-        let cand: *const ItemHolder<T> = unsafe { &*self.item }
-            .next_and_state
+        let cand: *const ItemHolder<T> =
+            get_next_and_state(self.item)
             .load(atomic::Ordering::Relaxed)
             as *const ItemHolder<T>;
         if !cand.is_null() {
@@ -1615,8 +1604,7 @@ impl<T: 'static> ArcShift<T> {
         debug_println!("Getting {:?}", self.item);
         // SAFETY:
         // `self.item` is always a valid pointer
-        let cand: *const ItemHolder<T> = unsafe { &*self.item }
-            .next_and_state
+        let cand: *const ItemHolder<T> = get_next_and_state(self.item)
             .load(atomic::Ordering::Relaxed)
             as *const ItemHolder<T>;
         if !cand.is_null() {
@@ -1661,15 +1649,14 @@ impl<T: 'static> ArcShift<T> {
             // SAFETY:
             // curitem is a pointer reachable through the next-chain from self.item,
             // and is thus a valid pointer.
-            let count = unsafe { &*curitem }.refcount.load(Ordering::SeqCst);
+            let count = get_refcount(curitem).load(Ordering::SeqCst);
 
             Self::verify_count(count);
 
             // SAFETY:
             // curitem is a pointer reachable through the next-chain from self.item,
             // and is thus a valid pointer.
-            if unsafe { &*curitem }
-                .refcount
+            if get_refcount(curitem)
                 .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::SeqCst)
                 .is_err()
             {
@@ -1712,7 +1699,7 @@ fn drop_payload_and_holder<T: 'static>(ptr: *const ItemHolder<T>) -> bool {
         // ptr must be valid, since this is a precondition for using this method.
         // This method does not need unsafe, since it is private, and the scope for
         // unsafety is within the entire crate.
-        unsafe { &*addr_of!((*ptr).next_and_state) }.load(Ordering::SeqCst),
+        get_next_and_state(ptr).load(Ordering::SeqCst),
     )) {
         debug_println!("Dropping holder {:?}, but payload was already dropped", ptr);
         // SAFETY:
@@ -1744,7 +1731,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
         // SAFETY:
         // old_ptr must be a valid pointer, required by caller. 'drop_root_item' is not unsafe because
         // it is not public.
-        unsafe { &*addr_of!((*old_ptr).refcount) }.fetch_sub(strength, atomic::Ordering::SeqCst);
+        get_refcount(old_ptr).fetch_sub(strength, atomic::Ordering::SeqCst);
     atomic::fence(Ordering::SeqCst);
     debug_println!(
         "Drop-root-item {:?}, count {} -> {}",
@@ -1760,7 +1747,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
         // old_ptr must be a valid pointer
         // It is safe to access 'old_ptr.next_and_state' here, since nothing can do a anti-garbage
         // drop of it, since nothing else has access to '*old_ptr'.
-        let next = unsafe { &*addr_of!((*old_ptr).next_and_state) }.load(atomic::Ordering::SeqCst);
+        let next = get_next_and_state(old_ptr).load(atomic::Ordering::SeqCst);
         let strong = drop_payload_and_holder(old_ptr);
         if !undecorate(next).is_null() {
             debug_println!(
@@ -2766,8 +2753,7 @@ pub mod tests {
                         debug_println!(" = On thread t3 = {:?}", std::thread::current().id());
                         shift3.update_shared(count2.create("t3val"));
 
-                        let _dbgval = unsafe { &*shift3.item }
-                            .next_and_state
+                        let _dbgval = get_next_and_state(shift3.item)
                             .load(Ordering::SeqCst);
                         verify_item(shift3.item);
                         debug_println!("Checkt34c: {:?} next: {:?}", shift3.item, _dbgval);
@@ -2784,8 +2770,7 @@ pub mod tests {
                         debug_println!(
                             "Checkt44c: {:?} next: {:?}",
                             shift4.item,
-                            unsafe { &*shift4.item }
-                                .next_and_state
+                            get_next_and_state(shift4.item)
                                 .load(Ordering::SeqCst)
                         );
                         let _t = std::hint::black_box(shift4);
@@ -3087,8 +3072,7 @@ pub mod tests {
             let light = ArcShiftLight::new(1u8);
             // When running under 'shuttle', we can't do too many steps, so we can't
             // exhaust all MAX_ROOTS-items naturally, we have to cheat like this.
-            unsafe { &*light.item }
-                .refcount
+            get_refcount(light.item)
                 .fetch_add(MAX_ROOTS - 2, Ordering::SeqCst);
             for _ in 0..10 {
                 temp.push(light.clone());
