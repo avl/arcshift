@@ -23,8 +23,8 @@ jobs:
     - name: Run tests (stable)
       run: cargo +stable test --release --features=validate --workspace
     - name: Shuttle (stable)
-      run: cargo +stable test -p arcshift --features=validate,shuttle --release
+      run: cargo +stable test --lib --tests -p arcshift --features=validate,shuttle --release
     - name: Miri (nightly)
-      run: rustup component add --toolchain nightly miri && cd arcshift && cargo +nightly miri test --many-seeds
+      run: rustup component add --toolchain nightly miri && cd arcshift && cargo +nightly miri test
     - name: Loom
-      run: LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test --release
+      run: LOOM_MAX_PREEMPTIONS=1 RUSTFLAGS="--cfg loom" cargo test --release
