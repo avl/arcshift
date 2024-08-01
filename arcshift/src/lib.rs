@@ -1695,7 +1695,6 @@ pub mod tests {
     #![allow(unused_imports)]
     use super::*;
     use crossbeam_channel::bounded;
-    use log::debug;
     use std::alloc::Layout;
     use std::fmt::Debug;
     use std::hash::{Hash, Hasher};

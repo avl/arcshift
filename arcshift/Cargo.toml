@@ -1,14 +1,20 @@
 [package]
 name = "arcshift"
 version = "0.1.0"
+documentation = "https://docs.rs/arcshift/"
+homepage = "https://github.com/avl/arcshift/"
+repository = "https://github.com/avl/arcshift/"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Replacement for std::sync::Arc<T> that supports updating the value."
+readme = "../README.md"
+keywords = ["arc", "atomic"]
+categories = ["memory-management", "data-structures"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dependencies]
-log = "0.4.22"
 shuttle = {version = "0.7", optional = true}
 
 [features]

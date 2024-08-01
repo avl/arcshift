@@ -141,7 +141,7 @@ Between any two lines of code, hundreds of other lines of code could execute.
 
 Arcshift uses copious amounts of unsafe rust code, and lock free algorithms.
 These are techniques that are well known to be very hard to get right.
-Because of this, Arcshift needed an extensive test-suite:
+Because of this, Arcshift needed an extensive test-suite.
 
 ## Unit tests
 Arcshift is verified by a large number of unit tests.
@@ -152,21 +152,6 @@ of different operations, on different threads.
 
 There is also an exhaustive set of tests which test all combinations of ArcShift-operations,
 on three concurrent threads.
-
-
-## Using 'Loom'
-The excellent rust crate 'Loom' is used to verify that there are no race conditions that
-can cause failures. See <https://crates.io/crates/loom>.
-
-## Using 'Shuttle'
-Shuttle is another excellent test framework for writing multi-threaded code, similar to loom.
-See <https://crates.io/crates/shuttle>.
-
-## Using 'Miri'
-Miri is used to verify that the unsafe code in Arcshift follows the 'stacked borrows' rules.
-Using the '--many-seeds' option to miri allows finding race conditions in a similar fashion
-to 'loom' and 'shuttle'. However, the slower execution speed of code under miri, and the fact
-that the search is not exhaustive like 'loom', means 'shuttle' and 'loom' still have their place.
 
 
 ## Using built-in validation feature
@@ -346,16 +331,16 @@ fences (loom::sync::atomic::fence) can be used to achieve the same result.
 
 ## Shuttle is a fantastic tool
 
-Loom is a tool to detect threading errors in rust code. See https://crates.io/crates/shuttle .
+Shuttle is a tool to detect threading errors in rust code. See https://crates.io/crates/shuttle .
 
 Shuttle is a little bit like loom, but uses randomized scheduling instead of exhaustively trying
-all possible interleavings. In contrast with loom, shuttle *only* supports SeqCst ordering.
+all possible interleavings. In contrast with loom, shuttle *only* supports SeqCst ordering. 
 
 This means that shuttle is less powerful than loom. However, it can handle larger models, since
 it is faster and less ambitious. Just like loom it supports replaying found failing execution traces.
 
 
-## Cargo mutants is a fantastic tool
+## Cargo mutants is really cool
 
 Cargo mutants is a tool which can be used to ensure that a test bench has enough coverage.
 
@@ -363,6 +348,11 @@ It works by modifying the code under test, and ensuring that the test bench fail
 
 Having code pass 'cargo mutants' is a lot of work. First of all, test coverage must be near 100%
 But this is not enough - the test bench must also fail under the modifications done by cargo mutants.
+
+Cargo mutants is quite hard to work with, but it does definitely bring something unique to the table.
+For smaller code bases with very high ideals for correctness (like arcshift), it provides a lot of value.
+However, I'm not convinced having a policy of 'always pass cargo mutants check' is suitable for
+all code bases.
 
 ### Cargo mutants, challenge #1
 One challenge I had with cargo mutants was with the following code:
@@ -405,6 +395,47 @@ fail the test suite. However, triggering such an overflow would require creating
 of ArcShift. Unfortunately, this requires at least 280 TB of RAM.
 
 In the end, I just added an exception for this logic.
+
+## Thoughts on focusing too much on failing test cases
+
+Having a very exhaustive test bench is of great value. However, a problem that I encountered
+at least twice while working on Arcshift, is that I lost track of the big picture, and entered a cycle of:
+
+1. Run tests
+2. Test fails
+3. Fix particular failure of test case by adding more code
+4. Repeat from #1
+
+After a few iterations of the above loop, the code became very complex, and I was no longer really
+sure of what invariants were supposed to hold.
+
+It doesn't matter how comprehensive your test-suite is if you can never get it to pass :-) .
+
+One part of the design that I should have nailed down instead of chasing breaking test cases was
+the semantics of weak/strong refcounts.
+
+In arcshift, the rules are like this:
+
+1: Each ArcShiftLight-instance holds a weak (value 1) refcount on its primary node.
+2: Each ArcShift-instance holds a strong (value 2^19) refcount on its primary node.
+3: Each node with a live (non-dropped) payload holds a strong refcount on its next node (if it has one).
+4: Each node with a dropped payload must have a next node.
+5: Each node with a dropped payload holds a weak refcount on its next node.
+6: When attaining a strong reference to a node, its 'next' pointer must be checked after increasing the refcount.
+   If 'next' has a value, it must be used instead (decreasing and increasing refcounts appropriately).
+7: When deciding to drop a payload, the node must be marked as dropped (affecting the next-ptr), and then 
+   the refcount must be checked. If there are strong counts, the drop must be undone. Rule 6&7 ensure
+   that there can never be strong links to a node with dropped payload
+8: Because a node with a non-dropped payload always has a strong link to the next node, that next
+   node cannot be dropped. By induction, all nodes 'to the right of' a non-dropped node are also non-dropped.
+
+Before nailing these rules down, I had a very hard time fixing bugs where ArcShift and ArcShiftLight
+instances were being reloaded and dropped simultaneously.
+
+
+
+
+
 
 
 
