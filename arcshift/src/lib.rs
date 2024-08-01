@@ -502,7 +502,7 @@ impl<T: 'static> ArcShiftLight<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        ArcShift::update_shared_impl(self.item, new_ptr);
+        ArcShift::update_shared_impl(self.item, new_ptr, true);
     }
 
     /// Update the contents of this ArcShiftLight, and all other instances cloned from this
@@ -522,7 +522,17 @@ impl<T: 'static> ArcShiftLight<T> {
     /// last remaining instance, the old value that is being replaced will be dropped
     /// before this function returns.
     pub fn update(&mut self, new_payload: T) {
-        self.update_shared(new_payload);
+        let item = ItemHolder {
+            #[cfg(feature = "validate")]
+            magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+            #[cfg(feature = "validate")]
+            magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+            payload: new_payload,
+            next_and_state: atomic::AtomicPtr::default(),
+            refcount: atomic::AtomicUsize::new(MAX_ROOTS),
+        };
+        let new_ptr = Box::into_raw(Box::new(item));
+        ArcShift::update_shared_impl(self.item, new_ptr, false);
         self.reload();
     }
     /// Update the contents of this ArcShiftLight, and all other instances cloned from this
@@ -546,7 +556,8 @@ impl<T: 'static> ArcShiftLight<T> {
     /// last remaining instance, the old value that is being replaced will be dropped
     /// before this function returns.
     pub fn update_box(&mut self, new_payload: Box<T>) {
-        self.update_shared_box(new_payload);
+        let new_ptr = ArcShift::from_box_impl(new_payload);
+        ArcShift::update_shared_impl(self.item, new_ptr as *mut _, false);
         self.reload();
     }
 
@@ -566,7 +577,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
         let new_ptr = ArcShift::from_box_impl(new_payload);
-        ArcShift::update_shared_impl(self.item, new_ptr as *mut _);
+        ArcShift::update_shared_impl(self.item, new_ptr as *mut _, true);
     }
 
     /// Load 'next'.
@@ -1196,7 +1207,7 @@ impl<T: 'static> ArcShift<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        Self::update_shared_impl(self.item, new_ptr);
+        Self::update_shared_impl(self.item, new_ptr, true);
     }
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -1214,9 +1225,9 @@ impl<T: 'static> ArcShift<T> {
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
         let new_ptr = Self::from_box_impl(new_payload);
-        Self::update_shared_impl(self.item, new_ptr as *mut _);
+        Self::update_shared_impl(self.item, new_ptr as *mut _, true);
     }
-    fn update_shared_impl(self_item: *const ItemHolder<T>, new_ptr: *mut ItemHolder<T>) {
+    fn update_shared_impl(self_item: *const ItemHolder<T>, new_ptr: *mut ItemHolder<T>, make_tentative: bool) {
         debug_println!("Upgrading {:?} -> {:?} ", self_item, new_ptr);
         verify_item(new_ptr);
         let mut candidate = self_item;
@@ -1235,9 +1246,15 @@ impl<T: 'static> ArcShift<T> {
             verify_item(candidate);
             verify_item(new_ptr);
 
+            let new_decorated = if make_tentative {
+                decorate(new_ptr, ItemStateEnum::SupersededByTentative)
+            } else {
+                decorate(new_ptr, ItemStateEnum::Superseded)
+            };
+
             match get_next_and_state(candidate).compare_exchange(
                 expect,
-                decorate(new_ptr, ItemStateEnum::SupersededByTentative) as *mut ItemHolder<T>,
+                new_decorated as *mut ItemHolder<T>,
                 atomic::Ordering::SeqCst,
                 atomic::Ordering::SeqCst,
             ) {
@@ -1251,7 +1268,7 @@ impl<T: 'static> ArcShift<T> {
                         "Did replace next of {:?} (={:?}) with {:?} ",
                         candidate,
                         expect,
-                        decorate(new_ptr, ItemStateEnum::SupersededByTentative)
+                        new_decorated
                     );
                     if is_superseded_by_tentative(get_state(expect)) {
                         // If we get here, then the dummy-optimization, allowing us to reduce
@@ -1262,19 +1279,20 @@ impl<T: 'static> ArcShift<T> {
                         );
                         drop_item(undecorate(expect));
                     }
-                    compile_error!("The below doesn't work, since 'new_ptr' can  be tentative. But if we make it non-tentative, then the anti-garbage optimization dies")
-                    loop {
-                        let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
-                            atomic::spin_loop();
-                            continue;
-                        };
-                        if early_dropped {
-                            debug_println!("\n----------------------------------------------------------\n");
-                            let _dbg = get_refcount(new_ptr).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                            debug_println!("Early_drop_adjust for {:?}.{:?} {} -> {}", candidate, new_ptr, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
-                            assert!(_dbg > MAX_ROOTS-1);
+                    if !make_tentative {
+                        loop {
+                            let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
+                                atomic::spin_loop();
+                                continue;
+                            };
+                            if early_dropped {
+                                debug_println!("\n----------------------------------------------------------\n");
+                                let _dbg = get_refcount(new_ptr).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                                debug_println!("Early_drop_adjust for {:?}.{:?} {} -> {}", candidate, new_ptr, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
+                                assert!(_dbg > MAX_ROOTS-1);
+                            }
+                            break;
                         }
-                        break;
                     }
 
                     return;
@@ -1284,6 +1302,19 @@ impl<T: 'static> ArcShift<T> {
                     verify_item(new_ptr);
                     if !is_superseded_by_tentative(get_state(other)) {
 
+                        loop {
+                            let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
+                                atomic::spin_loop();
+                                continue;
+                            };
+                            if early_dropped {
+                                debug_println!("\n----------------------------------------------------------\n");
+                                let _dbg = get_refcount(undecorate(other)).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                                debug_println!("Early_drop_adjust2 for {:?}.{:?} {} -> {}", candidate, other, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
+                                assert!(_dbg > MAX_ROOTS-1);
+                            }
+                            break;
+                        }
                         /*let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
                             atomic::spin_loop();
                             continue;
@@ -2460,6 +2491,7 @@ pub mod tests {
     fn generic_3threading_b_all() {
         generic_3threading_b_all_impl(0, 0, 0, None);
     }
+
     fn generic_3threading_b_all_impl(
         skip1: usize,
         skip2: usize,
