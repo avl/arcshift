@@ -13,6 +13,7 @@ shuttle = {version = "0.7", optional = true}
 
 [features]
 validate = []
+debug = []
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"] }
