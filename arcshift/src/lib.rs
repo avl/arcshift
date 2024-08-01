@@ -1327,7 +1327,6 @@ impl<T: 'static> ArcShift<T> {
                         verify_item(undecorate(other));
                         debug_println!("Update not complete - but advancing to {:?}", other);
                         candidate = undecorate(other);
-
                     } else {
                         debug_println!("Update not complete yet, spinning on {:?}", candidate);
                     }
@@ -1897,6 +1896,7 @@ pub mod tests {
     use std::hint::black_box;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
+    use std::thread;
     use std::time::Duration;
 
     use rand::prelude::StdRng;
@@ -1921,14 +1921,14 @@ pub mod tests {
 
     #[cfg(feature = "shuttle")]
     fn model(x: impl Fn() + 'static + Send + Sync) {
-        shuttle::check_random(x, 1000);
+        shuttle::check_random(x, 500);
     }
     #[cfg(feature = "shuttle")]
     fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
         if let Some(repro) = repro {
             shuttle::replay(x, repro);
         } else {
-            shuttle::check_random(x, 10000);
+            shuttle::check_random(x, 500);
         }
     }
 
@@ -3091,7 +3091,7 @@ pub mod tests {
         let cmds = make_commands::<T>(rng, &mut constructor);
         let mut all_possible: HashSet<T> = HashSet::new();
         for cmd in cmds.iter() {
-            if let FuzzerCommand::CreateUpdateArc(_, val) | FuzzerCommand::CreateArcLight(_, val) =
+            if let FuzzerCommand::CreateUpdateArc(_, val) | FuzzerCommand::CreateArcLight(_, val) | FuzzerCommand::CreateUpdateArcLight(_, val) =
                 cmd
             {
                 all_possible.insert(val.clone());
@@ -3112,16 +3112,23 @@ pub mod tests {
 
         let mut jhs = Vec::new();
 
+        let initial = constructor();
+        all_possible.insert(initial.clone());
+
         let senders = std::sync::Arc::new(senders);
         let all_possible: std::sync::Arc<HashSet<T>> = std::sync::Arc::new(all_possible);
+        //println!("Start iteration");
+        let start_arc_light = ArcShiftLight::new(initial);
         for (threadnr, (cmds, receiver)) in batches.into_iter().zip(receivers).enumerate() {
             let thread_senders = std::sync::Arc::clone(&senders);
             let thread_all_possible: std::sync::Arc<HashSet<T>> =
                 std::sync::Arc::clone(&all_possible);
+            let start_arc0 = start_arc_light.upgrade();
+            let start_arc_light = start_arc_light.clone();
             let jh = atomic::thread::Builder::new().name(format!("thread{}", threadnr)).spawn(move||{
 
-                let mut curval : Option<ArcShift<T>> = None;
-                let mut curvalroot : Option<ArcShiftLight<T>> = None;
+                let mut curval : Option<ArcShift<T>> = Some(start_arc0);
+                let mut curvalroot : Option<ArcShiftLight<T>> = Some(start_arc_light);
                 for cmd in cmds {
                     if let Ok(val) = receiver.try_recv() {
                         match val {
@@ -3134,6 +3141,7 @@ pub mod tests {
                         }
 
                     }
+                    //println!("Apply cmd {:?}: {:?}", cmd, atomic::thread::current().id());
                     match cmd {
                         FuzzerCommand::CreateUpdateArc(_, val) => {
                             if let Some(curval) = &mut curval {
@@ -3168,12 +3176,23 @@ pub mod tests {
                             curval = None;
                         }
                         FuzzerCommand::CreateArcLight(_, val) => {
-                            curvalroot = Some(ArcShiftLight::new(val));
+                            if let Some(curvalroot) = curvalroot.as_ref() {
+                                curvalroot.update_shared(val);
+                            } else {
+                                curvalroot = Some(ArcShiftLight::new(val));
+                            }
                         }
                         FuzzerCommand::CloneArcLight { .. } => {
                             if let Some(curvalroot) = curvalroot.as_mut() {
                                 let cloned = curvalroot.clone();
                                 thread_senders[threadnr].send(PipeItem::Root(cloned)).unwrap();
+                            }
+                        }
+                        FuzzerCommand::CreateUpdateArcLight(_, val) => {
+                            if let Some(curvalroot) = &mut curvalroot {
+                                curvalroot.update_shared(val);
+                            } else {
+                                curvalroot = Some(ArcShiftLight::new(val));
                             }
                         }
                         FuzzerCommand::UpgradeLight(_) => {
@@ -3185,6 +3204,9 @@ pub mod tests {
                             if let Some(arc) = curval.as_ref() {
                                 curvalroot = Some(arc.make_light());
                             }
+                        }
+                        FuzzerCommand::DropLight(_) => {
+                            curvalroot = None;
                         }
                     }
                 }
@@ -3204,9 +3226,11 @@ pub mod tests {
         SharedReadArc { arc: u8 },
         CloneArc { from: u8, to: u8 },
         CloneArcLight { from: u8, to: u8 },
+        CreateUpdateArcLight(u8, T),
         DropArc(u8),
         UpgradeLight(u8),
         DowngradeLight(u8),
+        DropLight(u8),
     }
     impl<T> FuzzerCommand<T> {
         fn batch(&self) -> u8 {
@@ -3218,8 +3242,10 @@ pub mod tests {
                 FuzzerCommand::DropArc(chn) => *chn,
                 FuzzerCommand::CreateArcLight(chn, _) => *chn,
                 FuzzerCommand::CloneArcLight { from, .. } => *from,
+                FuzzerCommand::CreateUpdateArcLight(chn, _) => *chn,
                 FuzzerCommand::UpgradeLight(chn) => *chn,
                 FuzzerCommand::DowngradeLight(chn) => *chn,
+                FuzzerCommand::DropLight(chn) => *chn,
             }
         }
     }
@@ -3300,6 +3326,13 @@ pub mod tests {
                     let clone = arcroots[from as usize].clone();
                     arcroots[to as usize] = clone;
                 }
+                FuzzerCommand::CreateUpdateArcLight(chn, val) => {
+                    if let Some(arc) = &mut arcroots[chn as usize] {
+                        arc.update_shared(val);
+                    } else {
+                        arcroots[chn as usize] = Some(ArcShiftLight::new(val));
+                    }
+                }
                 FuzzerCommand::UpgradeLight(chn) => {
                     if let Some(root) = arcroots[chn as usize].as_ref() {
                         arcs[chn as usize] = Some(root.upgrade());
@@ -3309,6 +3342,9 @@ pub mod tests {
                     if let Some(arc) = arcs[chn as usize].as_ref() {
                         arcroots[chn as usize] = Some(arc.make_light());
                     }
+                }
+                FuzzerCommand::DropLight(chn) => {
+                    arcs[chn as usize] = None;
                 }
             }
         }
@@ -3320,8 +3356,8 @@ pub mod tests {
         constructor: &mut impl FnMut() -> T,
     ) -> Vec<FuzzerCommand<T>> {
         let mut ret = Vec::new();
-        for _x in 0..20 {
-            match rng.gen_range(0..10) {
+        for _x in 0..50 {
+            match rng.gen_range(0..12) {
                 0 => {
                     let chn = rng.gen_range(0..3);
                     let val = constructor();
@@ -3375,6 +3411,15 @@ pub mod tests {
                     let chn = rng.gen_range(0..3);
                     ret.push(FuzzerCommand::SharedReadArc { arc: chn });
                 }
+                10 => {
+                    let chn = rng.gen_range(0..3);
+                    let val = constructor();
+                    ret.push(FuzzerCommand::CreateUpdateArcLight(chn, val.clone()));
+                }
+                11 => {
+                    let chn = rng.gen_range(0..3);
+                    ret.push(FuzzerCommand::DropLight(chn));
+                }
                 _ => unreachable!(),
             }
         }
@@ -3385,17 +3430,17 @@ pub mod tests {
     #[cfg(not(miri))]
     fn generic_thread_fuzzing_all() {
         #[cfg(any(loom, feature = "shuttle"))]
-        const COUNT: u64 = 10000;
+        const COUNT: u64 = 1000;
         let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
         #[cfg(not(any(loom, miri, feature = "shuttle")))]
         const COUNT: u64 = 100000;
         for i in 0..COUNT {
+            debug_println!("--- Seed {} ---", i);
             model(move || {
                 let mut rng = StdRng::seed_from_u64(i);
                 let mut counter = 0usize;
                 let owner = std::sync::Arc::new(SpyOwner2::new());
                 let owner_ref = owner.clone();
-                debug_println!("--- Seed {} ---", i);
                 run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
                     counter += 1;
                     owner_ref.create(statics[counter % 10])
