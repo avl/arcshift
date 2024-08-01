@@ -466,6 +466,94 @@ impl<T: 'static> ArcShiftLight<T> {
         }
     }
 
+    /// Update the contents of this ArcShift, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance is dropped or reloaded.
+    pub fn update_shared(&self, new_payload: T) {
+        let item = ItemHolder {
+            #[cfg(feature = "validate")]
+            magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+            #[cfg(feature = "validate")]
+            magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+            payload: new_payload,
+            next_and_state: atomic::AtomicPtr::default(),
+            refcount: atomic::AtomicUsize::new(MAX_ROOTS),
+        };
+        let new_ptr = Box::into_raw(Box::new(item));
+        ArcShift::update_shared_impl(self.item, new_ptr);
+    }
+
+    /// Update the contents of this ArcShiftLight, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to 'upgrade_shared', actually does reload
+    /// the 'self' ArcShiftLight-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this function returns.
+    pub fn update(&mut self, new_payload: T) {
+        self.update_shared(new_payload);
+        self.reload();
+    }
+    /// Update the contents of this ArcShiftLight, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// This function is useful for types T which are too large to fit on the stack.
+    /// The value T will be moved directly to the internal heap-structure, without
+    /// being even temporarily stored on the stack, even in debug builds.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to 'upgrade_shared', actually does reload
+    /// the 'self' ArcShiftLight-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this function returns.
+    pub fn update_box(&mut self, new_payload: Box<T>) {
+        self.update_shared_box(new_payload);
+        self.reload();
+    }
+
+    /// Update the contents of this ArcShift, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// This function is useful for types T which are too large to fit on the stack.
+    /// The value T will be moved directly to the internal heap-structure, without
+    /// being even temporarily stored on the stack, even in debug builds.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance is dropped or reloaded.
+    pub fn update_shared_box(&self, new_payload: Box<T>) {
+        let new_ptr = ArcShift::from_box_impl(new_payload);
+        ArcShift::update_shared_impl(self.item, new_ptr as *mut _);
+    }
+
     /// Load 'next'.
     /// If 'next' is tentative, convert it to superseded.
     /// 'curitem' must be a valid pointer.
@@ -602,7 +690,7 @@ impl<T> Drop for ArcShift<T> {
         self.reload(); //TODO: Remove 'reload' from here. If it serves a purpose, there's something wrong with 'drop_item', since any guarantee offered by reload would imply a race
         debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
         let _t = get_next_and_state(self.item).load(Ordering::SeqCst);
-        drop_item(self.item, MAX_ROOTS);
+        drop_item(self.item);
         debug_println!("ArcShift::drop({:?}) DONE", self.item);
     }
 }
@@ -875,7 +963,7 @@ impl<T: 'static> ArcShift<T> {
         if self_item.is_null() {
             return None;
         }
-        let strength = MAX_ROOTS;
+        let mut strength = MAX_ROOTS;
         loop {
             debug_println!("drop_impl_ret on {:?}", self_item);
             debug_println!(
@@ -909,10 +997,13 @@ impl<T: 'static> ArcShift<T> {
                         unsafe { ((&mut { &mut *val.as_mut_ptr() }.payload) as *mut T).read() };
                     return Some(payload);
                 }
-                drop_payload_and_holder(self_item);
+                if drop_payload_and_holder(self_item) {
+                    strength = MAX_ROOTS;
+                } else {
+                    strength = 1;
+                }
                 self_item = new_item;
                 atomic::spin_loop();
-                //strength = 1;
             } else {
                 debug_println!("No dropping_ret {:?}, exiting drop-loop", self_item);
                 return None;
@@ -920,17 +1011,14 @@ impl<T: 'static> ArcShift<T> {
         }
     }
 
-    fn drop_impl(mut self_item: *const ItemHolder<T>, mut strength: usize) {
+    fn drop_impl(mut self_item: *const ItemHolder<T>) {
         verify_item(self_item);
+        let mut strength = MAX_ROOTS;
         debug_println!(
             "start of drop_impl on {:?}, strength: {}",
             self_item,
             strength
         );
-
-        // early-drop
-        //self_item = Self::early_drop_opt(self_item);
-
         loop {
             debug_println!("drop_impl on {:?}", self_item);
             if self_item.is_null() {
@@ -959,7 +1047,6 @@ impl<T: 'static> ArcShift<T> {
                 }
                 self_item = new_item;
                 atomic::spin_loop();
-                //strength = 1;
             } else {
                 debug_println!("No dropping {:?}, exiting drop-loop", self_item);
                 return;
@@ -985,6 +1072,11 @@ impl<T: 'static> ArcShift<T> {
     /// to the stack, even as a temporary variable. This can be useful, if the type is too large
     /// to fit on the stack.
     pub fn from_box(input: Box<T>) -> ArcShift<T> {
+        ArcShift {
+            item: Self::from_box_impl(input)
+        }
+    }
+    fn from_box_impl(input: Box<T>) -> *const ItemHolder<T> {
         let input_ptr = Box::into_raw(input);
 
         let layout = Layout::new::<MaybeUninit<ItemHolder<T>>>();
@@ -1028,9 +1120,7 @@ impl<T: 'static> ArcShift<T> {
         // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-function
         // of T is not run. We must not drop T here, since we've moved it to the 'result_ptr'.
         let _t: Box<MaybeUninit<T>> = unsafe { Box::from_raw(input_ptr as *mut MaybeUninit<T>) }; //Free the memory, but don't drop 'input'
-        ArcShift {
-            item: result_ptr as *const ItemHolder<T>,
-        }
+        result_ptr
     }
 
     /// Try to obtain a mutable reference to the value.
@@ -1074,6 +1164,8 @@ impl<T: 'static> ArcShift<T> {
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
     ///
+    /// This method never blocks, it will return quickly.
+    ///
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
@@ -1089,9 +1181,30 @@ impl<T: 'static> ArcShift<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        debug_println!("Upgrading {:?} -> {:?} ", self.item, new_ptr);
+        Self::update_shared_impl(self.item, new_ptr);
+    }
+    /// Update the contents of this ArcShift, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// This function is useful for types T which are too large to fit on the stack.
+    /// The value T will be moved directly to the internal heap-structure, without
+    /// being even temporarily stored on the stack, even in debug builds.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance is dropped or reloaded.
+    pub fn update_shared_box(&self, new_payload: Box<T>) {
+        let new_ptr = Self::from_box_impl(new_payload);
+        Self::update_shared_impl(self.item, new_ptr as *mut _);
+    }
+    fn update_shared_impl(self_item: *const ItemHolder<T>, new_ptr: *mut ItemHolder<T>) {
+        debug_println!("Upgrading {:?} -> {:?} ", self_item, new_ptr);
         verify_item(new_ptr);
-        let mut candidate = self.item;
+        let mut candidate = self_item;
         verify_item(candidate);
 
         loop {
@@ -1132,7 +1245,7 @@ impl<T: 'static> ArcShift<T> {
                             "Anti-garbage optimization was in effect, dropping {:?}",
                             expect
                         );
-                        drop_item(undecorate(expect), MAX_ROOTS);
+                        drop_item(undecorate(expect));
                     }
                     return;
                 }
@@ -1155,6 +1268,8 @@ impl<T: 'static> ArcShift<T> {
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
     ///
+    /// This method never blocks, it will return quickly.
+    ///
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
@@ -1170,7 +1285,31 @@ impl<T: 'static> ArcShift<T> {
         debug_println!("self.reload()");
         self.reload();
     }
-
+    /// Update the contents of this ArcShift, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// This function is useful for types T which are too large to fit on the stack.
+    /// The value T will be moved directly to the internal heap-structure, without
+    /// being even temporarily stored on the stack, even in debug builds.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this function returns.
+    pub fn update_box(&mut self, new_payload: Box<T>) {
+        self.update_shared_box(new_payload);
+        debug_println!("self.reload()");
+        self.reload();
+    }
     #[allow(warnings)]
     fn simple_early_drop_opt(mut cand: *const ItemHolder<T>) -> Option<bool> {
         verify_item(cand);
@@ -1668,9 +1807,9 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
         debug_println!("drop_root_item, calling drop_payload {:?}", old_ptr);
     }
 }
-fn drop_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
+fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
     verify_item(old_ptr);
-    ArcShift::drop_impl(old_ptr, strength);
+    ArcShift::drop_impl(old_ptr);
 }
 #[cfg(test)]
 pub mod tests {
@@ -1750,6 +1889,7 @@ pub mod tests {
     }
 
     #[test]
+    #[cfg(not(any(loom, feature="shuttle")))]
     fn simple_large() {
         model(|| {
             #[cfg(not(miri))]
@@ -1784,7 +1924,7 @@ pub mod tests {
         })
     }
     #[test]
-    fn simple_upgrade0() {
+    fn simple_update0() {
         model(|| {
             let mut shift = ArcShift::new(42u32);
             assert_eq!(*shift.get(), 42u32);
@@ -1792,15 +1932,33 @@ pub mod tests {
             assert_eq!(*shift.get(), 43u32);
         });
     }
+    #[test]
+    fn simple_update_boxed() {
+        model(|| {
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
+            shift.update_shared_box(Box::new(43));
+            assert_eq!(*shift.get(), 43u32);
+        });
+    }
 
     #[test]
-    fn simple_upgrade2() {
+    fn simple_update2() {
         model(|| {
             let mut shift = ArcShift::new(42u32);
             assert_eq!(*shift.get(), 42u32);
             shift.update_shared(43);
             shift.update_shared(44);
             shift.update_shared(45);
+            assert_eq!(*shift.get(), 45u32);
+        });
+    }
+    #[test]
+    fn simple_update3() {
+        model(|| {
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
+            shift.update_box(Box::new(45));
             assert_eq!(*shift.get(), 45u32);
         });
     }
@@ -2153,7 +2311,7 @@ pub mod tests {
         });
     }
     fn generic_3thread_ops_b<
-        F1: Fn(ArcShiftLight<InstanceSpy2>) -> Option<ArcShiftLight<InstanceSpy2>>
+        F1: Fn(&SpyOwner2, ArcShiftLight<InstanceSpy2>, &'static str) -> Option<ArcShiftLight<InstanceSpy2>>
             + Sync
             + Send
             + 'static,
@@ -2184,6 +2342,7 @@ pub mod tests {
                     let shift1 = ArcShiftLight::new(owner.create("orig"));
                     let shift2 = shift1.upgrade();
                     let shift3 = shift1.upgrade();
+                    let owner_ref1 = owner.clone();
                     let owner_ref2 = owner.clone();
                     let owner_ref3 = owner.clone();
 
@@ -2192,7 +2351,7 @@ pub mod tests {
                         .stack_size(1_000_000)
                         .spawn(move || {
                             debug_println!(" = On thread t1 =");
-                            f1(shift1)
+                            f1(&*owner_ref1, shift1, "t1")
                         })
                         .unwrap();
 
@@ -2224,6 +2383,7 @@ pub mod tests {
             repro,
         );
     }
+    #[cfg(not(feature="disable_slow_tests"))]
     #[test]
     fn generic_3threading_b_all() {
         generic_3threading_b_all_impl(0, 0, 0, None);
@@ -2234,21 +2394,25 @@ pub mod tests {
         skip3: usize,
         repro: Option<&str>,
     ) {
-        let ops1: Vec<fn(ArcShiftLight<InstanceSpy2>) -> Option<ArcShiftLight<InstanceSpy2>>> = vec![
-            |shift| {
+        let ops1: Vec<fn(&SpyOwner2, ArcShiftLight<InstanceSpy2>, &'static str) -> Option<ArcShiftLight<InstanceSpy2>>> = vec![
+            |_,shift,_| {
                 _ = shift.upgrade();
                 Some(shift)
             },
-            |shift| {
+            |_,shift,_| {
                 _ = shift.clone();
                 Some(shift)
             },
-            |shift| {
+            |_,shift,_| {
                 _ = shift.upgrade();
                 None
             },
-            |shift| Some(shift),
-            |_shift| None,
+            |_,shift,_| Some(shift),
+            |owner,shift,thread| {
+                shift.update_shared(owner.create(thread));
+                Some(shift)
+            },
+            |_,_,_| None,
         ];
         let ops23: Vec<
             fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
@@ -2282,7 +2446,7 @@ pub mod tests {
         for (_n1, op1) in ops1.iter().enumerate().skip(skip1) {
             for (_n2, op2) in ops23.iter().enumerate().skip(skip2) {
                 for (_n3, op3) in ops23.iter().enumerate().skip(skip3) {
-                    #[cfg(feature = "debug")]
+
                     {
                         println!("\n");
                         println!(
@@ -2296,6 +2460,8 @@ pub mod tests {
             }
         }
     }
+
+    #[cfg(not(feature="disable_slow_tests"))]
     #[test]
     fn generic_3threading_a_all() {
         let ops: Vec<
@@ -2330,7 +2496,7 @@ pub mod tests {
         for (n1, op1) in ops.iter().enumerate() {
             for (n2, op2) in ops.iter().enumerate() {
                 for (n3, op3) in ops.iter().enumerate() {
-                    //#[cfg(feature="debug")]
+
                     {
                         println!("========= {} {} {} ==========", n1, n2, n3);
                     }
@@ -2356,6 +2522,24 @@ pub mod tests {
                 Some(shift3)
             },
         )
+    }
+    #[test]
+    fn generic_3threading2() {
+        generic_3thread_ops_b(
+            |owner1, shift1, thread| {
+                shift1.update_shared(owner1.create(thread));
+                Some(shift1)
+            },
+            |owner2, mut shift2, thread| {
+                shift2.update(owner2.create(thread));
+                Some(shift2)
+            },
+            |owner3, shift3, thread| {
+                shift3.update_shared(owner3.create(thread));
+                Some(shift3)
+            },
+            None
+        );
     }
 
     #[test]
@@ -2481,6 +2665,7 @@ pub mod tests {
             _ = t3.join().unwrap();
         });
     }
+    #[cfg(not(feature="disable_slow_tests"))]
     #[test]
     fn simple_threading4a() {
         model(|| {
@@ -2537,6 +2722,7 @@ pub mod tests {
         });
     }
 
+    #[cfg(not(feature="disable_slow_tests"))]
     #[test]
     fn simple_threading4b() {
         model(|| {
@@ -2596,6 +2782,7 @@ pub mod tests {
         });
     }
 
+    #[cfg(not(feature="disable_slow_tests"))]
     #[test]
     fn simple_threading4c() {
         model(|| {
@@ -2668,6 +2855,7 @@ pub mod tests {
             count.validate();
         });
     }
+    #[cfg(not(feature="disable_slow_tests"))]
     #[test]
     fn simple_threading4d() {
         model(|| {
@@ -2732,6 +2920,7 @@ pub mod tests {
             drop(count);
         });
     }
+    #[cfg(not(feature="disable_slow_tests"))]
     #[test]
     fn simple_threading4e() {
         model(|| {
@@ -2798,7 +2987,7 @@ pub mod tests {
         let cmds = make_commands::<T>(rng, &mut constructor);
         let mut all_possible: HashSet<T> = HashSet::new();
         for cmd in cmds.iter() {
-            if let FuzzerCommand::CreateUpdateArc(_, val) | FuzzerCommand::CreateArcRoot(_, val) =
+            if let FuzzerCommand::CreateUpdateArc(_, val) | FuzzerCommand::CreateArcLight(_, val) =
                 cmd
             {
                 all_possible.insert(val.clone());
@@ -2874,21 +3063,21 @@ pub mod tests {
                         FuzzerCommand::DropArc(_) => {
                             curval = None;
                         }
-                        FuzzerCommand::CreateArcRoot(_, val) => {
+                        FuzzerCommand::CreateArcLight(_, val) => {
                             curvalroot = Some(ArcShiftLight::new(val));
                         }
-                        FuzzerCommand::CloneArcRoot { .. } => {
+                        FuzzerCommand::CloneArcLight { .. } => {
                             if let Some(curvalroot) = curvalroot.as_mut() {
                                 let cloned = curvalroot.clone();
                                 thread_senders[threadnr].send(PipeItem::Root(cloned)).unwrap();
                             }
                         }
-                        FuzzerCommand::PromoteRoot(_) => {
+                        FuzzerCommand::UpgradeLight(_) => {
                             if let Some(root) = curvalroot.as_ref() {
                                 curval = Some(root.upgrade());
                             }
                         }
-                        FuzzerCommand::DemoteArc(_) => {
+                        FuzzerCommand::DowngradeLight(_) => {
                             if let Some(arc) = curval.as_ref() {
                                 curvalroot = Some(arc.make_light());
                             }
@@ -2906,14 +3095,14 @@ pub mod tests {
     #[derive(Debug)]
     enum FuzzerCommand<T> {
         CreateUpdateArc(u8, T),
-        CreateArcRoot(u8, T),
+        CreateArcLight(u8, T),
         ReadArc { arc: u8 },
         SharedReadArc { arc: u8 },
         CloneArc { from: u8, to: u8 },
-        CloneArcRoot { from: u8, to: u8 },
+        CloneArcLight { from: u8, to: u8 },
         DropArc(u8),
-        PromoteRoot(u8),
-        DemoteArc(u8),
+        UpgradeLight(u8),
+        DowngradeLight(u8),
     }
     impl<T> FuzzerCommand<T> {
         fn batch(&self) -> u8 {
@@ -2923,10 +3112,10 @@ pub mod tests {
                 FuzzerCommand::SharedReadArc { arc } => *arc,
                 FuzzerCommand::CloneArc { from, .. } => *from,
                 FuzzerCommand::DropArc(chn) => *chn,
-                FuzzerCommand::CreateArcRoot(chn, _) => *chn,
-                FuzzerCommand::CloneArcRoot { from, .. } => *from,
-                FuzzerCommand::PromoteRoot(chn) => *chn,
-                FuzzerCommand::DemoteArc(chn) => *chn,
+                FuzzerCommand::CreateArcLight(chn, _) => *chn,
+                FuzzerCommand::CloneArcLight { from, .. } => *from,
+                FuzzerCommand::UpgradeLight(chn) => *chn,
+                FuzzerCommand::DowngradeLight(chn) => *chn,
             }
         }
     }
@@ -3000,19 +3189,19 @@ pub mod tests {
                 FuzzerCommand::DropArc(chn) => {
                     arcs[chn as usize] = None;
                 }
-                FuzzerCommand::CreateArcRoot(chn, val) => {
+                FuzzerCommand::CreateArcLight(chn, val) => {
                     arcroots[chn as usize] = Some(ArcShiftLight::new(val));
                 }
-                FuzzerCommand::CloneArcRoot { from, to } => {
+                FuzzerCommand::CloneArcLight { from, to } => {
                     let clone = arcroots[from as usize].clone();
                     arcroots[to as usize] = clone;
                 }
-                FuzzerCommand::PromoteRoot(chn) => {
+                FuzzerCommand::UpgradeLight(chn) => {
                     if let Some(root) = arcroots[chn as usize].as_ref() {
                         arcs[chn as usize] = Some(root.upgrade());
                     }
                 }
-                FuzzerCommand::DemoteArc(chn) => {
+                FuzzerCommand::DowngradeLight(chn) => {
                     if let Some(arc) = arcs[chn as usize].as_ref() {
                         arcroots[chn as usize] = Some(arc.make_light());
                     }
@@ -3054,12 +3243,12 @@ pub mod tests {
                 }
                 4 => {
                     let chn = rng.gen_range(0..3);
-                    ret.push(FuzzerCommand::CreateArcRoot(chn, constructor()));
+                    ret.push(FuzzerCommand::CreateArcLight(chn, constructor()));
                 }
                 5 => {
                     let chn = rng.gen_range(0..3);
                     let val = constructor();
-                    ret.push(FuzzerCommand::CreateArcRoot(chn, val.clone()));
+                    ret.push(FuzzerCommand::CreateArcLight(chn, val.clone()));
                 }
                 6 => {
                     let from = rng.gen_range(0..3);
@@ -3068,15 +3257,15 @@ pub mod tests {
                         to = (from + 1) % 3;
                     }
 
-                    ret.push(FuzzerCommand::CloneArcRoot { from, to });
+                    ret.push(FuzzerCommand::CloneArcLight { from, to });
                 }
                 7 => {
                     let chn = rng.gen_range(0..3);
-                    ret.push(FuzzerCommand::PromoteRoot(chn));
+                    ret.push(FuzzerCommand::UpgradeLight(chn));
                 }
                 8 => {
                     let chn = rng.gen_range(0..3);
-                    ret.push(FuzzerCommand::DemoteArc(chn));
+                    ret.push(FuzzerCommand::DowngradeLight(chn));
                 }
                 9 => {
                     let chn = rng.gen_range(0..3);

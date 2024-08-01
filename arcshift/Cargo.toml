@@ -1,6 +1,6 @@
 [package]
 name = "arcshift"
-version = "0.1.0"
+version = "0.1.1"
 documentation = "https://docs.rs/arcshift/"
 homepage = "https://github.com/avl/arcshift/"
 repository = "https://github.com/avl/arcshift/"
@@ -25,6 +25,8 @@ validate = []
 # Feature to enable extra debug output on stdout.
 # Only intended for internal use, for verification and troubleshooting.
 debug = []
+# Feature which disables the slowest tests
+disable_slow_tests = []
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"] }
