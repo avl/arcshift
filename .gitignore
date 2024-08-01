@@ -1,4 +1,6 @@
 .idea/
 target/
 mutants.out
+Cargo.lock
+mutants.out.old
 
