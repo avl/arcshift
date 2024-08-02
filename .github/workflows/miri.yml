@@ -1,0 +1,22 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install nightly
+        run: rustup toolchain install nightly
+      - name: Miri (nightly)
+        run: rustup component add --toolchain nightly miri && cd arcshift && cargo +nightly miri test --features=disable_slow_tests

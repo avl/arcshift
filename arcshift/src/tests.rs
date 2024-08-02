@@ -182,6 +182,15 @@ fn simple_update4() {
         assert_eq!(*shiftlight.upgrade().get(), 5);
     });
 }
+#[test]
+fn simple_update5() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        assert_eq!(*shift.get(), 42u32);
+        shift.update(45);
+        assert_eq!(*shift.get(), 45u32);
+    });
+}
 
 
 /// A little helper struct that just keeps track of the number of live

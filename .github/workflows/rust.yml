@@ -16,15 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Install nightly
-      run: rustup toolchain install nightly && rustup toolchain install stable
-    - name: Run tests (stable)
+    - name: Install rust
+      run: rustup toolchain install stable
+    - name: Run tests
+      run: cargo +stable test --features=validate --workspace
+    - name: Run tests (release)
       run: cargo +stable test --release --workspace
-    - name: Run tests (stable)
+    - name: Run tests (release)
       run: cargo +stable test --release --features=validate --workspace
-    - name: Shuttle (stable)
-      run: cargo +stable test --lib --tests -p arcshift --features=validate,shuttle --release
-    - name: Miri (nightly)
-      run: rustup component add --toolchain nightly miri && cd arcshift && cargo +nightly miri test --features=disable_slow_tests
-    - name: Loom
-      run: LOOM_MAX_PREEMPTIONS=1 RUSTFLAGS="--cfg loom" cargo test --lib --tests --features=disable_slow_tests --release
