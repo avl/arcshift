@@ -1,4 +1,8 @@
 ![build](https://github.com/avl/arcshift/actions/workflows/rust.yml/badge.svg)
+![build](https://github.com/avl/arcshift/actions/workflows/shuttle.yml/badge.svg)
+![build](https://github.com/avl/arcshift/actions/workflows/loom.yml/badge.svg)
+![build](https://github.com/avl/arcshift/actions/workflows/miri.yml/badge.svg)
+![build](https://github.com/avl/arcshift/actions/workflows/mutants.yml/badge.svg)
 
 # Arcshift
 
