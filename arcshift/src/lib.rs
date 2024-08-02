@@ -9,7 +9,7 @@
 //!
 //! ## Example
 //! ```rust
-//! # if cfg!(loom)
+//! # #[cfg(not(any(loom,feature="shuttle")))]
 //! # {
 //! # extern crate arcshift;
 //! # use arcshift::ArcShift;
@@ -135,7 +135,7 @@
 //! practically detecting any overflow, giving a maximum of 35000000000000,
 //! Since each ArcShift instance takes at least 8 bytes of space, it takes at least 280TB of memory
 //! to even be able to hit this limit. If the limit is somehow reached, there will be a best effort
-//! attempt at aborting the program. This is similar to how the rust std library handles overflow
+//! at detecting this and causing a panic. This is similar to how the rust std library handles overflow
 //! of the reference counter on std::sync::Arc. Just as with std::core::Arc, the overflow
 //! will be detected in practice, though there is no guarantee. For ArcShift, the overflow will be
 //! detected as long as the machine has an even remotely fair scheduler, and less than 100 billion
@@ -155,6 +155,8 @@
 //! # A larger example
 //!
 //! ```rust
+//! # #[cfg(not(any(loom,feature="shuttle")))]
+//! # {
 //! # extern crate arcshift;
 //! # use arcshift::ArcShift;
 //!
@@ -211,7 +213,7 @@
 //! }
 //!
 //!
-//!
+//! # }
 //! ```
 //!
 
@@ -222,7 +224,6 @@ use std::backtrace::Backtrace;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
-use std::process::abort;
 use std::ptr::{addr_of, addr_of_mut, null_mut};
 use std::sync::atomic::Ordering;
 
@@ -296,10 +297,13 @@ macro_rules! debug_println {
 /// See `crate` documentation for more information.
 ///
 /// ```rust
+/// # #[cfg(not(any(loom,feature="shuttle")))]
+/// # {
 /// # extern crate arcshift;
 /// # use arcshift::ArcShift;
 /// let instance = ArcShift::new("test");
 /// println!("Value: {:?}", *instance);
+/// # }
 /// ```
 pub struct ArcShift<T: 'static> {
     item: *const ItemHolder<T>,
@@ -312,11 +316,14 @@ impl<T> UnwindSafe for ArcShift<T> {}
 /// freed.
 ///
 /// ```rust
+/// # #[cfg(not(any(loom,feature="shuttle")))]
+/// # {
 /// # extern crate arcshift;
 /// # use arcshift::ArcShiftLight;
 /// let light_instance = ArcShiftLight::new("test");
 /// let instance = light_instance.upgrade();
 /// println!("Value: {:?}", *instance);
+/// # }
 /// ```
 ///
 /// WARNING! Because of implementation reasons, each instance of ArcShiftLight will claim
@@ -352,13 +359,6 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
                 continue;
             }
             let count = get_refcount(curitem).load(Ordering::Acquire);
-            let _rootcount = count & (MAX_ROOTS - 1);
-            debug_println!(
-                "ArcShiftLight {:?} clone count: {} (rootcount: {})",
-                curitem,
-                count,
-                _rootcount
-            );
             assert_ne!(count, 0);
             Self::verify_count(count);
             match get_refcount(curitem).compare_exchange(
@@ -444,7 +444,7 @@ impl<T: 'static> ArcShiftLight<T> {
                 break;
             }
 
-            if strength > 0 {
+            if strength > 0 { //TODO: Why does cargo mutants think changing this to < 0 never fail?
                 let count = get_refcount(self.item).fetch_sub(strength, Ordering::SeqCst);
                     debug_println!(
                     "ArcShiftLight::reload, next = {:?}, releasing {} -> {}",
@@ -737,8 +737,8 @@ static MAGIC: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0
 
 impl<T: 'static> ItemHolder<T> {
     #[cfg_attr(test, mutants::skip)]
+    #[cfg(feature="validate")]
     fn verify(ptr: *const ItemHolder<T>) {
-        #[cfg(feature = "validate")]
         {
             assert_is_undecorated(ptr);
 
@@ -760,7 +760,6 @@ impl<T: 'static> ItemHolder<T> {
                 );
                 debug_println!("Backtrace: {}", Backtrace::capture());
                 panic!();
-                //abort();
             }
             if magic2 >> 16 != 0x123412341234 {
                 eprintln!(
@@ -775,7 +774,6 @@ impl<T: 'static> ItemHolder<T> {
                 );
                 debug_println!("Backtrace: {}", Backtrace::capture());
                 panic!();
-                //abort();
             }
             #[cfg(not(any(loom, feature = "shuttle")))]
             {
@@ -803,7 +801,7 @@ impl<T: 'static> ItemHolder<T> {
                         magic2
                     );
                     //println!("Backtrace: {}", Backtrace::capture());
-                    abort();
+                    panic!();
                 }
                 let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
                 let magic = magic as i64 as u64;
@@ -827,8 +825,6 @@ fn verify_item<T>(_ptr: *const ItemHolder<T>) {
         let x = undecorate(ptr);
         if x != ptr {
             panic!("Internal error in ArcShift: Pointer given to verify was decorated, it shouldn't have been! {:?} (={:?})", ptr, get_state(ptr));
-            //eprintln!("Backtrace: {}", Backtrace::capture());
-            //abort();
         }
         if x.is_null() {
             return;
@@ -837,12 +833,12 @@ fn verify_item<T>(_ptr: *const ItemHolder<T>) {
     }
 }
 
+#[cfg(feature = "validate")]
 #[cfg_attr(test, mutants::skip)] // This is only used for validation and test, it has no behaviour
 impl<T> Drop for ItemHolder<T> {
     fn drop(&mut self) {
         ItemHolder::verify(self as *mut ItemHolder<T>);
         debug_println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T>);
-        #[cfg(feature = "validate")]
         {
             self.magic1 = std::sync::atomic::AtomicU64::new(0xDEADDEA1DEADDEA1);
             self.magic2 = std::sync::atomic::AtomicU64::new(0xDEADDEA2DEADDEA2);
@@ -882,15 +878,14 @@ fn decorate<T>(ptr: *const ItemHolder<T>, e: ItemStateEnum) -> *const ItemHolder
         as *const ItemHolder<T>
 }
 
-/// Abort if the pointer is decorated
+/// Panic if the pointer is decorated
 #[cfg_attr(test, mutants::skip)]
 fn assert_is_undecorated<T>(_ptr: *const ItemHolder<T>) {
     #[cfg(feature = "validate")]
     {
         let raw = _ptr as usize & 3;
         if raw != 0 {
-            eprintln!("Internal error in ArcShift - unexpected decorated pointer");
-            abort();
+            panic!("Internal error in ArcShift - unexpected decorated pointer");
         }
     }
 }
@@ -915,12 +910,12 @@ fn get_state<T>(ptr: *const ItemHolder<T>) -> Option<ItemStateEnum> {
         return None;
     }
     let raw = ((ptr as usize) & 3) as u8;
+    #[cfg(feature = "validate")]
     if raw == 0 {
-        eprintln!(
+        panic!(
             "Internal error in ArcShift: Encountered undecorated pointer in get_state!: {:?}",
             ptr
         );
-        abort();
     }
     // SAFETY:
     // All values `0..=3` are valid ItemStateEnum.
@@ -949,8 +944,7 @@ impl<T: 'static> Clone for ArcShift<T> {
         );
         if rescount >= MAX_ARCSHIFT {
             get_refcount(self.item).fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst);
-            eprintln!("Internal error in ArcShift: Max number of ArcShift instances exceeded");
-            abort();
+            panic!("Internal error in ArcShift: Max number of ArcShift instances exceeded");
         }
         ArcShift { item: self.item }
     }
@@ -964,12 +958,14 @@ impl<T> Deref for ArcShift<T> {
 }
 
 // ptr must be a valid pointer
+#[inline(always)]
 fn get_next_and_state<'a, T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicPtr<ItemHolder<T>> {
     // SAFETY:
     // ptr is a valid pointer
     unsafe { &*addr_of!((*ptr).next_and_state) }
 }
 // ptr must be a valid pointer
+#[inline(always)]
 fn get_refcount<'a, T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicUsize {
     // SAFETY:
     // ptr is a valid pointer
@@ -1378,8 +1374,7 @@ impl<T: 'static> ArcShift<T> {
         debug_println!("self.reload()");
         self.reload();
     }
-    #[allow(warnings)]
-    fn simple_early_drop_opt(mut cand: *const ItemHolder<T>) -> Option<bool> {
+    fn simple_early_drop_opt(cand: *const ItemHolder<T>) -> Option<bool> {
         verify_item(cand);
         let count = get_refcount(cand).load(Ordering::SeqCst);
 
@@ -1388,7 +1383,7 @@ impl<T: 'static> ArcShift<T> {
             atomic::spin_loop();
             return None;
         };
-        if ((1 + 1)..(MAX_ROOTS)).contains(&count) {
+        if (2..(MAX_ROOTS)).contains(&count) {
             debug_println!(
                 "Possibility of early drop for {:?}! (count = {}, state: {:?})",
                 cand,
@@ -1510,11 +1505,8 @@ impl<T: 'static> ArcShift<T> {
                     self.item
                 );
 
-                if dbgprev < 1 {
-                    panic!("For {:?}, count is {}", new_self, dbgprev);
-                }
                 // We're in ArcShift, and we transitively have a reference to it!
-                assert!(dbgprev >= 1); // This is guaranteed, since we're still holding a count on self.item, which has a chain all the way to 'new_self'.
+                assert_ne!(dbgprev, 0); // This is guaranteed, since we're still holding a count on self.item, which has a chain all the way to 'new_self'.
 
                 break;
             }
@@ -1679,6 +1671,7 @@ impl<T: 'static> ArcShift<T> {
         self.item = new_self;
     }
 
+    #[cold]
     fn shared_get_impl(&self) -> *const ItemHolder<T> {
         let mut next_self_item = self.item;
         loop {
@@ -1711,6 +1704,7 @@ impl<T: 'static> ArcShift<T> {
     ///
     /// Because of this, it is not advisable to do an unbounded number of updates, if
     /// ArcShift instances exist that only use 'shared_get', and never do reloads.
+    #[inline]
     pub fn shared_get(&self) -> &T {
         debug_println!("Getting {:?}", self.item);
         // SAFETY:
@@ -1735,10 +1729,11 @@ impl<T: 'static> ArcShift<T> {
     /// This method is very fast, basically the speed of a regular reference, unless
     /// the value has been modified by calling one of the update-methods.
     ///
-    /// Note that this method requires 'mut self'. The reason 'mut' self is needed, is because
-    /// of implementation reasons, and is what makes ArcShift 'get' very fast, while still
-    /// allowing the pointed-to value to be modified.
-    #[inline(always)]
+    /// Note that this method requires `mut self`. The reason 'mut' self is needed, is because
+    /// this allows us to update the pointer when new values become available after modification.
+    /// Without unique access (given by `&mut self`), we can't know what references `&T` to the old
+    /// value still remain alive.
+    #[inline]
     pub fn get(&mut self) -> &T {
         debug_println!("Getting {:?}", self.item);
         let cand: *const ItemHolder<T> =
@@ -1962,6 +1957,13 @@ pub mod tests {
         model(|| {
             let mut shift = ArcShiftLight::new(42u32);
             shift.update(43);
+            assert_eq!(*shift.upgrade().get(), 43);
+        });
+    }
+    #[test]
+    fn simple_update_box_light() {
+        model(|| {
+            let mut shift = ArcShiftLight::new(42u32);
             shift.update_box(Box::new(43));
             assert_eq!(*shift.upgrade().get(), 43);
         });
@@ -2041,6 +2043,25 @@ pub mod tests {
             assert_eq!(*shift.get(), 45u32);
         });
     }
+
+    #[test]
+    fn simple_update4() {
+        model(|| {
+            let mut shiftlight = ArcShiftLight::new(1);
+            shiftlight.update(2);
+            assert_eq!(*shiftlight.upgrade().get(), 2);
+
+            shiftlight.update_shared(3);
+            assert_eq!(*shiftlight.upgrade().get(), 3);
+
+            shiftlight.update_box(Box::new(4));
+            assert_eq!(*shiftlight.upgrade().get(), 4);
+
+            shiftlight.update_shared_box(Box::new(5));
+            assert_eq!(*shiftlight.upgrade().get(), 5);
+        });
+    }
+
 
     /// A little helper struct that just keeps track of the number of live
     /// instances of it. This is used together with Loom to ensure there
@@ -2511,6 +2532,10 @@ pub mod tests {
             |_,shift,_| Some(shift),
             |owner,shift,thread| {
                 shift.update_shared(owner.create(thread));
+                Some(shift)
+            },
+            |_,mut shift,_| {
+                shift.reload();
                 Some(shift)
             },
             |_,_,_| None,

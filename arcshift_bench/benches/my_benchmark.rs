@@ -4,6 +4,14 @@ use arc_swap::{ArcSwap, Cache};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use arcshift::ArcShift;
 
+fn std_arc_bench(c: &mut Criterion) {
+    let ac = Arc::new(42u32);
+    c.bench_function("std_arc_bench", |b| b.iter(||{
+        _ = black_box(*ac);
+    }
+    ));
+}
+
 fn mutex_bench(c: &mut Criterion) {
     let ac = Mutex::new(42u32);
     c.bench_function("mutex", |b| b.iter(||{
@@ -49,7 +57,7 @@ fn arcshift_update_bench(c: &mut Criterion) {
 }
 fn arcshift_shared_bench(c: &mut Criterion) {
     let ac = ArcShift::new(42u32);
-    c.bench_function("arcshift_shared", |b| b.iter(||{
+    c.bench_function("arcshift_shared_get", |b| b.iter(||{
         let value = ac.shared_get();
         _ = black_box(value);
     }
@@ -77,5 +85,5 @@ fn arcswap_cached_bench(c: &mut Criterion) {
     ));
 }
 
-criterion_group!(benches, rwlock_write_bench, arcshift_bench, arcshift_update_bench, arcswap_bench, arcswap_cached_bench, mutex_bench, rwlock_read_bench, arcshift_shared_bench);
+criterion_group!(benches, arcshift_shared_bench, std_arc_bench, rwlock_write_bench, arcshift_bench, arcshift_update_bench, arcswap_bench, arcswap_cached_bench, mutex_bench, rwlock_read_bench);
 criterion_main!(benches);
