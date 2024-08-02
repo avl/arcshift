@@ -264,7 +264,7 @@ mod atomic {
 #[cfg(all(feature = "debug", not(loom)))]
 macro_rules! debug_println {
     ($($x:tt)*) => {
-        println!("{:?}: {}", atomic::thread::current().id(), format!($($x)*))
+        println!("{:?}: {}", crate::atomic::thread::current().id(), format!($($x)*))
     }
 }
 #[cfg(all(feature = "debug", loom))]
