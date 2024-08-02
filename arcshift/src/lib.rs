@@ -493,6 +493,7 @@ impl<T: 'static> ArcShiftLight<T> {
 
     /// Retrieves the internal node count, counted from this instance.
     #[allow(unused)]
+    #[cfg_attr(test, mutants::skip)] //Only used for tests, doesn't need cargo mutants
     fn get_internal_node_count(&self) -> usize {
         let count = 1;
         let mut curitem = self.item;

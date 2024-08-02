@@ -15,6 +15,8 @@ categories = ["memory-management", "data-structures"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dependencies]
+# Feature only intended for development
+shuttle = {version = "0.7", optional = true}
 
 [features]
 # Feature to enable extra validation, at a memory and performance cost.
@@ -26,7 +28,6 @@ debug = []
 # Feature which disables the slowest tests
 disable_slow_tests = []
 # Feature for internal use, for testing using the 'shuttle' framework
-shuttle = []
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"] }
@@ -35,4 +36,3 @@ loom = { version = "0.7", features = ["checkpoint"] }
 crossbeam-channel = "0.5"
 rand="0.8"
 mutants = "0"
-shuttle = {version = "0.7"}
