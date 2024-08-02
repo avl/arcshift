@@ -11,7 +11,7 @@ the value pointed to.
 
 ```rust
 use std::thread;
-use crate::ArcShift;
+use arcshift::ArcShift;
 
 let mut arc = ArcShift::new("Hello".to_string());
 let mut arc2 = arc.clone();
