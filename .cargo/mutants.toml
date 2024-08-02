@@ -1,4 +1,4 @@
 exclude_re = [
-    #"replace \\* with \\+ in ArcShift<T>::early_drop_opt",
-    ".*replace is_superseded_by_tentative -> bool with false.*", #Because it still works, it just goes a little slower with this change
+    ".*replace is_superseded_by_tentative -> bool with false.*", #Because it still works, it just goes a little slower with this change, so it doesn't fail the test
+    "replace > with == in ArcShift<T>::reload" #Dead code, since we never test/achieve 35000000000000 instances.
 ]
