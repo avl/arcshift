@@ -1,5 +1,8 @@
+//! Fuzz-test cases with focus on sending instances between threads
+
 use std::collections::HashSet;
-use super::{atomic, InstanceSpy2, model, SpyOwner2};
+use super::{atomic, InstanceSpy2, model};
+use crate::tests::leak_detection::{SpyOwner2};
 use crate::{ArcShift, ArcShiftLight, get_refcount, MAX_ROOTS};
 use std::fmt::Debug;
 use std::hash::Hash;

@@ -11,9 +11,18 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-
+use leak_detection::{InstanceSpy2, SpyOwner2, InstanceSpy};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
+
+
+mod leak_detection;
+mod race_detector;
+mod custom_fuzz;
+
+
+// All tests are wrapped by these 'model' calls.
+// This is needed to make the tests runnable from within the Shuttle and Loom frameworks.
 
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 fn model(x: impl FnOnce()) {
@@ -45,6 +54,9 @@ fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
     }
 }
 
+
+// Here follows some simple basic tests
+
 #[test]
 fn simple_get() {
     model(|| {
@@ -52,20 +64,26 @@ fn simple_get() {
         assert_eq!(*shift.get(), 42u32);
     })
 }
+
 #[test]
 fn simple_get_mut() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
+        // Uniquely owned values can be modified using 'try_get_mut'.
         assert_eq!(*shift.try_get_mut().unwrap(), 42);
     })
 }
+
 #[test]
 fn simple_try_into() {
     model(|| {
         let shift = ArcShift::new(42u32);
+        // Uniquely owned values can be moved out without being dropped
         assert_eq!(shift.try_into_inner().unwrap(), 42);
     })
 }
+
+
 #[test]
 fn simple_clone_light() {
     model(|| {
@@ -91,6 +109,8 @@ fn simple_update_box_light() {
 }
 
 #[test]
+// There's no point in running this test under shuttle/loom,
+// and since it can take some time, let's just disable it.
 #[cfg(not(any(loom, feature="shuttle")))]
 fn simple_large() {
     model(|| {
@@ -193,90 +213,7 @@ fn simple_update5() {
 }
 
 
-/// A little helper struct that just keeps track of the number of live
-/// instances of it. This is used together with Loom to ensure there
-/// are no memory leaks due to race-conditions.
-struct InstanceSpy {
-    x: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-impl InstanceSpy {
-    fn new(x: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> InstanceSpy {
-        let _temp = x.fetch_add(1, Ordering::Relaxed);
-        atomic::fence(Ordering::SeqCst);
-        debug_println!("++ InstanceSpy ++ {}", _temp + 1);
-        InstanceSpy { x }
-    }
-}
-impl Drop for InstanceSpy {
-    fn drop(&mut self) {
-        let _prev = self.x.fetch_sub(1, Ordering::Relaxed);
-        debug_println!("-- InstanceSpy -- drop {}", _prev - 1);
-    }
-}
 
-struct SpyOwner2 {
-    data: std::sync::Arc<Mutex<HashSet<&'static str>>>,
-}
-
-impl SpyOwner2 {
-    fn new() -> SpyOwner2 {
-        SpyOwner2 {
-            data: std::sync::Arc::new(Mutex::new(HashSet::new())),
-        }
-    }
-    fn create(&self, name: &'static str) -> InstanceSpy2 {
-        InstanceSpy2::new(self.data.clone(), name)
-    }
-    fn validate(&self) {
-        let guard = self.data.lock().unwrap();
-        if guard.len() > 0 {
-            panic!("Leaked: {:?}", &*guard);
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct InstanceSpy2 {
-    x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
-    name: &'static str,
-}
-
-impl Hash for InstanceSpy2 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state)
-    }
-}
-impl PartialEq<Self> for InstanceSpy2 {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for InstanceSpy2 {}
-
-impl InstanceSpy2 {
-    fn str(&self) -> &'static str {
-        self.name
-    }
-    fn new(
-        x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
-        name: &'static str,
-    ) -> InstanceSpy2 {
-        let mut guard = x.lock().unwrap();
-        guard.insert(name);
-        debug_println!("++ InstanceSpy ++ {:?} (added: {})", &*guard, name);
-        drop(guard);
-        InstanceSpy2 { x, name }
-    }
-}
-impl Drop for InstanceSpy2 {
-    fn drop(&mut self) {
-        let mut guard = self.x.lock().unwrap();
-        guard.remove(self.name);
-        debug_println!("-- InstanceSpy -- {:?} - removed {}", &*guard, self.name);
-        //debug_println!("Drop stacktrace: {:?}", Backtrace::capture());
-    }
-}
 #[test]
 fn simple_upgrade3a1() {
     model(|| {
@@ -512,7 +449,6 @@ fn simple_threading2c() {
     });
 }
 
-mod race_detector;
 
 #[test]
 fn simple_threading3a() {
@@ -947,4 +883,3 @@ fn simple_threading4e() {
     });
 }
 
-mod custom_fuzz;

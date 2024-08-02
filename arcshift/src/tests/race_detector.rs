@@ -1,5 +1,8 @@
+//! Fuzzing-test cases which explicit focus on simultaneous operations in different threads
+
 use crate::{ArcShift, ArcShiftLight, atomic};
-use crate::tests::{InstanceSpy2, model, model2, SpyOwner2};
+use crate::tests::{InstanceSpy2, model, model2};
+use crate::tests::leak_detection::SpyOwner2;
 
 fn generic_3thread_ops_a<
     F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>

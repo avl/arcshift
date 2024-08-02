@@ -5,7 +5,7 @@
 //! # Introduction to ArcShift
 //!
 //! [`ArcShift`] is a data type similar to [`std::sync::Arc`], except that it allows updating
-//! the value pointed to.
+//! the value pointed to. The memory overhead is identical to that of Arc.
 //!
 //! ## Example
 //! ```rust
@@ -27,7 +27,8 @@
 //! });
 //!
 //! let j2 = thread::spawn(move||{
-//!     println!("Value in thread 2: '{}'", *arc2); //Prints either 'Hello' or 'New value', depending on scheduling
+//!     // Prints either 'Hello' or 'New value', depending on scheduling:
+//!     println!("Value in thread 2: '{}'", *arc2);
 //! });
 //!
 //! j1.join().unwrap();
@@ -40,20 +41,19 @@
 //! modifying the stored value, with very little overhead over regular Arc, as long as
 //! updates are very infrequent.
 //!
-//! For most use cases, the more mature 'arc_swap' crate is probably
-//! preferable.
-//!
 //! The motivating use-case for ArcShift is reloadable assets in computer games.
 //! During normal usage, assets do not change. All benchmarks and play experience will
 //! be dependent only on this baseline performance. Ideally, we therefore want to have
-//! a very small performance penalty for the case when assets are *not* updated. However,
-//! ArcShift can, of course, be useful in other domains as well.
+//! a very small performance penalty for the case when assets are *not* updated, compared
+//! to using regular [`std::sync::Arc`].
 //!
 //! During game development, artists may update assets, and hot-reload is a very
-//! time-saving feature. However, a performance hit during asset-reload is acceptable.
+//! time-saving feature. A performance hit during asset-reload is acceptable though.
 //! ArcShift prioritizes base performance, while accepting a penalty when updates are made.
 //! The penalty is that, under some circumstances described below, ArcShift can have a lingering
 //! performance hit until 'force_update' is called. See documentation for the details.
+//!
+//! ArcShift can, of course, be useful in other domains than computer games.
 //!
 //! # Properties
 //!
@@ -68,30 +68,31 @@
 //! * All functions are lock free (see <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
 //! * For use cases where no modification of values occurs, performance is very good.
 //! * Modifying values is reasonably fast (think, 10-50 nanoseconds).
-//! * The function [`ArcShift::shared_non_reloading_get`] allows access almost without any overhead at all.
-//!   (Only overhead is ever so slightly worse cache performance, because of the reference
-//!   counters.)
+//! * The function [`ArcShift::shared_non_reloading_get`] allows access almost without any overhead
+//!   at all compared to regular Arc.
 //! * ArcShift does not rely on any threadlocal variables to achieve its performance.
 //!
 //! # Trade-offs - Limitations
 //!
 //! ArcShift achieves its performance at the expense of the following disadvantages:
+//!
 //! * When modifying the value, the old version of the value lingers in memory until
 //!   the last ArcShift has been updated. Such an update only happens when the ArcShift
-//!   is accessed using an owned (or &mut) access (like 'get' or 'force_reload'). This can
-//!   be avoided by using the [`ArcShiftLight`]-type for long-lived never-reloaded instances.
+//!   is accessed using an owned (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
+//!   This can be avoided by using the [`ArcShiftLight`]-type for long-lived never-reloaded
+//!   instances.
 //! * Modifying the value is approximately 10x more expensive than modifying `Arc<RwLock<T>>`
-//! * When the value is modified, the next subsequent access is slower than an `Arc<RwLock<T>>`
-//!   access
+//! * When the value is modified, the next subsequent access can be slower than an `Arc<RwLock<T>>`
+//!   access.
 //! * ArcShift is its own datatype. It is no way compatible with `Arc<T>`.
 //! * At most 524287 instances of ArcShiftLight can be created for each value.
 //! * At most 35000000000000 instances of ArcShift can be created for each value.
-//! * ArcShift instances should ideally be owned (or be mutably accessible) to dereference.
 //! * ArcShift does not support an analog to [`std::sync::Arc`]'s [`std::sync::Weak`].
+//! * ArcShift instances should ideally be owned (or be mutably accessible).
 //!
 //! The last limitation might seem unacceptable, but for many applications it is not
 //! hard to make sure each thread/scope has its own instance of ArcShift pointing to
-//! the resource. Remember that cloning ArcShift instances is reasonably fast.
+//! the resource. Cloning ArcShift instances is reasonably fast.
 //!
 //! # Implementation
 //!
@@ -110,8 +111,9 @@
 //!
 //! ArcShiftLight-instances also keep pointers to the heap blocks mentioned above, but value T
 //! in the block can be dropped while being held by an ArcShiftLight. This means that ArcShiftLight-
-//! instances always consume `std::mem::size_of::<T>()` bytes of memory, even when the value they
-//! point to has been dropped.
+//! instances only consume `std::mem::size_of::<T>()` bytes of memory, when the value they
+//! point to has been dropped. When the ArcShiftLight-instances is reloaded, or dropped, that memory
+//! is also released.
 //!
 //!
 //! # Pitfall #1 - lingering memory usage
@@ -120,9 +122,6 @@
 //! will keep old values around, taking up memory. This is a fundamental drawback of the approach
 //! taken by ArcShift. One workaround is to replace long-lived non-reloaded instances of
 //! [`ArcShift`] with [`ArcShiftLight`]. This alleviates the problem.
-//!
-//! You may also prefer to use the 'ArcSwap' crate (by a different author).
-//! It does not have this limitation, as long as its 'Cache' type is not used.
 //!
 //! # Pitfall #2 - reference count limitations
 //!
@@ -140,16 +139,6 @@
 //! will be detected in practice, though there is no guarantee. For ArcShift, the overflow will be
 //! detected as long as the machine has an even remotely fair scheduler, and less than 100 billion
 //! threads (though the conditions for detection of std::core::Arc-overflow are even more assured).
-//!
-//! # Comparison to ArcSwap
-//! ArcSwap ('arc_swap') is a different crate (by a different author).
-//! ArcSwap is probably preferable in most situations. It is more mature, and probably faster
-//! in many use cases. ArcSwap does not rely on having mutable access to its instances.
-//! If updates do occur, and mutable accesses to ArcShift cannot be provided, ArcSwap is likely
-//! going to be much faster because of its ingenious use of thread_locals (and other tricks).
-//! Only in the case where data is modified extremely rarely (and using
-//! `ArcShift::shared_get`) or where mutable ArcShift instances can be used (allowing the very fast
-//! non-shared &mut self `ArcShift::get` function), will ArcShift be faster than ArcSwap.
 //!
 //!
 //! # A larger example

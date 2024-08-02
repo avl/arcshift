@@ -24,7 +24,8 @@ let j1 = thread::spawn(move||{
 });
 
 let j2 = thread::spawn(move||{
-    println!("Value in thread 2: '{}'", *arc2); //Prints either 'Hello' or 'New value', depending on scheduling
+    // Prints either 'Hello' or 'New value', depending on scheduling:
+    println!("Value in thread 2: '{}'", *arc2); 
 });
 
 j1.join().unwrap();
@@ -33,10 +34,9 @@ j2.join().unwrap();
 
 ## Docs
 
-For docs, <https://docs.rs/arcshift/> .
+For docs, see <https://docs.rs/arcshift/> .
 
-
-## Origin story
+## Background
 
 I created ArcShift because I wanted to have a low-overhead way to store resources in a computer game project.
 The idea is that assets such as 3d-models, textures etc are seldom modified, and putting them in an std::sync::Arc
@@ -57,7 +57,8 @@ What I wanted was simply an `Arc<T>` where the value T could be updated.
 I know it's possible to achieve something like this using ArcSwap, by constructing an 
 `Arc<ArcSwap<Arc<T>>>`, but it is not as convenient as I would have liked.
 
-ArcSwap is a fantastic crate, and it is much more mature than ArcShift.
+ArcSwap is a fantastic crate, well optimized, and much more mature than ArcShift.
+
 However, for example if the following conditions are fulfilled, ArcShift may give similar
 or possibly better performance while being slightly easier to use:
 
@@ -74,11 +75,13 @@ The requirements for ArcShift are:
  * Regular shared read access should be exactly as fast as for `Arc<T>`, as long as 
    writes have not occurred.
  * Writes can be expensive (but of course not slower than necessary)
+ * It is okay if reads become slightly slower after a write has occurred.
  * The implementation should be lock free (so we never have to suspend a thread)
  * The API must be 100% safe and sound.
  * When values are updated, previous values should be dropped as soon as possible. 
  * It should be possible to have 'lightweight' handles to the data which do not provide fast access,
    but on the other hand do not keep older values alive.
+ * It should not have any memory overhead compared to Arc.
 
 Regarding the last two points, any type which provides overhead-free access to T will
 have to keep a T alive at all time, since otherwise some sort of synchronization (which is expensive)
