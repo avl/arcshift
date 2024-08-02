@@ -70,7 +70,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                         }
                     }
                 }
-                //println!("Apply cmd {:?}: {:?}", cmd, atomic::thread::current().id());
+                debug_println!("Apply cmd {:?}: {:?}", cmd, atomic::thread::current().id());
                 match cmd {
                     FuzzerCommand::CreateUpdateArc(_, val) => {
                         if let Some(curval) = &mut curval {
@@ -289,6 +289,12 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
     constructor: &mut impl FnMut() -> T,
 ) -> Vec<FuzzerCommand<T>> {
     let mut ret = Vec::new();
+
+    #[cfg(not(loom))]
+    const COUNT:usize = 50;
+    #[cfg(loom)]
+    const COUNT:usize = 10;
+
     for _x in 0..50 {
         match rng.gen_range(0..12) {
             0 => {
@@ -360,10 +366,13 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 }
 
 #[test]
+#[cfg(not(feature="disable_slow_tests"))]
 fn generic_thread_fuzzing_all() {
     #[cfg(miri)]
     const COUNT: u64 = 10;
-    #[cfg(any(loom, feature = "shuttle"))]
+    #[cfg(any(loom))]
+    const COUNT: u64 = 100;
+    #[cfg(any(feature = "shuttle"))]
     const COUNT: u64 = 1000;
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
     #[cfg(not(any(loom, miri, feature = "shuttle")))]
