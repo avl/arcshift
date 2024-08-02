@@ -502,6 +502,22 @@ impl<T: 'static> ArcShiftLight<T> {
         ArcShift::update_shared_impl(self.item, new_ptr, true);
     }
 
+    /// Retrieves the internal node count, counted from this instance.
+    fn get_internal_node_count(&self) -> usize {
+        let count = 1;
+        let mut curitem = self.item;
+        loop {
+            let next = get_next_and_state(curitem).load(Ordering::SeqCst);
+            if is_superseded_by_tentative(get_state(next)) {
+                return count + 1;
+            }
+            curitem = undecorate(next);
+            if curitem.is_null() {
+                return  count;
+            }
+        }
+    }
+
     /// Update the contents of this ArcShiftLight, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
@@ -2222,7 +2238,6 @@ pub mod tests {
             assert_eq!(count.load(Ordering::Relaxed), 1);
         });
     }
-
     #[test]
     fn simple_upgrade5() {
         model(|| {
@@ -2236,6 +2251,25 @@ pub mod tests {
             debug_println!("== Calling shared_get ==");
             shiftlight.reload();
             assert_eq!(count.load(Ordering::Relaxed), 1);
+        });
+    }
+    #[test]
+    fn simple_upgrade6() {
+        model(|| {
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            {
+                let mut shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+                assert_eq!(shiftlight.get_internal_node_count(), 1);
+                debug_println!("== Calling update_shared ==");
+                shiftlight.update_shared(InstanceSpy::new(count.clone()));
+                assert_eq!(shiftlight.get_internal_node_count(), 2);
+                debug_println!("== Calling shared_get ==");
+                shiftlight.reload();
+                assert_eq!(shiftlight.get_internal_node_count(), 1);
+
+                assert_eq!(count.load(Ordering::Relaxed), 1);
+            }
+            assert_eq!(count.load(Ordering::Relaxed), 0);
         });
     }
 
