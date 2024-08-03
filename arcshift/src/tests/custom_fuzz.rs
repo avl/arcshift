@@ -393,6 +393,7 @@ fn generic_thread_fuzzing_all() {
     }
 }
 #[test]
+#[cfg(not(feature="disable_slow_tests"))]
 fn generic_thread_fuzzing_21() {
     {
         let i = 21;
