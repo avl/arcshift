@@ -372,10 +372,13 @@ fn generic_thread_fuzzing_all() {
     const COUNT: u64 = 30;
     #[cfg(any(loom))]
     const COUNT: u64 = 100;
-    #[cfg(any(feature = "shuttle"))]
+    #[cfg(all(feature = "shuttle", not(coverage)))]
     const COUNT: u64 = 1000;
+    #[cfg(coverage)]
+    const COUNT: u64 = 10;
+
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-    #[cfg(not(any(loom, miri, feature = "shuttle")))]
+    #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
     const COUNT: u64 = 100000;
     for i in 0..COUNT {
         println!("--- Seed {} ---", i);

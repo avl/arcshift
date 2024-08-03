@@ -1,4 +1,4 @@
-//#![deny(warnings)]
+#![deny(warnings)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 #![deny(missing_docs)]
 

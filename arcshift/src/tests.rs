@@ -1,3 +1,4 @@
+#![deny(warnings)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use super::*;
@@ -41,16 +42,23 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
     loom::model(x)
 }
 
+
+
+#[cfg(all(feature="shuttle", coverage))]
+const SHUTTLE_ITERATIONS: usize = 50;
+#[cfg(all(feature="shuttle", not(coverage)))]
+const SHUTTLE_ITERATIONS: usize = 500;
+
 #[cfg(feature = "shuttle")]
 fn model(x: impl Fn() + 'static + Send + Sync) {
-    shuttle::check_random(x, 500);
+    shuttle::check_random(x, SHUTTLE_ITERATIONS);
 }
 #[cfg(feature = "shuttle")]
 fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
     if let Some(repro) = repro {
         shuttle::replay(x, repro);
     } else {
-        shuttle::check_random(x, 500);
+        shuttle::check_random(x, SHUTTLE_ITERATIONS);
     }
 }
 
@@ -64,6 +72,20 @@ fn simple_get() {
         assert_eq!(*shift.get(), 42u32);
     })
 }
+#[test]
+fn simple_deref() {
+    model(|| {
+        let shift = ArcShift::new(42u32);
+        assert_eq!(*shift, 42u32);
+    })
+}
+#[test]
+fn simple_get4() {
+    model(|| {
+        let shift = ArcShift::new(42u32);
+        assert_eq!(*shift.shared_non_reloading_get(), 42u32);
+    })
+}
 
 #[test]
 fn simple_get_mut() {
@@ -71,6 +93,15 @@ fn simple_get_mut() {
         let mut shift = ArcShift::new(42u32);
         // Uniquely owned values can be modified using 'try_get_mut'.
         assert_eq!(*shift.try_get_mut().unwrap(), 42);
+    })
+}
+#[test]
+fn simple_get_mut2() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        let mut shift2 = shift.clone();
+        shift2.update(43);
+        assert_eq!(shift.try_get_mut(), None);
     })
 }
 
