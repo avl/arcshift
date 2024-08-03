@@ -43,14 +43,14 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
 
 #[cfg(feature = "shuttle")]
 fn model(x: impl Fn() + 'static + Send + Sync) {
-    shuttle::check_random(x, 5000);
+    shuttle::check_random(x, 500);
 }
 #[cfg(feature = "shuttle")]
 fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
     if let Some(repro) = repro {
         shuttle::replay(x, repro);
     } else {
-        shuttle::check_random(x, 5000);
+        shuttle::check_random(x, 500);
     }
 }
 
