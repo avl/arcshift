@@ -369,7 +369,7 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 #[cfg(not(feature="disable_slow_tests"))]
 fn generic_thread_fuzzing_all() {
     #[cfg(miri)]
-    const COUNT: u64 = 10;
+    const COUNT: u64 = 30;
     #[cfg(any(loom))]
     const COUNT: u64 = 100;
     #[cfg(any(feature = "shuttle"))]
@@ -392,7 +392,25 @@ fn generic_thread_fuzzing_all() {
         });
     }
 }
-
+#[test]
+fn generic_thread_fuzzing_21() {
+    {
+        let i = 21;
+        let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+        println!("--- Seed {} ---", i);
+        model(move || {
+            let mut rng = StdRng::seed_from_u64(i);
+            let mut counter = 0usize;
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            let owner_ref = owner.clone();
+            run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
+                counter += 1;
+                owner_ref.create(statics[counter % 10])
+            });
+            owner.validate();
+        });
+    }
+}
 #[test]
 #[cfg(
     all(not(loom), not(feature = "shuttle"))

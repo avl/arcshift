@@ -43,14 +43,14 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
 
 #[cfg(feature = "shuttle")]
 fn model(x: impl Fn() + 'static + Send + Sync) {
-    shuttle::check_random(x, 500);
+    shuttle::check_random(x, 5000);
 }
 #[cfg(feature = "shuttle")]
 fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
     if let Some(repro) = repro {
         shuttle::replay(x, repro);
     } else {
-        shuttle::check_random(x, 500);
+        shuttle::check_random(x, 5000);
     }
 }
 
@@ -397,6 +397,39 @@ fn simple_threading2() {
     });
 }
 #[test]
+fn simple_threading2d() {
+    model(|| {
+        let owner = std::sync::Arc::new(SpyOwner2::new());
+        {
+            let shiftlight = ArcShiftLight::new(owner.create("orig"));
+            let mut shift = shiftlight.upgrade();
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    black_box(shiftlight.upgrade());
+                    debug_println!("t1 dropping");
+                })
+                .unwrap();
+
+            let ownerref = owner.clone();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    shift.update(ownerref.create("val1"));
+                    shift.update(ownerref.create("val2"));
+                    debug_println!("t2 dropping");
+                })
+                .unwrap();
+            _ = t1.join().unwrap();
+            _ = t2.join().unwrap();
+        }
+        owner.validate();
+    });
+}
+
+#[test]
 fn simple_threading2b() {
     model(|| {
         let shift1 = ArcShiftLight::new(42u32);
@@ -545,6 +578,46 @@ fn simple_threading3c() {
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
                 std::hint::black_box(shift1.update_shared(43));
+                debug_println!(" = drop t1 =");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t2 =");
+                std::hint::black_box(shift2.update_shared(44));
+                debug_println!(" = drop t2 =");
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t3 =");
+                std::hint::black_box(shift3.update_shared(45));
+                debug_println!(" = drop t3 =");
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+        _ = t3.join().unwrap();
+    });
+}
+#[test]
+fn simple_threading3d() {
+    model(|| {
+        let shift1 = std::sync::Arc::new(ArcShiftLight::new(42u32));
+        let shift2 = std::sync::Arc::clone(&shift1);
+        let shift3 = (*shift1).upgrade();
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t1 =");
+                std::hint::black_box(shift1.upgrade());
                 debug_println!(" = drop t1 =");
             })
             .unwrap();

@@ -1,4 +1,4 @@
-#![deny(warnings)]
+//#![deny(warnings)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 #![deny(missing_docs)]
 
@@ -347,14 +347,14 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
                 atomic::spin_loop();
                 continue;
             }
-            let count = get_refcount(curitem).load(Ordering::Acquire);
+            let count = get_refcount(curitem).load(Ordering::SeqCst);
             assert_ne!(count, 0);
             Self::verify_count(count);
             match get_refcount(curitem).compare_exchange(
                 count,
                 count + 1,
-                Ordering::Release,
-                Ordering::Relaxed,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
             ) {
                 Ok(_) => {
                     debug_println!(
@@ -588,7 +588,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// If 'next' is tentative, convert it to superseded.
     /// 'curitem' must be a valid pointer.
     fn load_nontentative_next(curitem: *const ItemHolder<T>) -> Option<*const ItemHolder<T>> {
-        let next = get_next_and_state(curitem).load(Ordering::Acquire);
+        let next = get_next_and_state(curitem).load(Ordering::SeqCst);
 
         debug_println!(
             "load_nontentative_next upgrade {:?}, next: {:?} = {:?}",
@@ -654,9 +654,9 @@ impl<T: 'static> ArcShiftLight<T> {
                 continue;
             }
 
-            let precount = get_refcount(curitem).fetch_add(MAX_ROOTS, Ordering::Acquire);
+            let precount = get_refcount(curitem).fetch_add(MAX_ROOTS, Ordering::SeqCst);
             if precount >= MAX_ARCSHIFT {
-                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::Release);
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
                 panic!(
                     "Maximum supported ArcShift instance count reached: {}",
                     MAX_ARCSHIFT
@@ -671,7 +671,7 @@ impl<T: 'static> ArcShiftLight<T> {
             );
             assert!(precount >= 1);
             let Some(next) = Self::load_nontentative_next(curitem) else {
-                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::Release);
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
                 assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
                 atomic::spin_loop();
                 continue;
@@ -684,7 +684,7 @@ impl<T: 'static> ArcShiftLight<T> {
                     next
                 );
 
-                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::Release);
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
                 assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
                 curitem = undecorate(next);
                 atomic::spin_loop();
@@ -1240,7 +1240,13 @@ impl<T: 'static> ArcShift<T> {
             let expect = if is_superseded_by_tentative(get_state(curnext)) {
                 curnext
             } else {
-                null_mut()
+                if undecorate(curnext).is_null() {
+                    null_mut()
+                } else {
+                    candidate = undecorate(curnext);
+                    atomic::spin_loop();
+                    continue;
+                }
             };
 
             verify_item(candidate);
@@ -1315,14 +1321,6 @@ impl<T: 'static> ArcShift<T> {
                             }
                             break;
                         }
-                        /*let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
-                            atomic::spin_loop();
-                            continue;
-                        };
-                        if early_dropped {
-                            let _dbg = get_refcount(other).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                            debug_println!("Early_drop_adjust2 for {:?} {} -> {}", new_ptr, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
-                        }*/
 
                         verify_item(undecorate(other));
                         debug_println!("Update not complete - but advancing to {:?}", other);
