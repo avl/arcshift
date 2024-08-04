@@ -68,7 +68,7 @@ or possibly better performance while being slightly easier to use:
 1) Updates are infrequent
 2) Each thread can have its own (mutable) copy of an ArcShift instance
 
-For people familiar with arc-swap, ArcShift-instances behaves much like arc_swap::cache::Cache, while
+For people familiar with arc-swap, ArcShift-instances behave much like arc_swap::cache::Cache, while
 the ArcShift analog to ArcSwap is ArcShiftLight.
 
 I did find some other crates with similar functionality, but didn't find any that inspired confidence.
@@ -85,10 +85,11 @@ The requirements for ArcShift are:
  * The implementation should be lock free (so we never have to suspend a thread)
  * The API must be 100% safe and sound.
  * When values are updated, previous values should be dropped as soon as possible. 
+ * It should not use thread local variables.
  * It should be possible to have 'lightweight' handles to the data which do not provide fast access,
    but on the other hand do not keep older values alive.
  * It should not have any memory overhead compared to Arc.
-
+ 
 Regarding the last two points, any type which provides overhead-free access to T will
 have to keep a T alive at all time, since otherwise some sort of synchronization (which is expensive)
 would be needed before access was granted.
