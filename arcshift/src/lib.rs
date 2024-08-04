@@ -766,11 +766,11 @@ impl<T: 'static> ItemHolder<T> {
             assert_is_undecorated(ptr);
 
             // SAFETY:
-            // This function cannot be called with a null-ptr. Also, this is
+            // This function is never called with a null-ptr. Also, this is
             // just used for testing.
             let atomic_magic1 = unsafe { &*addr_of!((*ptr).magic1) };
             // SAFETY:
-            // This function cannot be called with a null-ptr. Also, this is
+            // This function is never called with a null-ptr. Also, this is
             // just used for testing.
             let atomic_magic2 = unsafe { &*addr_of!((*ptr).magic2) };
 
@@ -1154,7 +1154,7 @@ impl<T: 'static> ArcShift<T> {
             addr_of_mut!((*result_ptr).next_and_state).write(atomic::AtomicPtr::default());
         }
         // SAFETY:
-        // next is just an AtomicUsize-type, for which all bit patterns are valid.
+        // refcount is just an AtomicUsize-type, for which all bit patterns are valid.
         unsafe {
             addr_of_mut!((*result_ptr).refcount).write(atomic::AtomicUsize::new(MAX_ROOTS));
         }
@@ -1461,7 +1461,7 @@ impl<T: 'static> ArcShift<T> {
                             verify_item(cand);
 
                             // SAFETY:
-                            // `cand` is a valid pointer, which we are allowed to drop the contents //of
+                            // `cand` is a valid pointer, which we are allowed to drop the
                             // payload for.
                             let payload_item_mut = unsafe {
                                 &mut *addr_of_mut!((*(cand as *mut ItemHolder<T>)).payload)
@@ -1750,7 +1750,6 @@ impl<T: 'static> ArcShift<T> {
             debug_println!("Update to {:?} detected", cand);
             // SAFETY:
             // the pointer returned by shared_get_impl is always valid.
-            //compile_error!("this is wrong - nothing keep the returned reference alive")
             return &unsafe { &*self.shared_get_impl() }.payload;
         }
         debug_println!("Returned payload for {:?}", self.item);
