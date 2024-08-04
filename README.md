@@ -8,7 +8,9 @@
 # Arcshift
 
 Arcshift is smart pointer type similar to Arc, with the distinction that it allows updating
-the value pointed to.
+the value pointed to, with some caveats. Basically, ArcShift is only a good fit if updates
+are extremely infrequent, or if it is possible to periodically obtain mutable access to all
+ArcShift instances to reload them (freeing up memory).
 
 ```rust
 use std::thread;

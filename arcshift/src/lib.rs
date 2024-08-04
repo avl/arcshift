@@ -5,7 +5,9 @@
 //! # Introduction to ArcShift
 //!
 //! [`ArcShift`] is a data type similar to [`std::sync::Arc`], except that it allows updating
-//! the value pointed to. The memory overhead is identical to that of Arc.
+//! the value pointed to. The memory overhead is identical to that of Arc. ArcShift is mainly
+//! intended for cases where updates are very infrequent. See the 'Trade-offs and Limitations'-heading
+//! further down before using!
 //!
 //! ## Example
 //! ```rust
@@ -72,7 +74,7 @@
 //!   at all compared to regular Arc.
 //! * ArcShift does not rely on any thread-local variables to achieve its performance.
 //!
-//! # Trade-offs - Limitations
+//! # Trade-offs and limitations
 //!
 //! ArcShift achieves its performance at the expense of the following disadvantages:
 //!
@@ -1859,8 +1861,6 @@ impl<T: 'static> ArcShift<T> {
     /// You should probably not be using this method.
     /// One use-case is if you can control locations where an update is possible, and arrange
     /// for '&mut self' to be available so that `ArcShift::reload` can be called at those locations.
-    /// But in this case, it might be better to just use `ArcShift::get` and keep the returned pointer
-    /// (it has a similar effect).
     #[inline(always)]
     pub fn shared_non_reloading_get(&self) -> &T {
         // SAFETY:
