@@ -1,6 +1,6 @@
 [package]
 name = "arcshift"
-version = "0.1.4"
+version = "0.1.5"
 documentation = "https://docs.rs/arcshift/"
 homepage = "https://github.com/avl/arcshift/"
 repository = "https://github.com/avl/arcshift/"
@@ -30,7 +30,7 @@ disable_slow_tests = []
 # Feature for internal use, for testing using the 'shuttle' framework
 
 [target.'cfg(loom)'.dependencies]
-loom = { version = "0.7", features = ["checkpoint"] }
+loom = { version = "0.7", features = ["checkpoint"], optional = true }
 
 [dev-dependencies]
 crossbeam-channel = "0.5"

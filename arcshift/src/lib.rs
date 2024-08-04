@@ -213,7 +213,7 @@ use std::backtrace::Backtrace;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
-use std::ptr::{addr_of, addr_of_mut, null_mut};
+use std::ptr::{addr_of, addr_of_mut, NonNull, null_mut};
 use std::sync::atomic::Ordering;
 
 // About unsafe code in this crate:
@@ -295,7 +295,7 @@ macro_rules! debug_println {
 /// # }
 /// ```
 pub struct ArcShift<T: 'static> {
-    item: *const ItemHolder<T>,
+    item: NonNull<ItemHolder<T>>,
 }
 
 impl<T> UnwindSafe for ArcShift<T> {}
@@ -321,7 +321,7 @@ impl<T> UnwindSafe for ArcShift<T> {}
 /// If this limitation is unacceptable, consider using `ArcShiftLight<Box<T>>` as your datatype,
 /// or possibly using a different crate.
 pub struct ArcShiftLight<T: 'static> {
-    item: *const ItemHolder<T>,
+    item: NonNull<ItemHolder<T>>,
 }
 
 /// SAFETY:
@@ -336,7 +336,7 @@ unsafe impl<T: 'static> Sync for ArcShiftLight<T> where T: Sync {}
 
 impl<T: 'static> Clone for ArcShiftLight<T> {
     fn clone(&self) -> Self {
-        let mut curitem = self.item;
+        let mut curitem = self.item.as_ptr() as *const _;
         loop {
             let Some(next) = Self::load_nontentative_next(curitem) else {
                 atomic::spin_loop();
@@ -373,7 +373,11 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
             }
         }
         debug_println!("Returning new ArcShiftLight for {:?}", curitem);
-        ArcShiftLight { item: curitem }
+        ArcShiftLight { item:
+            // SAFETY:
+            // Conditions above guarantee that curitem is not null
+            unsafe { NonNull::new_unchecked(curitem as *mut _)
+        } }
     }
 }
 impl<T: 'static> ArcShiftLight<T> {
@@ -390,7 +394,11 @@ impl<T: 'static> ArcShiftLight<T> {
         };
         let cur_ptr = Box::into_raw(Box::new(item));
         debug_println!("Created ArcShiftLight for {:?}", cur_ptr);
-        ArcShiftLight { item: cur_ptr }
+        ArcShiftLight { item:
+            // SAFETY:
+            // cur_ptr is not null, since it is the result of Box::into_raw
+            unsafe {NonNull::new_unchecked(cur_ptr)
+        } }
     }
 
     /// Reload this ArcShiftLight-instance.
@@ -404,14 +412,14 @@ impl<T: 'static> ArcShiftLight<T> {
                 self.item,
                 strength
             );
-            let Some(next) = Self::load_nontentative_next(self.item) else {
+            let Some(next) = Self::load_nontentative_next(self.item.as_ptr()) else {
                 atomic::spin_loop();
                 continue;
             };
             debug_println!("ArcShiftLight::reload, next = {:?}", next);
             if undecorate(next).is_null() {
                 if strength > 1 {
-                    let count = get_refcount(self.item).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                    let count = get_refcount(self.item.as_ptr()).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
                     debug_println!(
                         "ArcShiftLight::reload, next = {:?}, adjusting count {} -> {}",
                         self.item,
@@ -421,7 +429,7 @@ impl<T: 'static> ArcShiftLight<T> {
                     assert!(count >= MAX_ROOTS);
                 }
                 if strength == 0 {
-                    let count = get_refcount(self.item).fetch_add(1, Ordering::SeqCst);
+                    let count = get_refcount(self.item.as_ptr()).fetch_add(1, Ordering::SeqCst);
                     debug_println!(
                         "ArcShiftLight::reload2b, next = {:?}, adjusting count {} -> {}",
                         self.item,
@@ -434,7 +442,7 @@ impl<T: 'static> ArcShiftLight<T> {
             }
 
             if strength > 0 { //TODO: Why does cargo mutants think changing this to < 0 never fail?
-                let count = get_refcount(self.item).fetch_sub(strength, Ordering::SeqCst);
+                let count = get_refcount(self.item.as_ptr()).fetch_sub(strength, Ordering::SeqCst);
                     debug_println!(
                     "ArcShiftLight::reload, next = {:?}, releasing {} -> {}",
                     next,
@@ -444,7 +452,7 @@ impl<T: 'static> ArcShiftLight<T> {
                 assert!(count >= strength);
                 if count == strength {
                     debug_println!("ArcShiftLight::reload - dropping {:?}", self.item);
-                    if drop_payload_and_holder(self.item) {
+                    if drop_payload_and_holder(self.item.as_ptr()) {
                         strength = MAX_ROOTS;
                     } else {
                         strength = 1;
@@ -453,7 +461,10 @@ impl<T: 'static> ArcShiftLight<T> {
                     strength = 0;
                 }
             }
-            self.item = undecorate(next);
+
+            // SAFETY:
+            // next cannot be null, because of the if-statement further up
+            self.item = unsafe{NonNull::new_unchecked(undecorate(next) as *mut _)};
         }
     }
 
@@ -488,7 +499,7 @@ impl<T: 'static> ArcShiftLight<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        ArcShift::update_shared_impl(self.item, new_ptr, true);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr, true);
     }
 
     /// Retrieves the internal node count, counted from this instance.
@@ -496,7 +507,7 @@ impl<T: 'static> ArcShiftLight<T> {
     #[cfg_attr(test, mutants::skip)] //Only used for tests, doesn't need cargo mutants
     fn get_internal_node_count(&self) -> usize {
         let count = 1;
-        let mut curitem = self.item;
+        let mut curitem = self.item.as_ptr() as *const _;
         loop {
             let next = get_next_and_state(curitem).load(Ordering::SeqCst);
             if is_superseded_by_tentative(get_state(next)) {
@@ -536,7 +547,7 @@ impl<T: 'static> ArcShiftLight<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        ArcShift::update_shared_impl(self.item, new_ptr, false);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr, false);
         self.reload();
     }
     /// Update the contents of this ArcShiftLight, and all other instances cloned from this
@@ -561,7 +572,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// before this function returns.
     pub fn update_box(&mut self, new_payload: Box<T>) {
         let new_ptr = ArcShift::from_box_impl(new_payload);
-        ArcShift::update_shared_impl(self.item, new_ptr as *mut _, false);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, false);
         self.reload();
     }
 
@@ -581,7 +592,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
         let new_ptr = ArcShift::from_box_impl(new_payload);
-        ArcShift::update_shared_impl(self.item, new_ptr as *mut _, true);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true);
     }
 
     /// Load 'next'.
@@ -629,7 +640,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// Create an ArcShift instance from this ArcShiftLight.
     pub fn upgrade(&self) -> ArcShift<T> {
         debug_println!("ArcShiftLight Promoting to ArcShift {:?}", self.item);
-        let mut curitem = self.item;
+        let mut curitem = self.item.as_ptr();
         loop {
             let Some(next) = Self::load_nontentative_next(curitem) else {
                 atomic::spin_loop();
@@ -649,7 +660,7 @@ impl<T: 'static> ArcShiftLight<T> {
                     curitem,
                     next
                 );
-                curitem = undecorate(next);
+                curitem = undecorate(next) as *mut _;
                 atomic::spin_loop();
                 continue;
             }
@@ -686,12 +697,17 @@ impl<T: 'static> ArcShiftLight<T> {
 
                 let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
                 assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
-                curitem = undecorate(next);
+                curitem = undecorate(next) as *mut _;
                 atomic::spin_loop();
                 continue;
             }
 
-            let mut temp = ArcShift { item: curitem };
+            let mut temp = ArcShift { item:
+                // SAFETY:
+                // curitem cannot be null, since it is either the value of 'self.item', which
+                // cannot be null, or assigned by code above that first checks for null
+                unsafe { NonNull::new_unchecked(curitem) }
+            };
             temp.reload();
             return temp;
         }
@@ -701,7 +717,7 @@ impl<T: 'static> ArcShiftLight<T> {
 impl<T: 'static> Drop for ArcShiftLight<T> {
     fn drop(&mut self) {
         debug_println!("ArcShiftLight::drop: {:?}", self.item);
-        drop_root_item(self.item, 1)
+        drop_root_item(self.item.as_ptr(), 1)
     }
 }
 
@@ -715,12 +731,12 @@ unsafe impl<T: 'static + Send> Send for ArcShift<T> {}
 
 impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
-        verify_item(self.item);
+        verify_item(self.item.as_ptr());
 
         self.reload(); //TODO: Remove 'reload' from here. If it serves a purpose, there's something wrong with 'drop_item', since any guarantee offered by reload would imply a race
         debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
-        let _t = get_next_and_state(self.item).load(Ordering::SeqCst);
-        drop_item(self.item);
+        let _t = get_next_and_state(self.item.as_ptr()).load(Ordering::SeqCst);
+        drop_item(self.item.as_ptr());
         debug_println!("ArcShift::drop({:?}) DONE", self.item);
     }
 }
@@ -749,7 +765,13 @@ impl<T: 'static> ItemHolder<T> {
         {
             assert_is_undecorated(ptr);
 
+            // SAFETY:
+            // This function cannot be called with a null-ptr. Also, this is
+            // just used for testing.
             let atomic_magic1 = unsafe { &*addr_of!((*ptr).magic1) };
+            // SAFETY:
+            // This function cannot be called with a null-ptr. Also, this is
+            // just used for testing.
             let atomic_magic2 = unsafe { &*addr_of!((*ptr).magic2) };
 
             let magic1 = atomic_magic1.load(Ordering::SeqCst);
@@ -941,7 +963,7 @@ fn is_superseded_by_tentative(state: Option<ItemStateEnum>) -> bool {
 impl<T: 'static> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         debug_println!("ArcShift::clone({:?})", self.item);
-        let rescount = get_refcount(self.item).fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst);
+        let rescount = get_refcount(self.item.as_ptr()).fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst);
 
         atomic::fence(Ordering::SeqCst);
         debug_println!(
@@ -950,7 +972,7 @@ impl<T: 'static> Clone for ArcShift<T> {
             rescount + MAX_ROOTS
         );
         if rescount >= MAX_ARCSHIFT {
-            get_refcount(self.item).fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst);
+            get_refcount(self.item.as_ptr()).fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst);
             panic!("Internal error in ArcShift: Max number of ArcShift instances exceeded");
         }
         ArcShift { item: self.item }
@@ -1092,16 +1114,23 @@ impl<T: 'static> ArcShift<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let cur_ptr = Box::into_raw(Box::new(item));
-        ArcShift { item: cur_ptr }
+        ArcShift { item:
+            // SAFETY:
+            // cur_ptr has just been created by Box::into_raw, and cannot be null
+            unsafe { NonNull::new_unchecked(cur_ptr) }
+        }
     }
     /// Basically the same as doing [`ArcShift::new`], but avoids copying the contents of 'input'
     /// to the stack, even as a temporary variable. This can be useful, if the type is too large
     /// to fit on the stack.
     pub fn from_box(input: Box<T>) -> ArcShift<T> {
         ArcShift {
-            item: Self::from_box_impl(input)
+            // SAFETY:
+            // from_box_impl never creates a null-pointer from a Box.
+            item: unsafe { NonNull::new_unchecked(Self::from_box_impl(input) as *mut _) }
         }
     }
+    /// The returned pointer is never null. Even for zero-sized T.
     fn from_box_impl(input: Box<T>) -> *const ItemHolder<T> {
         let input_ptr = Box::into_raw(input);
 
@@ -1161,13 +1190,13 @@ impl<T: 'static> ArcShift<T> {
     pub fn try_get_mut(&mut self) -> Option<&mut T> {
         self.reload();
 
-        if get_refcount(self.item).load(Ordering::SeqCst) == MAX_ROOTS {
-            if !undecorate(get_next_and_state(self.item).load(Ordering::SeqCst)).is_null() {
+        if get_refcount(self.item.as_ptr()).load(Ordering::SeqCst) == MAX_ROOTS {
+            if !undecorate(get_next_and_state(self.item.as_ptr()).load(Ordering::SeqCst)).is_null() {
                 return None;
             }
             // SAFETY:
             // We always have refcount for self.item, and it is guaranteed valid
-            Some(unsafe { &mut (*(self.item as *mut ItemHolder<T>)).payload })
+            Some(unsafe { &mut (*(self.item.as_ptr())).payload })
         } else {
             None
         }
@@ -1181,7 +1210,7 @@ impl<T: 'static> ArcShift<T> {
         self.reload();
 
         debug_println!("---- Try_into_inner ----");
-        let retval = Self::drop_impl_ret(self.item);
+        let retval = Self::drop_impl_ret(self.item.as_ptr());
         std::mem::forget(self);
         retval
     }
@@ -1207,7 +1236,7 @@ impl<T: 'static> ArcShift<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        Self::update_shared_impl(self.item, new_ptr, true);
+        Self::update_shared_impl(self.item.as_ptr(), new_ptr, true);
     }
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -1225,7 +1254,7 @@ impl<T: 'static> ArcShift<T> {
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
         let new_ptr = Self::from_box_impl(new_payload);
-        Self::update_shared_impl(self.item, new_ptr as *mut _, true);
+        Self::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true);
     }
     fn update_shared_impl(self_item: *const ItemHolder<T>, new_ptr: *mut ItemHolder<T>, make_tentative: bool) {
         debug_println!("Upgrading {:?} -> {:?} ", self_item, new_ptr);
@@ -1239,14 +1268,12 @@ impl<T: 'static> ArcShift<T> {
 
             let expect = if is_superseded_by_tentative(get_state(curnext)) {
                 curnext
+            } else if undecorate(curnext).is_null() {
+                null_mut()
             } else {
-                if undecorate(curnext).is_null() {
-                    null_mut()
-                } else {
-                    candidate = undecorate(curnext);
-                    atomic::spin_loop();
-                    continue;
-                }
+                candidate = undecorate(curnext);
+                atomic::spin_loop();
+                continue;
             };
 
             verify_item(candidate);
@@ -1421,12 +1448,12 @@ impl<T: 'static> ArcShift<T> {
                                 Ok(_) => {
                                     debug_println!("Spinning on {:?} drop sync(1)", cand);
                                     atomic::spin_loop();
-                                    return None;
+                                    None
                                 }
                                 Err(_) => {
                                     debug_println!("Spinning on {:?} drop sync(2)", cand);
                                     atomic::spin_loop();
-                                    return None;
+                                    None
                                 }
                             }
                         } else {
@@ -1444,13 +1471,13 @@ impl<T: 'static> ArcShift<T> {
                             // we are allowed to drop.
                             unsafe { std::ptr::drop_in_place(payload_item_mut) }
                             debug_println!("Performed early drop for {:?}", cand);
-                            return Some(true);
+                            Some(true)
                         }
                     }
                     Err(_) => {
                         debug_println!("Spinning on {:?} drop sync(3)", cand);
                         atomic::spin_loop();
-                        return None;
+                        None
                     }
                 }
             } else {
@@ -1458,7 +1485,7 @@ impl<T: 'static> ArcShift<T> {
                     "However, first condition for early drop not fulfilled: {:?}",
                     next_ptr
                 );
-                return Some(false);
+                Some(false)
             }
         } else {
             debug_println!(
@@ -1466,7 +1493,7 @@ impl<T: 'static> ArcShift<T> {
                 cand,
                 count
             );
-            return Some(false);
+            Some(false)
         }
     }
 
@@ -1478,10 +1505,10 @@ impl<T: 'static> ArcShift<T> {
     /// effect, compared to just calling 'get' and discarding the value.
     #[inline(never)]
     pub fn reload(&mut self) {
-        verify_item(self.item);
+        verify_item(self.item.as_ptr());
         debug_println!("reload {:?}", self.item);
 
-        let mut new_self = self.item;
+        let mut new_self = self.item.as_ptr() as *const ItemHolder<T>;
         verify_item(new_self);
         loop {
             verify_item(new_self);
@@ -1491,7 +1518,7 @@ impl<T: 'static> ArcShift<T> {
                 continue;
             };
             if next.is_null() {
-                if new_self == self.item {
+                if new_self == self.item.as_ptr() {
                     debug_println!("{:?} doesn't need reload", self.item);
                     return; //Nothing to do
                 }
@@ -1530,7 +1557,7 @@ impl<T: 'static> ArcShift<T> {
             atomic::spin_loop();
         }
 
-        let mut cand = self.item;
+        let mut cand = self.item.as_ptr() as *const _;
         let mut strength = MAX_ROOTS;
         loop {
             assert_is_undecorated(cand);
@@ -1673,12 +1700,15 @@ impl<T: 'static> ArcShift<T> {
         }
 
         debug_println!("Reload moving {:?} -> {:?}", self.item, new_self);
-        self.item = new_self;
+        // SAFETY:
+        // new_self cannot be null, since it is either self.item (not null), or
+        // has been assigned by code which first checked for null.
+        self.item = unsafe{ NonNull::new_unchecked(new_self as *mut _) };
     }
 
     #[cold]
     fn shared_get_impl(&self) -> *const ItemHolder<T> {
-        let mut next_self_item = self.item;
+        let mut next_self_item = self.item.as_ptr() as *const _;
         loop {
             debug_println!("shared_get_impl loop {:?}", next_self_item);
             assert_is_undecorated(next_self_item);
@@ -1715,7 +1745,7 @@ impl<T: 'static> ArcShift<T> {
         // SAFETY:
         // `self.item` is always a valid pointer
         let cand: *const ItemHolder<T> =
-            get_next_and_state(self.item).load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
+            get_next_and_state(self.item.as_ptr()).load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             // SAFETY:
@@ -1726,7 +1756,7 @@ impl<T: 'static> ArcShift<T> {
         debug_println!("Returned payload for {:?}", self.item);
         // SAFETY:
         // `self.item` is always a valid pointer
-        &unsafe { &*self.item }.payload
+        &unsafe { &*self.item.as_ptr() }.payload
     }
 
     /// Return the value pointed to.
@@ -1742,7 +1772,7 @@ impl<T: 'static> ArcShift<T> {
     pub fn get(&mut self) -> &T {
         debug_println!("Getting {:?}", self.item);
         let cand: *const ItemHolder<T> =
-            get_next_and_state(self.item).load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
+            get_next_and_state(self.item.as_ptr()).load(atomic::Ordering::Relaxed) as *const ItemHolder<T>;
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             self.reload();
@@ -1750,7 +1780,7 @@ impl<T: 'static> ArcShift<T> {
         debug_println!("Returned payload for {:?}", self.item);
         // SAFETY:
         // `self.item` is always a valid pointer
-        &unsafe { &*self.item }.payload
+        &unsafe { &*self.item.as_ptr() }.payload
     }
 
     #[cfg_attr(test, mutants::skip)]
@@ -1766,7 +1796,7 @@ impl<T: 'static> ArcShift<T> {
     /// A maximum of 524287 ArcShiftLight-instances can be created for each value.
     /// An attempt to create more instances than this will fail with a panic.
     pub fn make_light(&self) -> ArcShiftLight<T> {
-        let mut curitem = self.item;
+        let mut curitem = self.item.as_ptr() as *const ItemHolder<T>;
         loop {
             let Some(next) = ArcShiftLight::load_nontentative_next(curitem) else {
                 atomic::spin_loop();
@@ -1793,10 +1823,13 @@ impl<T: 'static> ArcShift<T> {
             debug_println!("{:?}, changed refcount {} -> {}", curitem, count, count + 1);
             break;
         }
-        ArcShiftLight { item: curitem }
+        // SAFETY:
+        // curitem cannot be null. It is either equal to self.item, which is not null,
+        // or has been assigned from next after first checking for null.
+        ArcShiftLight { item: unsafe { NonNull::new_unchecked(curitem as *mut _) } }
     }
 
-    /// This is like 'get', but never upgrades the pointer.
+    /// This is like 'get', but never reloads the pointer.
     /// This means that any new value supplied using one of the update methods will not be
     /// available.
     /// This method is ever so slightly faster than regular 'get'.
@@ -1811,7 +1844,7 @@ impl<T: 'static> ArcShift<T> {
     pub fn shared_non_reloading_get(&self) -> &T {
         // SAFETY:
         // `self.item` is always a valid pointer
-        &unsafe { &*self.item }.payload
+        &unsafe { &*self.item.as_ptr() }.payload
     }
 }
 
