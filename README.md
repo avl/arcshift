@@ -3,6 +3,7 @@
 ![build](https://github.com/avl/arcshift/actions/workflows/loom.yml/badge.svg)
 ![build](https://github.com/avl/arcshift/actions/workflows/miri.yml/badge.svg)
 ![build](https://github.com/avl/arcshift/actions/workflows/mutants.yml/badge.svg)
+![build](https://github.com/avl/arcshift/actions/workflows/clippy.yml/badge.svg)
 
 # Arcshift
 
