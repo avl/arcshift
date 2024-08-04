@@ -1159,11 +1159,16 @@ impl<T: 'static> ArcShift<T> {
             addr_of_mut!((*result_ptr).refcount).write(atomic::AtomicUsize::new(MAX_ROOTS));
         }
 
+        // SAFETY:
+        // result_ptr is a valid pointer
         #[cfg(feature = "validate")]
         unsafe {
             addr_of_mut!((*result_ptr).magic1)
                 .write(std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111));
         }
+
+        // SAFETY:
+        // result_ptr is a valid pointer
         #[cfg(feature = "validate")]
         unsafe {
             addr_of_mut!((*result_ptr).magic2)
