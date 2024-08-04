@@ -750,7 +750,7 @@ struct ItemHolder<T: 'static> {
     magic1: std::sync::atomic::AtomicU64,
     next_and_state: atomic::AtomicPtr<ItemHolder<T>>,
     refcount: atomic::AtomicUsize,
-    payload: T,
+    payload: T, //TODO: We should use ManuallyDrop<T> here. It would simplify the code (but not affect correctness)
     #[cfg(feature = "validate")]
     magic2: std::sync::atomic::AtomicU64,
 }
