@@ -70,7 +70,7 @@
 //! * Modifying values is reasonably fast (think, 10-50 nanoseconds).
 //! * The function [`ArcShift::shared_non_reloading_get`] allows access almost without any overhead
 //!   at all compared to regular Arc.
-//! * ArcShift does not rely on any threadlocal variables to achieve its performance.
+//! * ArcShift does not rely on any thread-local variables to achieve its performance.
 //!
 //! # Trade-offs - Limitations
 //!
