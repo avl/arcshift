@@ -1386,6 +1386,23 @@ impl<T: 'static> ArcShift<T> {
         debug_println!("self.reload()");
         self.reload();
     }
+
+    /// This method calls the supplied function with the previous value pointed to.
+    /// It then sets the current value to the value returned by the function.
+    ///
+    /// Note, there is no guarantee that the value isn't updated while the supplied function
+    /// 'f' is running. This will not be detected, and the value returned by 'f' will
+    /// overwrite any previous values.
+    ///
+    /// Also, of course, if other threads do simultaneous updates, there's no particular guarantee
+    /// that whatever value is returned by f will ever be read by another thread before it is
+    /// overwritten.
+    pub fn rcu<F>(&mut self, f: F) where F: FnOnce(&T) -> T {
+        let old = self.get();
+        let result = f(old);
+        self.update(result);
+    }
+
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.

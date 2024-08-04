@@ -73,6 +73,14 @@ fn simple_get() {
     })
 }
 #[test]
+fn simple_rcu() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        shift.rcu(|x|x+1);
+        assert_eq!(*shift.get(), 43u32);
+    })
+}
+#[test]
 fn simple_deref() {
     model(|| {
         let shift = ArcShift::new(42u32);
@@ -104,7 +112,15 @@ fn simple_zerosized() {
         assert_eq!(*shift.get(), ());
     })
 }
-
+#[test]
+fn simple_update() {
+    model(|| {
+        let mut shift = ArcShift::new(42);
+        let old = &*shift;
+        shift.update_shared(*old + 4);
+        shift.reload();
+    })
+}
 #[test]
 fn simple_get_mut2() {
     model(|| {
