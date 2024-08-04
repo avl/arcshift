@@ -73,6 +73,14 @@ fn simple_get() {
     })
 }
 #[test]
+fn simple_rcu() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        shift.rcu(|x|x+1);
+        assert_eq!(*shift.get(), 43u32);
+    })
+}
+#[test]
 fn simple_deref() {
     model(|| {
         let shift = ArcShift::new(42u32);
@@ -93,6 +101,24 @@ fn simple_get_mut() {
         let mut shift = ArcShift::new(42u32);
         // Uniquely owned values can be modified using 'try_get_mut'.
         assert_eq!(*shift.try_get_mut().unwrap(), 42);
+    })
+}
+#[test]
+fn simple_zerosized() {
+    model(|| {
+        let mut shift = ArcShift::new(());
+        assert_eq!(*shift.get(), ());
+        shift.update(());
+        assert_eq!(*shift.get(), ());
+    })
+}
+#[test]
+fn simple_update() {
+    model(|| {
+        let mut shift = ArcShift::new(42);
+        let old = &*shift;
+        shift.update_shared(*old + 4);
+        shift.reload();
     })
 }
 #[test]
@@ -835,8 +861,8 @@ fn simple_threading4c() {
                     debug_println!(" = On thread t3 = {:?}", std::thread::current().id());
                     shift3.update_shared(count2.create("t3val"));
 
-                    let _dbgval = get_next_and_state(shift3.item).load(Ordering::SeqCst);
-                    verify_item(shift3.item);
+                    let _dbgval = get_next_and_state(shift3.item.as_ptr()).load(Ordering::SeqCst);
+                    verify_item(shift3.item.as_ptr());
                     debug_println!("Checkt34c: {:?} next: {:?}", shift3.item, _dbgval);
                     debug_println!(" = drop t3 =");
                 })
@@ -847,7 +873,7 @@ fn simple_threading4c() {
                 .spawn(move || {
                     debug_println!(" = On thread t4 = {:?}", std::thread::current().id());
                     let shift4 = &*shift4;
-                    verify_item(shift4.item);
+                    verify_item(shift4.item.as_ptr());
                     debug_println!(
                         "Checkt44c: {:?} next: {:?}",
                         shift4.item,

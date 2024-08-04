@@ -3,6 +3,7 @@
 ![build](https://github.com/avl/arcshift/actions/workflows/loom.yml/badge.svg)
 ![build](https://github.com/avl/arcshift/actions/workflows/miri.yml/badge.svg)
 ![build](https://github.com/avl/arcshift/actions/workflows/mutants.yml/badge.svg)
+![build](https://github.com/avl/arcshift/actions/workflows/clippy.yml/badge.svg)
 
 # Arcshift
 
@@ -59,7 +60,7 @@ What I wanted was simply an `Arc<T>` where the value T could be updated.
 I know it's possible to achieve something like this using ArcSwap, by constructing an 
 `Arc<ArcSwap<Arc<T>>>`, but it is not as convenient as I would have liked.
 
-ArcSwap is a fantastic crate, well optimized, and much more mature than ArcShift.
+ArcSwap seems well optimized, and much more mature than ArcShift.
 
 However, for example if the following conditions are fulfilled, ArcShift may give similar
 or possibly better performance while being slightly easier to use:
@@ -69,6 +70,9 @@ or possibly better performance while being slightly easier to use:
 
 For people familiar with arc-swap, ArcShift-instances behaves much like arc_swap::cache::Cache, while
 the ArcShift analog to ArcSwap is ArcShiftLight.
+
+I did find some other crates with similar functionality, but didn't find any that inspired confidence.
+I'm sure one might exist, I may just have missed it!
 
 ### Mission statement
 
@@ -103,17 +107,17 @@ any updated value, and is null before any update has occurred.
 Note, the below diagram is simplified, see text below.
 ```
 
- Heap block 1                                             Heap block 2
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓                     ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃  refcount: 1                   ┃        ┌────────── ➤┃  refcount: 1                   ┃
-┃  payload: "First version"      ┃        │            ┃  payload: "Second version"     ┃
-┃  next_and_state: ptr ──────────┃────────┘            ┃  next_and_state: nullptr       ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛                     ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ Heap block 1                                  Heap block 2
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓          ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  refcount: 1                 ┃    ┌─── ➤┃  refcount: 1                ┃
+┃  payload: "First version"    ┃    │     ┃  payload: "Second version"  ┃
+┃  next_and_state: ptr ────────┃────┘     ┃  next_and_state: nullptr    ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛          ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
                            ⮝
   ArcShift-instance        │
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃  item: ptr ──────────────┘     ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  item: ptr ──────────────┘   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 ```
 

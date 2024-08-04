@@ -205,7 +205,7 @@ fn check_too_many_roots2() {
         let light = ArcShiftLight::new(1u8);
         // When running under 'shuttle', we can't do too many steps, so we can't
         // exhaust all MAX_ROOTS-items naturally, we have to cheat like this.
-        get_refcount(light.item).fetch_add(MAX_ROOTS - 2, atomic::Ordering::SeqCst);
+        get_refcount(light.item.as_ptr()).fetch_add(MAX_ROOTS - 2, atomic::Ordering::SeqCst);
         for _ in 0..10 {
             temp.push(light.clone());
             atomic::spin_loop();

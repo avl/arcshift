@@ -3,7 +3,7 @@ use arcshift::ArcShift;
 
 fn main () {
     let mut arc = ArcShift::new("Hello".to_string());
-    let mut arc2 = arc.clone();
+    let arc2 = arc.clone();
 
 
     let j1 = thread::spawn(move || {
