@@ -737,6 +737,7 @@ fn simple_threading2_rcu() {
         assert_eq!(*shift0.get(), 4);
     });
 }
+#[cfg(not(feature="disable_slow_tests"))]
 #[test]
 fn simple_threading3_rcu() {
     model(|| {
