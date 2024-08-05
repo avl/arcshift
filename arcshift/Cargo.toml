@@ -1,6 +1,6 @@
 [package]
 name = "arcshift"
-version = "0.1.5"
+version = "0.1.6"
 documentation = "https://docs.rs/arcshift/"
 homepage = "https://github.com/avl/arcshift/"
 repository = "https://github.com/avl/arcshift/"
