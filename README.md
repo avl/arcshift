@@ -12,6 +12,9 @@ the value pointed to, with some caveats. Basically, ArcShift is only a good fit 
 are extremely infrequent, or if it is possible to periodically obtain mutable access to all
 ArcShift instances to reload them (freeing up memory).
 
+You can think of ArcShift as an Arc<> over a linked list of versions, with the ability to add 
+a new version and automatically reload on read (see [`ArcShift::get`]).
+
 ```rust
 use std::thread;
 use arcshift::ArcShift;
@@ -300,7 +303,7 @@ The problem is that code like this:
 ... is not valid while 'payload' is being dropped. This is because dereferencing `*item` is
 not allowed while one of its fields is being written to.
 
-Instead, one must do:
+Instead, one can do:
 
 ```rust
     unsafe { &*addr_of!((*ptr).refcount) }.load(Ordering::SeqCst)
@@ -309,6 +312,10 @@ This is valid, since 'addr_of' does not dereference ptr. Critics of rust might p
 that this kind of code is more complex than equivalent C++-code. However, the beauty is that
 this complexity is entirely contained inside ArcShift, and once ArcShift has been validated,
 no one else ever has to think about it again.
+
+Update: It has been pointed out to me that a better solution is to let 'payload' be ManuallyDrop<T> 
+instead of T.
+
 
 
 ## Miri is a fantastic tool

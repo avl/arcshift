@@ -6,7 +6,7 @@
 //!
 //! [`ArcShift`] is a data type similar to [`std::sync::Arc`], except that it allows updating
 //! the value pointed to. The memory overhead is identical to that of Arc. ArcShift is mainly
-//! intended for cases where updates are very infrequent. See the 'Trade-offs and Limitations'-heading
+//! intended for cases where updates are very infrequent. See the 'Limitations'-heading
 //! further down before using!
 //!
 //! ## Example
@@ -37,6 +37,46 @@
 //! j2.join().unwrap();
 //! # }
 //! ```
+//!
+//! When ArcShift values are updated, a linked list of all updates is formed. Whenever
+//! an arcshift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`] or
+//! [`ArcShiftLight::reload`], that instance advances along the linked list to the last
+//! node in the list. When no instance exists pointing at a node in the list, it is dropped.
+//! It is thus important to periodically call reload or get (unless the number of updates is
+//! so low that the cost of traversing the linked list is acceptable).
+//!
+//! # Strong points
+//! * Easy to use (similar to Arc)
+//! * All functions are lock free (see <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
+//! * For use cases where no modification of values occurs, performance is very good (much
+//!   better than RwLock or Mutex).
+//! * Modifying values is reasonably fast (think, 10-50 nanoseconds).
+//! * The function [`ArcShift::shared_non_reloading_get`] allows access almost without any overhead
+//!   at all compared to regular Arc.
+//! * ArcShift does not rely on any thread-local variables to achieve its performance.
+//!
+//! # Limitations
+//!
+//! ArcShift achieves its performance at the expense of the following disadvantages:
+//!
+//! * When modifying the value, the old version of the value lingers in memory until
+//!   the last ArcShift has been updated. Such an update only happens when the ArcShift
+//!   is accessed using an owned (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
+//!   This can be partially mitigated by using the [`ArcShiftLight`]-type for long-lived
+//!   never-reloaded instances.
+//! * Modifying the value is approximately 10x more expensive than modifying `Arc<RwLock<T>>`
+//! * When the value is modified, the next subsequent access can be slower than an `Arc<RwLock<T>>`
+//!   access.
+//! * ArcShift is its own datatype. It is in no way compatible with `Arc<T>`.
+//! * At most 524287 instances of ArcShiftLight can be created for each value.
+//! * At most 35000000000000 instances of ArcShift can be created for each value.
+//! * ArcShift does not support an analog to [`std::sync::Arc`]'s [`std::sync::Weak`].
+//! * ArcShift instances should ideally be owned (or be mutably accessible).
+//!
+//! The last limitation might seem unacceptable, but for many applications it is not
+//! hard to make sure each thread/scope has its own instance of ArcShift pointing to
+//! the resource. Cloning ArcShift instances is reasonably fast.
+//!
 //! # Motivation
 //!
 //! The primary raison d'être for [`ArcShift`] is to be a version of Arc which allows
@@ -53,11 +93,11 @@
 //! time-saving feature. A performance hit during asset-reload is acceptable though.
 //! ArcShift prioritizes base performance, while accepting a penalty when updates are made.
 //! The penalty is that, under some circumstances described below, ArcShift can have a lingering
-//! performance hit until 'force_update' is called. See documentation for the details.
+//! performance hit until 'reload' is called. See documentation for the details.
 //!
 //! ArcShift can, of course, be useful in other domains than computer games.
 //!
-//! # Properties
+//! # Performance properties
 //!
 //! Accessing the value stored in an ArcShift instance only requires a single
 //! atomic operation, of the least expensive kind (Ordering::Relaxed). On x86_64,
@@ -65,36 +105,6 @@
 //! on arm it is not an expensive operation.
 //! The cost of such access is much smaller than a mutex access, even an uncontended one.
 //!
-//! # Strong points
-//! * Easy to use (similar to Arc)
-//! * All functions are lock free (see <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
-//! * For use cases where no modification of values occurs, performance is very good.
-//! * Modifying values is reasonably fast (think, 10-50 nanoseconds).
-//! * The function [`ArcShift::shared_non_reloading_get`] allows access almost without any overhead
-//!   at all compared to regular Arc.
-//! * ArcShift does not rely on any thread-local variables to achieve its performance.
-//!
-//! # Trade-offs and limitations
-//!
-//! ArcShift achieves its performance at the expense of the following disadvantages:
-//!
-//! * When modifying the value, the old version of the value lingers in memory until
-//!   the last ArcShift has been updated. Such an update only happens when the ArcShift
-//!   is accessed using an owned (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
-//!   This can be avoided by using the [`ArcShiftLight`]-type for long-lived never-reloaded
-//!   instances.
-//! * Modifying the value is approximately 10x more expensive than modifying `Arc<RwLock<T>>`
-//! * When the value is modified, the next subsequent access can be slower than an `Arc<RwLock<T>>`
-//!   access.
-//! * ArcShift is its own datatype. It is no way compatible with `Arc<T>`.
-//! * At most 524287 instances of ArcShiftLight can be created for each value.
-//! * At most 35000000000000 instances of ArcShift can be created for each value.
-//! * ArcShift does not support an analog to [`std::sync::Arc`]'s [`std::sync::Weak`].
-//! * ArcShift instances should ideally be owned (or be mutably accessible).
-//!
-//! The last limitation might seem unacceptable, but for many applications it is not
-//! hard to make sure each thread/scope has its own instance of ArcShift pointing to
-//! the resource. Cloning ArcShift instances is reasonably fast.
 //!
 //! # Implementation
 //!
@@ -215,7 +225,7 @@ use std::backtrace::Backtrace;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
-use std::ptr::{addr_of, addr_of_mut, NonNull, null_mut};
+use std::ptr::{addr_of, addr_of_mut, NonNull, null, null_mut};
 use std::sync::atomic::Ordering;
 
 // About unsafe code in this crate:
@@ -501,7 +511,7 @@ impl<T: 'static> ArcShiftLight<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr, true);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr, true, null());
     }
 
     /// Retrieves the internal node count, counted from this instance.
@@ -549,7 +559,7 @@ impl<T: 'static> ArcShiftLight<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr, false);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr, false, null());
         self.reload();
     }
     /// Update the contents of this ArcShiftLight, and all other instances cloned from this
@@ -574,7 +584,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// before this function returns.
     pub fn update_box(&mut self, new_payload: Box<T>) {
         let new_ptr = ArcShift::from_box_impl(new_payload);
-        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, false);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, false, null());
         self.reload();
     }
 
@@ -594,14 +604,15 @@ impl<T: 'static> ArcShiftLight<T> {
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
         let new_ptr = ArcShift::from_box_impl(new_payload);
-        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true);
+        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true, null());
     }
 
     /// Load 'next'.
     /// If 'next' is tentative, convert it to superseded.
     /// 'curitem' must be a valid pointer.
+    #[inline]
     fn load_nontentative_next(curitem: *const ItemHolder<T>) -> Option<*const ItemHolder<T>> {
-        let next = get_next_and_state(curitem).load(Ordering::SeqCst);
+        let next = get_next_and_state(curitem).load(Ordering::Acquire);
 
         debug_println!(
             "load_nontentative_next upgrade {:?}, next: {:?} = {:?}",
@@ -629,7 +640,6 @@ impl<T: 'static> ArcShiftLight<T> {
                         "Race while upgrading ArcShiftLight to ArcShift: {:?}",
                         curitem
                     );
-                    atomic::spin_loop();
                     None
                 }
             }
@@ -1243,7 +1253,7 @@ impl<T: 'static> ArcShift<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        Self::update_shared_impl(self.item.as_ptr(), new_ptr, true);
+        Self::update_shared_impl(self.item.as_ptr(), new_ptr, true, null());
     }
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -1261,9 +1271,12 @@ impl<T: 'static> ArcShift<T> {
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
         let new_ptr = Self::from_box_impl(new_payload);
-        Self::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true);
+        Self::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true, null());
     }
-    fn update_shared_impl(self_item: *const ItemHolder<T>, new_ptr: *mut ItemHolder<T>, make_tentative: bool) {
+
+
+
+    fn update_shared_impl(self_item: *const ItemHolder<T>, new_ptr: *mut ItemHolder<T>, make_tentative: bool, expect_next: *const ItemHolder<T>) -> bool {
         debug_println!("Upgrading {:?} -> {:?} ", self_item, new_ptr);
         verify_item(new_ptr);
         let mut candidate = self_item;
@@ -1278,10 +1291,34 @@ impl<T: 'static> ArcShift<T> {
             } else if undecorate(curnext).is_null() {
                 null_mut()
             } else {
+
+                loop {
+                    let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
+                        atomic::spin_loop();
+                        continue;
+                    };
+                    if early_dropped {
+                        debug_println!("\n----------------------------------------------------------\n");
+                        let _dbg = get_refcount(undecorate(curnext)).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                        debug_println!("Early_drop_adjust3 for {:?}.{:?} {} -> {}", candidate, curnext, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
+                        assert!(_dbg > MAX_ROOTS-1);
+                    }
+                    break;
+                }
                 candidate = undecorate(curnext);
                 atomic::spin_loop();
                 continue;
             };
+
+            if !expect_next.is_null() {
+                if expect.is_null() {
+                    if candidate != expect_next {
+                        return false;
+                    }
+                } else if expect as *const _ != expect_next {
+                    return false;
+                }
+            }
 
             verify_item(candidate);
             verify_item(new_ptr);
@@ -1335,7 +1372,7 @@ impl<T: 'static> ArcShift<T> {
                         }
                     }
 
-                    return;
+                    return true;
                 }
                 Err(other) => {
                     verify_item(candidate);
@@ -1393,16 +1430,58 @@ impl<T: 'static> ArcShift<T> {
     /// It then sets the current value to the value returned by the function.
     ///
     /// Note, there is no guarantee that the value isn't updated while the supplied function
-    /// 'f' is running. This will not be detected, and the value returned by 'f' will
-    /// overwrite any previous values.
+    /// 'f' is running. This will be detected, and the value returned by 'f' will
+    /// be dropped and no update will occur. This function returns true if the value
+    /// was updated, false otherwise. The only reason it can fail if some other thread
+    /// updated the value while 'rcu' was running.
     ///
-    /// Also, of course, if other threads do simultaneous updates, there's no particular guarantee
+    /// If other threads do simultaneous updates, there's no particular guarantee
     /// that whatever value is returned by f will ever be read by another thread before it is
-    /// overwritten.
-    pub fn rcu<F>(&mut self, f: F) where F: FnOnce(&T) -> T {
-        let old = self.get();
-        let result = f(old);
-        self.update(result);
+    /// overwritten, unless the other writes also use the 'rcu'-function.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this function returns.
+    pub fn rcu<F>(&mut self, f: F) -> bool where F: FnOnce(&T) -> T {
+        let old_ptr;
+        let result;
+        {
+            old_ptr = self.shared_get_impl();
+            result = ItemHolder {
+                #[cfg(feature = "validate")]
+                magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+                #[cfg(feature = "validate")]
+                magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+                // SAFETY:
+                // old_ptr is a valid ptr
+                payload: f(&unsafe{&*old_ptr}.payload),
+                next_and_state: atomic::AtomicPtr::default(),
+                refcount: atomic::AtomicUsize::new(MAX_ROOTS),
+            };
+        }
+
+        let new_ptr = Box::into_raw(Box::new(result));
+        // Note:
+        // We do not run into the ABA-problem here, since both pointers that could collide
+        // are distinct, valid pointers.
+        let ret = Self::update_shared_impl(self.item.as_ptr(), new_ptr, true, old_ptr);
+        if !ret {
+            // SAFETY:
+            // new_ptr hasn't been used, since update_shared_impl returned false.
+            // So it's still just a uniquely valid pointer created by Box::into_raw.
+            unsafe { _ = Box::from_raw(new_ptr) };
+        }
+        self.reload();
+        ret
     }
 
     /// Update the contents of this ArcShift, and all other instances cloned from this

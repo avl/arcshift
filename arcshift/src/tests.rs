@@ -76,7 +76,7 @@ fn simple_get() {
 fn simple_rcu() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
-        shift.rcu(|x|x+1);
+        assert!(shift.rcu(|x|x+1));
         assert_eq!(*shift.get(), 43u32);
     })
 }
@@ -703,6 +703,86 @@ fn simple_threading3d() {
         _ = t3.join().unwrap();
     });
 }
+#[test]
+fn simple_threading2_rcu() {
+    model(|| {
+        let mut shift0 = ArcShift::new(0u32);
+
+        let mut shift1 = shift0.clone();
+        let mut shift2 = shift0.clone();
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t1 =");
+                while !shift1.rcu(|old|*old + 1) {};
+                while !shift1.rcu(|old|*old + 1) {};
+                debug_println!(" = drop t1 =");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t2 =");
+                while !shift2.rcu(|old|*old + 1) {};
+                while !shift2.rcu(|old|*old + 1) {};
+                debug_println!(" = drop t2 =");
+            })
+            .unwrap();
+
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+        assert_eq!(*shift0.get(), 4);
+    });
+}
+#[test]
+fn simple_threading3_rcu() {
+    model(|| {
+        let mut shift0 = ArcShift::new(0u32);
+
+        let mut shift1 = shift0.clone();
+        let mut shift2 = shift0.clone();
+        let mut shift3 = shift0.clone();
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t1 =");
+                while !shift1.rcu(|old|*old + 1) {};
+                while !shift1.rcu(|old|*old + 1) {};
+                debug_println!(" = drop t1 =");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t2 =");
+                while !shift2.rcu(|old|*old + 1) {};
+                while !shift2.rcu(|old|*old + 1) {};
+                debug_println!(" = drop t2 =");
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                debug_println!(" = On thread t3 =");
+                while !shift3.rcu(|old|*old + 1) {};
+                while !shift3.rcu(|old|*old + 1) {};
+                debug_println!(" = drop t3 =");
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+        _ = t3.join().unwrap();
+        assert_eq!(*shift0.get(), 6);
+    });
+}
 #[cfg(not(feature="disable_slow_tests"))]
 #[test]
 fn simple_threading4a() {
@@ -877,7 +957,7 @@ fn simple_threading4c() {
                     debug_println!(
                         "Checkt44c: {:?} next: {:?}",
                         shift4.item,
-                        get_next_and_state(shift4.item).load(Ordering::SeqCst)
+                        get_next_and_state(shift4.item.as_ptr()).load(Ordering::SeqCst)
                     );
                     let _t = std::hint::black_box(shift4);
                     debug_println!(" = drop t4 =");
