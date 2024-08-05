@@ -15,7 +15,6 @@ pub(crate) struct InstanceSpy {
 impl InstanceSpy {
     pub(crate) fn new(x: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> InstanceSpy {
         let _temp = x.fetch_add(1, Ordering::Relaxed);
-        crate::atomic::fence(Ordering::SeqCst);
         debug_println!("++ InstanceSpy ++ {}", _temp + 1);
         InstanceSpy { x }
     }

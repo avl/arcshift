@@ -359,14 +359,14 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
                 atomic::spin_loop();
                 continue;
             }
-            let count = get_refcount(curitem).load(Ordering::SeqCst);
+            let count = get_refcount(curitem).load(Ordering::Relaxed);
             assert_ne!(count, 0);
             Self::verify_count(count);
             match get_refcount(curitem).compare_exchange(
                 count,
                 count + 1,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
             ) {
                 Ok(_) => {
                     debug_println!(
@@ -393,7 +393,7 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
     }
 }
 impl<T: 'static> ArcShiftLight<T> {
-    /// Create a new ArcShiftLight-instance, containing the given type.
+    /// Create a new ArcShiftLight-instance, containing the given value.
     pub fn new(payload: T) -> ArcShiftLight<T> {
         let item = ItemHolder {
             #[cfg(feature = "validate")]
@@ -453,7 +453,7 @@ impl<T: 'static> ArcShiftLight<T> {
                 break;
             }
 
-            if strength > 0 { //TODO: Why does cargo mutants think changing this to < 0 never fail?
+            if strength > 0 {
                 let count = get_refcount(self.item.as_ptr()).fetch_sub(strength, Ordering::SeqCst);
                     debug_println!(
                     "ArcShiftLight::reload, next = {:?}, releasing {} -> {}",
@@ -521,7 +521,7 @@ impl<T: 'static> ArcShiftLight<T> {
         let count = 1;
         let mut curitem = self.item.as_ptr() as *const _;
         loop {
-            let next = get_next_and_state(curitem).load(Ordering::SeqCst);
+            let next = get_next_and_state(curitem).load(Ordering::Relaxed);
             if is_superseded_by_tentative(get_state(next)) {
                 return count + 1;
             }
@@ -612,7 +612,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// 'curitem' must be a valid pointer.
     #[inline]
     fn load_nontentative_next(curitem: *const ItemHolder<T>) -> Option<*const ItemHolder<T>> {
-        let next = get_next_and_state(curitem).load(Ordering::Acquire);
+        let next = get_next_and_state(curitem).load(Ordering::SeqCst);
 
         debug_println!(
             "load_nontentative_next upgrade {:?}, next: {:?} = {:?}",
@@ -685,7 +685,7 @@ impl<T: 'static> ArcShiftLight<T> {
                     MAX_ARCSHIFT
                 );
             }
-            atomic::fence(Ordering::SeqCst);
+            atomic::fence(Ordering::SeqCst); //Just to make lom work
             debug_println!(
                 "Promote {:?}, prev count: {}, new count {}",
                 curitem,
@@ -745,16 +745,15 @@ impl<T> Drop for ArcShift<T> {
     fn drop(&mut self) {
         verify_item(self.item.as_ptr());
 
-        self.reload(); //TODO: Remove 'reload' from here. If it serves a purpose, there's something wrong with 'drop_item', since any guarantee offered by reload would imply a race
+        self.reload();
         debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
-        let _t = get_next_and_state(self.item.as_ptr()).load(Ordering::SeqCst);
         drop_item(self.item.as_ptr());
         debug_println!("ArcShift::drop({:?}) DONE", self.item);
     }
 }
 
 /// Align 4 is needed, since we store flags in the lower 2 bits of the ItemHolder-pointers
-/// In practice, the align of ItemHolder is 8 anyway, but we specify it here for clarity.
+/// In practice, the alignment of ItemHolder is 8 anyway, but we specify it here for clarity.
 #[repr(align(4))]
 #[repr(C)] // Just to get the 'magic' first and last in memory. Shouldn't hurt.
 struct ItemHolder<T: 'static> {
@@ -975,9 +974,8 @@ fn is_superseded_by_tentative(state: Option<ItemStateEnum>) -> bool {
 impl<T: 'static> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         debug_println!("ArcShift::clone({:?})", self.item);
-        let rescount = get_refcount(self.item.as_ptr()).fetch_add(MAX_ROOTS, atomic::Ordering::SeqCst);
+        let rescount = get_refcount(self.item.as_ptr()).fetch_add(MAX_ROOTS, atomic::Ordering::Relaxed);
 
-        atomic::fence(Ordering::SeqCst);
         debug_println!(
             "Clone - adding count to {:?}, resulting in count {}",
             self.item,
@@ -1114,7 +1112,7 @@ impl<T: 'static> ArcShift<T> {
         }
     }
 
-    /// Create a new ArcShift instance, containing the given type.
+    /// Create a new ArcShift instance, containing the given value.
     pub fn new(payload: T) -> ArcShift<T> {
         let item = ItemHolder {
             #[cfg(feature = "validate")]
@@ -1518,7 +1516,7 @@ impl<T: 'static> ArcShift<T> {
             atomic::spin_loop();
             return None;
         };
-        if (2..(MAX_ROOTS)).contains(&count) {
+        if (2..MAX_ROOTS).contains(&count) {
             debug_println!(
                 "Possibility of early drop for {:?}! (count = {}, state: {:?})",
                 cand,
@@ -1631,7 +1629,7 @@ impl<T: 'static> ArcShift<T> {
                     get_refcount(new_self).fetch_sub(MAX_ROOTS, atomic::Ordering::SeqCst);
                     panic!("Maximum ArcShift instance count reached");
                 }
-                atomic::fence(Ordering::SeqCst);
+                atomic::fence(Ordering::SeqCst); //Just for loom
                 debug_println!(
                     "{:?} has no next - adding count: {} -> {}. (our strongly owned item: {:?})",
                     new_self,
@@ -1826,7 +1824,6 @@ impl<T: 'static> ArcShift<T> {
             } else {
                 break;
             }
-            atomic::spin_loop();
         }
         next_self_item
     }
@@ -1982,7 +1979,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
     );
     verify_item(old_ptr);
     let count = get_refcount(old_ptr).fetch_sub(strength, atomic::Ordering::SeqCst);
-    atomic::fence(Ordering::SeqCst);
+    atomic::fence(Ordering::SeqCst); //Just to make loom work
     debug_println!(
         "Drop-root-item {:?}, count {} -> {}",
         old_ptr,

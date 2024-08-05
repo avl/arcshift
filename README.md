@@ -44,7 +44,10 @@ fn main () {
 
 For docs, see <https://docs.rs/arcshift/> .
 
-## Background
+The rest of this document is a sort of blogpost about Arcshift. See the docs above for
+more user-relevant information!
+
+# Background
 
 I created ArcShift because I wanted to have a low-overhead way to store resources in a computer game project.
 The idea is that assets such as 3d-models, textures etc are seldom modified, and putting them in an std::sync::Arc
