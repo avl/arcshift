@@ -61,7 +61,7 @@
 //!
 //! * When modifying the value, the old version of the value lingers in memory until
 //!   the last ArcShift has been updated. Such an update only happens when the ArcShift
-//!   is accessed using an owned (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
+//!   is accessed using a unique (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
 //!   This can be partially mitigated by using the [`ArcShiftLight`]-type for long-lived
 //!   never-reloaded instances.
 //! * Modifying the value is approximately 10x more expensive than modifying `Arc<RwLock<T>>`
@@ -685,7 +685,7 @@ impl<T: 'static> ArcShiftLight<T> {
                     MAX_ARCSHIFT
                 );
             }
-            atomic::fence(Ordering::SeqCst); //Just to make lom work
+            atomic::fence(Ordering::SeqCst); //Just to make loom work
             debug_println!(
                 "Promote {:?}, prev count: {}, new count {}",
                 curitem,
