@@ -1516,6 +1516,9 @@ impl<T: 'static> ArcShift<T> {
         let result;
         {
             old_ptr = self.shared_get_impl();
+            // SAFETY:
+            // Pointers returned by shared_get_impl remain valid until
+            // self.item is updated.
             let Some(payload) = f(&unsafe{&*old_ptr}.payload) else {
                 self.reload();
                 return false;
