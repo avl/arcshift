@@ -222,6 +222,8 @@ use crate::ItemStateEnum::{Dropped, Superseded};
 use std::alloc::Layout;
 #[allow(unused)]
 use std::backtrace::Backtrace;
+use std::cell::{Cell, UnsafeCell};
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
@@ -306,8 +308,8 @@ macro_rules! debug_println {
 /// println!("Value: {:?}", *instance);
 /// # }
 /// ```
-pub struct ArcShift<T: 'static> {
-    item: NonNull<ItemHolder<T>>,
+pub struct ArcShift<T: 'static + ?Sized> {
+    item: NonNull<ItemHolderDummy<T>>,
 }
 
 impl<T> UnwindSafe for ArcShift<T> {}
@@ -332,8 +334,8 @@ impl<T> UnwindSafe for ArcShift<T> {}
 /// and even if all other instances of ArcShift/ArcShiftLight have been dropped.
 /// If this limitation is unacceptable, consider using `ArcShiftLight<Box<T>>` as your datatype,
 /// or possibly using a different crate.
-pub struct ArcShiftLight<T: 'static> {
-    item: NonNull<ItemHolder<T>>,
+pub struct ArcShiftLight<T: 'static+?Sized> {
+    item: NonNull<ItemHolderDummy<T>>,
 }
 
 /// SAFETY:
@@ -345,6 +347,75 @@ unsafe impl<T: 'static> Send for ArcShiftLight<T> where T: Send {}
 /// ArcShiftLight can be Sync as long as T is Sync.
 /// ArcShiftLight's mechanisms are compatible with both Send and Sync
 unsafe impl<T: 'static> Sync for ArcShiftLight<T> where T: Sync {}
+
+/// ArcShiftCell is like an ArcShift, except that it can be reloaded
+/// without requiring 'mut'-access.
+/// However, it is not 'Sync'.
+pub struct ArcShiftCell<T: 'static> {
+    inner: UnsafeCell<ArcShift<T>>,
+    recursion: Cell<usize>,
+}
+
+/// ArcShiftCell cannot be Sync, but there's nothing stopping it from being Send.
+unsafe impl<T:'static> Send for ArcShiftCell<T> where T: Send{}
+
+impl<T:'static> Clone for ArcShiftCell<T> {
+    fn clone(&self) -> Self {
+        let clone = unsafe{&mut *self.inner.get()}.clone();
+        ArcShiftCell {
+            inner: UnsafeCell::new(clone),
+            recursion: Cell::new(0),
+        }
+    }
+}
+impl<T:'static> ArcShiftCell<T> {
+
+    /// Creates an ArcShiftCell from an ArcShift-instance.
+    /// The payload is not cloned, the two pointers keep pointing to the same object.
+    pub fn from_arcshift(input: ArcShift<T>) -> ArcShiftCell<T> {
+        ArcShiftCell {
+            inner: UnsafeCell::new(input),
+            recursion: Cell::new(0)
+        }
+    }
+    /// Get the value pointed to.
+    ///
+    /// This method is very fast, basically the speed of a regular reference, unless
+    /// the value has been modified by calling one of the update-methods.
+    ///
+    /// This method will drop older values which are no longer needed
+    /// This method is reentrant - you are allowed to call it from within the closure 'f'.
+    pub fn get(&self, f: impl FnOnce(&T)) {
+        self.recursion.set(self.recursion.get() + 1);
+        let val = if self.recursion.get() == 1 {
+            unsafe{&mut *self.inner.get()}.get()
+        } else {
+            unsafe{&*self.inner.get()}.shared_get()
+        };
+        f(val);
+        self.recursion.set(self.recursion.get() - 1);
+    }
+
+    /// Reload this ArcShiftCell-instance.
+    /// This allows dropping heap blocks kept alive by this instance of
+    /// ArcShiftCell to be dropped.
+    pub fn reload(&self) {
+        // SAFETY:
+        // ArcShiftCell is not Sync, and 'reload' does not recursively call into user
+        // code, so we know no other operation can be ongoing.
+        unsafe{&mut *self.inner.get()}.reload()
+    }
+    /// Create an ArcShift-instance pointing to the same data
+    pub fn make_arcshift(&self) -> ArcShift<T> {
+        // SAFETY:
+        // ArcShiftCell is not Sync, and 'reload' does not recursively call into user
+        // code, so we know no other operation can be ongoing.
+        unsafe{&mut *self.inner.get()}.clone()
+    }
+}
+const fn is_sized<T: ?Sized>() -> bool {
+    size_of::<&T>() == size_of::<&()>()
+}
 
 impl<T: 'static> Clone for ArcShiftLight<T> {
     fn clone(&self) -> Self {
@@ -392,6 +463,17 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
         } }
     }
 }
+
+fn make_sized_holder<T>(item :ItemHolder<T>) -> *const ItemHolderDummy<T> {
+    let cur_ptr = Box::into_raw(Box::new(item));
+    cur_ptr as _
+}
+fn make_unsized_holder<T>(item : impl FnOnce() -> T) -> *const ItemHolderDummy<T> {
+    compile_error!("Working with unsized data is difficult")
+    let cur_ptr = Box::into_raw(Box::new(item()));
+    cur_ptr as _
+}
+
 impl<T: 'static> ArcShiftLight<T> {
     /// Create a new ArcShiftLight-instance, containing the given value.
     pub fn new(payload: T) -> ArcShiftLight<T> {
@@ -404,7 +486,7 @@ impl<T: 'static> ArcShiftLight<T> {
             next_and_state: atomic::AtomicPtr::default(),
             refcount: atomic::AtomicUsize::new(1),
         };
-        let cur_ptr = Box::into_raw(Box::new(item));
+        let cur_ptr = make_sized_holder(payload);
         debug_println!("Created ArcShiftLight for {:?}", cur_ptr);
         ArcShiftLight { item:
             // SAFETY:
@@ -611,7 +693,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// If 'next' is tentative, convert it to superseded.
     /// 'curitem' must be a valid pointer.
     #[inline]
-    fn load_nontentative_next(curitem: *const ItemHolder<T>) -> Option<*const ItemHolder<T>> {
+    fn load_nontentative_next(curitem: *const ItemHolderDummy<T>) -> Option<*const ItemHolderDummy<T>> {
         let next = get_next_and_state(curitem).load(Ordering::SeqCst);
 
         debug_println!(
@@ -726,7 +808,7 @@ impl<T: 'static> ArcShiftLight<T> {
     }
 }
 
-impl<T: 'static> Drop for ArcShiftLight<T> {
+impl<T: 'static+?Sized> Drop for ArcShiftLight<T> {
     fn drop(&mut self) {
         debug_println!("ArcShiftLight::drop: {:?}", self.item);
         drop_root_item(self.item.as_ptr(), 1)
@@ -741,7 +823,7 @@ unsafe impl<T: 'static + Sync> Sync for ArcShift<T> {}
 /// If `T` is `Send`, `ArcShift<T>` can also be `Send`
 unsafe impl<T: 'static + Send> Send for ArcShift<T> {}
 
-impl<T> Drop for ArcShift<T> {
+impl<T: ?Sized> Drop for ArcShift<T> {
     fn drop(&mut self) {
         verify_item(self.item.as_ptr());
 
@@ -752,18 +834,25 @@ impl<T> Drop for ArcShift<T> {
     }
 }
 
+// ItemHolderDummy-pointers always point at the start of an ItemHolder object.
+// It is possible to access next_and_state and refcount without knowing if the ItemHolder
+// has fixed size.
+#[repr(transparent)]
+struct ItemHolderDummy<T:'static+?Sized>((), PhantomData<T>);
+
 /// Align 4 is needed, since we store flags in the lower 2 bits of the ItemHolder-pointers
 /// In practice, the alignment of ItemHolder is 8 anyway, but we specify it here for clarity.
-#[repr(align(4))]
+#[repr(align(8))]
 #[repr(C)] // Just to get the 'magic' first and last in memory. Shouldn't hurt.
-struct ItemHolder<T: 'static> {
+struct ItemHolder<T: 'static + ?Sized> {
     #[cfg(feature = "validate")]
     magic1: std::sync::atomic::AtomicU64,
-    next_and_state: atomic::AtomicPtr<ItemHolder<T>>,
+    next_and_state: atomic::AtomicPtr<ItemHolderDummy<T>>,
     refcount: atomic::AtomicUsize,
-    payload: T, //TODO: We should use ManuallyDrop<T> here. It would simplify the code (but not affect correctness)
     #[cfg(feature = "validate")]
     magic2: std::sync::atomic::AtomicU64,
+
+    payload: T, //TODO: We should use ManuallyDrop<T> here. It would simplify the code (but not affect correctness)
 }
 
 #[cfg(all(any(loom, feature = "shuttle"), feature = "validate"))]
@@ -858,7 +947,7 @@ impl<T: 'static> ItemHolder<T> {
 /// Check the magic values of the supplied pointer, validating it in a best-effort fashion
 #[inline]
 #[cfg_attr(test, mutants::skip)]
-fn verify_item<T>(_ptr: *const ItemHolder<T>) {
+fn verify_item<T:?Sized>(_ptr: *const ItemHolder<T>) {
     #[cfg(feature = "validate")]
     {
         let ptr = _ptr;
@@ -933,10 +1022,10 @@ fn assert_is_undecorated<T>(_ptr: *const ItemHolder<T>) {
 /// Return an undecorated version of the given pointer.
 /// Supplying an already undecorated pointer is not an error, and returns
 /// the value unmodified.
-fn undecorate<T>(cand: *const ItemHolder<T>) -> *const ItemHolder<T> {
+fn undecorate<T>(cand: *const ItemHolderDummy<T>) -> *const ItemHolderDummy<T> {
     let raw = cand as usize & 3;
     if raw != 0 {
-        ((cand as *const u8).wrapping_offset(-(raw as isize))) as *const ItemHolder<T>
+        ((cand as *const u8).wrapping_offset(-(raw as isize))) as *const ItemHolderDummy<T>
     } else {
         cand
     }
@@ -945,7 +1034,7 @@ fn undecorate<T>(cand: *const ItemHolder<T>) -> *const ItemHolder<T> {
 /// Get the state encoded in the decoration, if any.
 /// Returns None if the pointer is undecorated null.
 /// The pointer must be valid.
-fn get_state<T>(ptr: *const ItemHolder<T>) -> Option<ItemStateEnum> {
+fn get_state<T:?Sized>(ptr: *const ItemHolderDummy<T>) -> Option<ItemStateEnum> {
     if ptr.is_null() {
         return None;
     }
@@ -998,19 +1087,22 @@ impl<T> Deref for ArcShift<T> {
 
 // ptr must be a valid pointer
 #[inline(always)]
-fn get_next_and_state<'a, T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicPtr<ItemHolder<T>> {
+fn get_next_and_state<'a, T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicPtr<ItemHolderDummy<T>> {
     // SAFETY:
     // ptr is a valid pointer
     unsafe { &*addr_of!((*ptr).next_and_state) }
 }
 // ptr must be a valid pointer
+
 #[inline(always)]
-fn get_refcount<'a, T>(ptr: *const ItemHolder<T>) -> &'a atomic::AtomicUsize {
+fn get_refcount<'a, T>(ptr: *const ItemHolderDummy<T>) -> &'a atomic::AtomicUsize {
     // SAFETY:
     // ptr is a valid pointer
-    unsafe { &*addr_of!((*ptr).refcount) }
+    unsafe {
+        let ptr2 = ptr as *const ItemHolder<T>;
+        &*addr_of!((*ptr2).refcount)
+    }
 }
-
 impl<T: 'static> ArcShift<T> {
     /// Drop the given pointer, and return Some(T) if it was the last
     /// reference ot a non-dropped value.
@@ -1068,7 +1160,88 @@ impl<T: 'static> ArcShift<T> {
             }
         }
     }
+    /// Try to move the value out of the ArcShift instance.
+    /// This only succeeds if the self instance is the only instance
+    /// holding the value. Any other instances of ArcShift or ArcShiftLight holding the
+    /// same value will cause this method to return None.
+    pub fn try_into_inner(mut self) -> Option<T> {
+        self.reload();
 
+        debug_println!("---- Try_into_inner ----");
+        let retval = Self::drop_impl_ret(self.item.as_ptr());
+        std::mem::forget(self);
+        retval
+    }
+
+    /// This method calls the supplied function with the previous value pointed to.
+    /// It then sets the current value to the value returned by the function, if the function
+    /// returns Some(...). If the function returns None, there is no effect and 'rcu_maybe'
+    /// returns false.
+    ///
+    /// Note, there is no guarantee that the value isn't updated while the supplied function
+    /// 'f' is running. This will be detected, and the value returned by 'f' will
+    /// be dropped and no update will occur. This function returns true if the value
+    /// was updated, false otherwise. The only reason it can fail is if some other thread
+    /// updated the value while 'rcu_maybe' was running.
+    ///
+    /// If other threads do simultaneous updates, there's no particular guarantee
+    /// that whatever value is returned by f will ever be read by another thread before it is
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_maybe'-function.
+    ///
+    /// This method never blocks, it will return quickly (depending on the execution time
+    /// of 'f').
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this function returns.
+    pub fn rcu_maybe<F>(&mut self, f: F) -> bool where F: FnOnce(&T) -> Option<T> {
+        let old_ptr;
+        let result;
+        {
+            old_ptr = self.shared_get_impl();
+            // SAFETY:
+            // Pointers returned by shared_get_impl remain valid until
+            // self.item is updated.
+            let Some(payload) = f(&unsafe{&*old_ptr}.payload) else {
+                self.reload();
+                return false;
+            };
+            result = ItemHolder {
+                #[cfg(feature = "validate")]
+                magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+                #[cfg(feature = "validate")]
+                magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+                // SAFETY:
+                // old_ptr is a valid ptr
+                payload,
+                next_and_state: atomic::AtomicPtr::default(),
+                refcount: atomic::AtomicUsize::new(MAX_ROOTS),
+            };
+        }
+
+        let new_ptr = Box::into_raw(Box::new(result));
+        // Note:
+        // We do not run into the ABA-problem here, since both pointers that could collide
+        // are distinct, valid pointers.
+        let ret = Self::update_shared_impl(self.item.as_ptr(), new_ptr, true, old_ptr);
+        if !ret {
+            // SAFETY:
+            // new_ptr hasn't been used, since update_shared_impl returned false.
+            // So it's still just a uniquely valid pointer created by Box::into_raw.
+            unsafe { _ = Box::from_raw(new_ptr) };
+        }
+        self.reload();
+        ret
+    }
+}
+impl<T: 'static+?Sized> ArcShift<T> {
     fn drop_impl(mut self_item: *const ItemHolder<T>) {
         verify_item(self_item);
         let mut strength = MAX_ROOTS;
@@ -1217,18 +1390,7 @@ impl<T: 'static> ArcShift<T> {
         }
     }
 
-    /// Try to move the value out of the ArcShift instance.
-    /// This only succeeds if the self instance is the only instance
-    /// holding the value. Any other instances of ArcShift or ArcShiftLight holding the
-    /// same value will cause this method to return None.
-    pub fn try_into_inner(mut self) -> Option<T> {
-        self.reload();
 
-        debug_println!("---- Try_into_inner ----");
-        let retval = Self::drop_impl_ret(self.item.as_ptr());
-        std::mem::forget(self);
-        retval
-    }
 
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -1483,73 +1645,6 @@ impl<T: 'static> ArcShift<T> {
         ret
     }
 
-    /// This method calls the supplied function with the previous value pointed to.
-    /// It then sets the current value to the value returned by the function, if the function
-    /// returns Some(...). If the function returns None, there is no effect and 'rcu_maybe'
-    /// returns false.
-    ///
-    /// Note, there is no guarantee that the value isn't updated while the supplied function
-    /// 'f' is running. This will be detected, and the value returned by 'f' will
-    /// be dropped and no update will occur. This function returns true if the value
-    /// was updated, false otherwise. The only reason it can fail is if some other thread
-    /// updated the value while 'rcu_maybe' was running.
-    ///
-    /// If other threads do simultaneous updates, there's no particular guarantee
-    /// that whatever value is returned by f will ever be read by another thread before it is
-    /// overwritten, unless the other writes also use the 'rcu'/'rcu_maybe'-function.
-    ///
-    /// This method never blocks, it will return quickly (depending on the execution time
-    /// of 'f').
-    ///
-    /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
-    /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
-    /// when the last instance is dropped or reloaded.
-    ///
-    /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
-    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
-    /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
-    pub fn rcu_maybe<F>(&mut self, f: F) -> bool where F: FnOnce(&T) -> Option<T> {
-        let old_ptr;
-        let result;
-        {
-            old_ptr = self.shared_get_impl();
-            // SAFETY:
-            // Pointers returned by shared_get_impl remain valid until
-            // self.item is updated.
-            let Some(payload) = f(&unsafe{&*old_ptr}.payload) else {
-                self.reload();
-                return false;
-            };
-            result = ItemHolder {
-                #[cfg(feature = "validate")]
-                magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
-                #[cfg(feature = "validate")]
-                magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
-                // SAFETY:
-                // old_ptr is a valid ptr
-                payload,
-                next_and_state: atomic::AtomicPtr::default(),
-                refcount: atomic::AtomicUsize::new(MAX_ROOTS),
-            };
-        }
-
-        let new_ptr = Box::into_raw(Box::new(result));
-        // Note:
-        // We do not run into the ABA-problem here, since both pointers that could collide
-        // are distinct, valid pointers.
-        let ret = Self::update_shared_impl(self.item.as_ptr(), new_ptr, true, old_ptr);
-        if !ret {
-            // SAFETY:
-            // new_ptr hasn't been used, since update_shared_impl returned false.
-            // So it's still just a uniquely valid pointer created by Box::into_raw.
-            unsafe { _ = Box::from_raw(new_ptr) };
-        }
-        self.reload();
-        ret
-    }
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
@@ -2039,7 +2134,7 @@ fn drop_payload_and_holder<T: 'static>(ptr: *const ItemHolder<T>) -> bool {
 
 /// SAFETY:
 /// 'old_ptr' must be a valid ItemHolder-pointer.
-fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
+fn drop_root_item<T:?Sized>(old_ptr: *const ItemHolder<T>, strength: usize) {
     debug_println!(
         "drop_root_item about to reduce count {:?} by {}",
         old_ptr,
@@ -2074,7 +2169,7 @@ fn drop_root_item<T>(old_ptr: *const ItemHolder<T>, strength: usize) {
         debug_println!("drop_root_item, calling drop_payload {:?}", old_ptr);
     }
 }
-fn drop_item<T>(old_ptr: *const ItemHolder<T>) {
+fn drop_item<T:?Sized>(old_ptr: *const ItemHolder<T>) {
     verify_item(old_ptr);
     ArcShift::drop_impl(old_ptr);
 }
