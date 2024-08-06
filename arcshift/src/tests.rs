@@ -73,6 +73,22 @@ fn simple_get() {
     })
 }
 #[test]
+fn simple_box() {
+    model(|| {
+        let mut shift = ArcShift::from_box(Box::new(42u32));
+        assert_eq!(*shift.get(), 42u32);
+    })
+}
+#[test]
+fn simple_unsized() {
+    model(|| {
+        let biggish = vec![1u32,2u32].into_boxed_slice();
+        let mut _shift = ArcShift::from_box(biggish);
+        //assert_eq!(shift.get(), &vec![1,2]);
+    })
+}
+
+#[test]
 fn simple_rcu() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
