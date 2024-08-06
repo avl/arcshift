@@ -1430,7 +1430,7 @@ impl<T: 'static> ArcShift<T> {
     /// Note, there is no guarantee that the value isn't updated while the supplied function
     /// 'f' is running. This will be detected, and the value returned by 'f' will
     /// be dropped and no update will occur. This function returns true if the value
-    /// was updated, false otherwise. The only reason it can fail if some other thread
+    /// was updated, false otherwise. The only reason it can fail is if some other thread
     /// updated the value while 'rcu' was running.
     ///
     /// If other threads do simultaneous updates, there's no particular guarantee
@@ -1491,12 +1491,12 @@ impl<T: 'static> ArcShift<T> {
     /// Note, there is no guarantee that the value isn't updated while the supplied function
     /// 'f' is running. This will be detected, and the value returned by 'f' will
     /// be dropped and no update will occur. This function returns true if the value
-    /// was updated, false otherwise. The only reason it can fail if some other thread
-    /// updated the value while 'rcu' was running.
+    /// was updated, false otherwise. The only reason it can fail is if some other thread
+    /// updated the value while 'rcu_maybe' was running.
     ///
     /// If other threads do simultaneous updates, there's no particular guarantee
     /// that whatever value is returned by f will ever be read by another thread before it is
-    /// overwritten, unless the other writes also use the 'rcu'-function.
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_maybe'-function.
     ///
     /// This method never blocks, it will return quickly (depending on the execution time
     /// of 'f').
