@@ -1437,7 +1437,8 @@ impl<T: 'static> ArcShift<T> {
     /// that whatever value is returned by f will ever be read by another thread before it is
     /// overwritten, unless the other writes also use the 'rcu'-function.
     ///
-    /// This method never blocks, it will return quickly.
+    /// This method never blocks, it will return quickly (depending on the execution time
+    /// of 'f').
     ///
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
@@ -1482,6 +1483,70 @@ impl<T: 'static> ArcShift<T> {
         ret
     }
 
+    /// This method calls the supplied function with the previous value pointed to.
+    /// It then sets the current value to the value returned by the function, if the function
+    /// returns Some(...). If the function returns None, there is no effect and 'rcu_maybe'
+    /// returns false.
+    ///
+    /// Note, there is no guarantee that the value isn't updated while the supplied function
+    /// 'f' is running. This will be detected, and the value returned by 'f' will
+    /// be dropped and no update will occur. This function returns true if the value
+    /// was updated, false otherwise. The only reason it can fail if some other thread
+    /// updated the value while 'rcu' was running.
+    ///
+    /// If other threads do simultaneous updates, there's no particular guarantee
+    /// that whatever value is returned by f will ever be read by another thread before it is
+    /// overwritten, unless the other writes also use the 'rcu'-function.
+    ///
+    /// This method never blocks, it will return quickly (depending on the execution time
+    /// of 'f').
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this function returns.
+    pub fn rcu_maybe<F>(&mut self, f: F) -> bool where F: FnOnce(&T) -> Option<T> {
+        let old_ptr;
+        let result;
+        {
+            old_ptr = self.shared_get_impl();
+            let Some(payload) = f(&unsafe{&*old_ptr}.payload) else {
+                self.reload();
+                return false;
+            };
+            result = ItemHolder {
+                #[cfg(feature = "validate")]
+                magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+                #[cfg(feature = "validate")]
+                magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+                // SAFETY:
+                // old_ptr is a valid ptr
+                payload,
+                next_and_state: atomic::AtomicPtr::default(),
+                refcount: atomic::AtomicUsize::new(MAX_ROOTS),
+            };
+        }
+
+        let new_ptr = Box::into_raw(Box::new(result));
+        // Note:
+        // We do not run into the ABA-problem here, since both pointers that could collide
+        // are distinct, valid pointers.
+        let ret = Self::update_shared_impl(self.item.as_ptr(), new_ptr, true, old_ptr);
+        if !ret {
+            // SAFETY:
+            // new_ptr hasn't been used, since update_shared_impl returned false.
+            // So it's still just a uniquely valid pointer created by Box::into_raw.
+            unsafe { _ = Box::from_raw(new_ptr) };
+        }
+        self.reload();
+        ret
+    }
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.
