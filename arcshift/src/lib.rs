@@ -300,8 +300,6 @@ macro_rules! debug_println {
     ($($x:tt)*) => {{}};
 }
 
-
-
 /// Smart pointer with similar use case as std::sync::Arc, but with
 /// the added ability to atomically replace the contents of the Arc.
 /// See `crate` documentation for more information.
@@ -1541,16 +1539,14 @@ impl<T: 'static> ArcShift<T> {
     /// the 'self' ArcShift-instance. This has the effect that *if* 'self' is the
     /// last remaining instance, the old value that is being replaced *will* be dropped
     /// before this function returns.
-    pub fn rcu_project<'s, A>(&'s mut self, f: impl FnOnce(&T) -> Option<T>, projector: impl FnOnce(&'s T) -> A ) -> (bool, A) {
-        let ret = match self.rcu_impl(|old|{
-            f(old)
-        }) {
-            RcuResult::Update => {
-                true
-            }
-            RcuResult::NoUpdate | RcuResult::Race  => {
-                false
-            }
+    pub fn rcu_project<'s, A>(
+        &'s mut self,
+        f: impl FnOnce(&T) -> Option<T>,
+        projector: impl FnOnce(&'s T) -> A,
+    ) -> (bool, A) {
+        let ret = match self.rcu_impl(|old| f(old)) {
+            RcuResult::Update => true,
+            RcuResult::NoUpdate | RcuResult::Race => false,
         };
         (ret, projector(self.shared_non_reloading_get()))
     }
@@ -1588,10 +1584,8 @@ impl<T: 'static> ArcShift<T> {
         F: FnOnce(&T) -> Option<T>,
     {
         match self.rcu_impl(f) {
-            RcuResult::Update => {
-                true
-            }
-            RcuResult::NoUpdate | RcuResult::Race => false
+            RcuResult::Update => true,
+            RcuResult::NoUpdate | RcuResult::Race => false,
         }
     }
 }
@@ -2351,10 +2345,9 @@ impl<T: 'static + Sized> ArcShift<T> {
     where
         F: FnOnce(&T) -> T,
     {
-        match self.rcu_impl(|x|Some(f(x))) {
+        match self.rcu_impl(|x| Some(f(x))) {
             RcuResult::Update => true,
-            RcuResult::NoUpdate |
-            RcuResult::Race => false
+            RcuResult::NoUpdate | RcuResult::Race => false,
         }
     }
     fn rcu_impl<F>(&mut self, f: F) -> RcuResult
@@ -2383,7 +2376,6 @@ impl<T: 'static + Sized> ArcShift<T> {
                 refcount: atomic::AtomicUsize::new(MAX_ROOTS),
             };
         }
-
 
         let new_ptr = Box::into_raw(Box::new(result));
         // Note:
