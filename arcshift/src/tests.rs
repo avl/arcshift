@@ -150,6 +150,34 @@ fn simple_rcu() {
     })
 }
 #[test]
+fn simple_rcu_project() {
+    model(|| {
+        let mut shift = ArcShift::new((1u32,10u32));
+        assert_eq!(shift.rcu_project(|(a,b)| Some((*a + 1, *b + 1)), |(a,_b)|a), (true, &2u32));
+    })
+}
+#[test]
+fn simple_rcu_project2() {
+    model(|| {
+        let mut shift = ArcShift::new((1u32,10u32));
+        assert_eq!(shift.rcu_project(|(_a,_b)| None, |(a,_b)|a), (false, &1u32));
+    })
+}
+#[cfg(not(feature="shuttle"))]
+#[test]
+fn simple_rcu_project3() {
+    let outerstuff = "hej".to_string();
+    let outer = outerstuff.as_str();
+    let mut escape = None;
+    model(|| {
+        let mut shift = ArcShift::new((1u32,10u32));
+        escape = Some(shift.rcu_project(|(_a,_b)| None, |(_a,_b)|outer).1);
+        debug_println!("Escaped: {:?}", escape);
+        debug_println!("Shift get: {:?}", shift.get());
+    });
+    debug_println!("Escaped: {:?}", escape);
+}
+#[test]
 fn simple_rcu_maybe() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
@@ -159,6 +187,7 @@ fn simple_rcu_maybe() {
         assert_eq!(*shift.get(), 43u32);
     })
 }
+
 #[test]
 fn simple_deref() {
     model(|| {

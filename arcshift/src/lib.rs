@@ -300,6 +300,8 @@ macro_rules! debug_println {
     ($($x:tt)*) => {{}};
 }
 
+
+
 /// Smart pointer with similar use case as std::sync::Arc, but with
 /// the added ability to atomically replace the contents of the Arc.
 /// See `crate` documentation for more information.
@@ -1328,6 +1330,7 @@ fn decorate<T: ?Sized>(
 
 /// Panic if the pointer is decorated
 #[cfg_attr(test, mutants::skip)]
+#[inline]
 fn assert_is_undecorated<T: ?Sized>(_ptr: *const ItemHolderDummy<T>) {
     #[cfg(feature = "validate")]
     {
@@ -1510,6 +1513,48 @@ impl<T: 'static> ArcShift<T> {
         retval
     }
 
+    /// This method calls the supplied function 'f' with the previous value pointed to as an
+    /// argument. It then sets the pointee value to the value returned by the function.
+    ///
+    /// Note, there is no guarantee that the ArcShift value isn't updated while the supplied function
+    /// 'f' is running. This will be detected, and the value returned by 'f' will
+    /// be dropped and no update will occur. This function returns (true, _ ) if the value
+    /// was updated, otherwise it returns (false, _);
+    ///
+    /// If other threads do simultaneous updates, there's no particular guarantee
+    /// that whatever value is returned by f will ever be read by another thread before it is
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-functions.
+    ///
+    /// This method never blocks, it will return quickly (depending on the execution time
+    /// of 'f').
+    ///
+    /// The second value of the returned tuple is simply the value produced by the function
+    /// 'projector', which is called with the current pointee value after any update has occurred.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that *if* 'self' is the
+    /// last remaining instance, the old value that is being replaced *will* be dropped
+    /// before this function returns.
+    pub fn rcu_project<'s, A>(&'s mut self, f: impl FnOnce(&T) -> Option<T>, projector: impl FnOnce(&'s T) -> A ) -> (bool, A) {
+        let ret = match self.rcu_impl(|old|{
+            f(old)
+        }) {
+            RcuResult::Update => {
+                true
+            }
+            RcuResult::NoUpdate | RcuResult::Race  => {
+                false
+            }
+        };
+        (ret, projector(self.shared_non_reloading_get()))
+    }
+
     /// This method calls the supplied function with the previous value pointed to.
     /// It then sets the current value to the value returned by the function, if the function
     /// returns Some(...). If the function returns None, there is no effect and 'rcu_maybe'
@@ -1523,7 +1568,7 @@ impl<T: 'static> ArcShift<T> {
     ///
     /// If other threads do simultaneous updates, there's no particular guarantee
     /// that whatever value is returned by f will ever be read by another thread before it is
-    /// overwritten, unless the other writes also use the 'rcu'/'rcu_maybe'-function.
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-functions.
     ///
     /// This method never blocks, it will return quickly (depending on the execution time
     /// of 'f').
@@ -1542,50 +1587,12 @@ impl<T: 'static> ArcShift<T> {
     where
         F: FnOnce(&T) -> Option<T>,
     {
-        let old_ptr;
-        let result: ItemHolder<T, NoMeta>;
-        {
-            old_ptr = self.shared_get_impl();
-            // SAFETY:
-            // Pointers returned by shared_get_impl remain valid until
-            // self.item is updated.
-            let old_full_ptr = get_full_ptr_raw::<_, NoMeta>(old_ptr);
-            let Some(payload) = f(&unsafe { &*old_full_ptr }.payload) else {
-                self.reload();
-                return false;
-            };
-            result = ItemHolder {
-                the_size: NoMeta,
-                #[cfg(feature = "validate")]
-                magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
-                #[cfg(feature = "validate")]
-                magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
-                // SAFETY:
-                // old_ptr is a valid ptr
-                payload,
-                next_and_state: atomic::AtomicPtr::default(),
-                refcount: atomic::AtomicUsize::new(MAX_ROOTS),
-            };
+        match self.rcu_impl(f) {
+            RcuResult::Update => {
+                true
+            }
+            RcuResult::NoUpdate | RcuResult::Race => false
         }
-
-        let new_ptr = Box::into_raw(Box::new(result));
-        // Note:
-        // We do not run into the ABA-problem here, since both pointers that could collide
-        // are distinct, valid pointers.
-        let ret = Self::update_shared_impl(
-            self.item.as_ptr(),
-            new_ptr as *mut ItemHolderDummy<T>,
-            true,
-            old_ptr,
-        );
-        if !ret {
-            // SAFETY:
-            // new_ptr hasn't been used, since update_shared_impl returned false.
-            // So it's still just a uniquely valid pointer created by Box::into_raw.
-            unsafe { _ = Box::from_raw(new_ptr) };
-        }
-        self.reload();
-        ret
     }
 }
 impl<T: 'static + ?Sized> ArcShift<T> {
@@ -1739,7 +1746,11 @@ impl<T: 'static + ?Sized> ArcShift<T> {
     /// effect, compared to just calling 'get' and discarding the value.
     #[inline(never)]
     pub fn reload(&mut self) {
+        self.reload_impl(null());
+    }
+    fn reload_impl(&mut self, limit: *const ItemHolderDummy<T>) {
         verify_item(self.item.as_ptr());
+        assert_is_undecorated(limit);
         debug_println!(
             "reload {:?} (next = {:?})",
             self.item,
@@ -1755,7 +1766,8 @@ impl<T: 'static + ?Sized> ArcShift<T> {
                 atomic::spin_loop();
                 continue;
             };
-            if next.is_null() {
+            assert_is_undecorated(new_self);
+            if next.is_null() || new_self == limit {
                 if new_self == self.item.as_ptr() {
                     debug_println!("{:?} doesn't need reload", self.item);
                     return; //Nothing to do
@@ -2025,6 +2037,13 @@ impl<T: 'static + ?Sized> ArcShift<T> {
         }
     }
 }
+
+enum RcuResult {
+    Update,
+    NoUpdate,
+    Race,
+}
+
 impl<T: 'static + Sized> ArcShift<T> {
     /// Create a new ArcShift instance, containing the given value.
     pub fn new(payload: T) -> ArcShift<T> {
@@ -2332,11 +2351,25 @@ impl<T: 'static + Sized> ArcShift<T> {
     where
         F: FnOnce(&T) -> T,
     {
+        match self.rcu_impl(|x|Some(f(x))) {
+            RcuResult::Update => true,
+            RcuResult::NoUpdate |
+            RcuResult::Race => false
+        }
+    }
+    fn rcu_impl<F>(&mut self, f: F) -> RcuResult
+    where
+        F: FnOnce(&T) -> Option<T>,
+    {
         let old_ptr;
         let result: ItemHolder<T, NoMeta>;
         {
             old_ptr = self.shared_get_impl();
             let old_full_ptr = get_full_ptr_raw::<T, NoMeta>(old_ptr);
+            let Some(payload) = f(&unsafe { &*old_full_ptr }.payload) else {
+                self.reload();
+                return RcuResult::NoUpdate;
+            };
             result = ItemHolder {
                 the_size: NoMeta,
                 #[cfg(feature = "validate")]
@@ -2345,11 +2378,12 @@ impl<T: 'static + Sized> ArcShift<T> {
                 magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
                 // SAFETY:
                 // old_ptr is a valid ptr
-                payload: f(&unsafe { &*old_full_ptr }.payload),
+                payload,
                 next_and_state: atomic::AtomicPtr::default(),
                 refcount: atomic::AtomicUsize::new(MAX_ROOTS),
             };
         }
+
 
         let new_ptr = Box::into_raw(Box::new(result));
         // Note:
@@ -2366,11 +2400,13 @@ impl<T: 'static + Sized> ArcShift<T> {
             // new_ptr hasn't been used, since update_shared_impl returned false.
             // So it's still just a uniquely valid pointer created by Box::into_raw.
             unsafe { _ = Box::from_raw(new_ptr) };
+            self.reload();
+            RcuResult::Race
+        } else {
+            self.reload_impl(new_ptr as *const ItemHolderDummy<T>);
+            RcuResult::Update
         }
-        self.reload();
-        ret
     }
-
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
     /// new value will be returned.

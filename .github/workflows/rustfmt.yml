@@ -20,4 +20,3 @@ jobs:
       run: rustup toolchain install stable
     - name: Run tests
       run: cargo +stable fmt
-      
