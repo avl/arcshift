@@ -1,6 +1,5 @@
 #![cfg_attr(feature = "nightly", feature(layout_for_ptr))]
 #![cfg_attr(feature = "nightly", feature(ptr_metadata))]
-#![feature(ptr_alignment_type)]
 #![deny(warnings)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 #![deny(missing_docs)]
@@ -512,22 +511,32 @@ fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
     data_ptr: *mut u8,
     metadata: Metadata<T>,
 ) -> *mut ItemHolder<T, M> {
+    #[cfg(not(feature = "nightly"))]
     unsafe {
         std::mem::transmute_copy(&FatPtr {
             ptr: data_ptr,
             meta: metadata,
         })
     }
+    #[cfg(feature = "nightly")]
+    {
+        std::ptr::from_raw_parts_mut(data_ptr, metadata.meta)
+    }
 }
 fn arc_from_raw_parts<T: ?Sized, M: IMetadata>(
     data_ptr: *const u8,
     metadata: Metadata<T>,
 ) -> *const ItemHolder<T, M> {
+    #[cfg(not(feature = "nightly"))]
     unsafe {
         std::mem::transmute_copy(&FatPtr {
             ptr: data_ptr as *mut u8,
             meta: metadata,
         })
+    }
+    #[cfg(feature = "nightly")]
+    {
+        std::ptr::from_raw_parts(data_ptr, metadata.meta)
     }
 }
 
