@@ -1,5 +1,5 @@
-#![cfg_attr(feature="nightly",feature(layout_for_ptr))]
-#![cfg_attr(feature="nightly",feature(ptr_metadata))]
+#![cfg_attr(feature = "nightly", feature(layout_for_ptr))]
+#![cfg_attr(feature = "nightly", feature(ptr_metadata))]
 #![feature(ptr_alignment_type)]
 #![deny(warnings)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
@@ -221,19 +221,18 @@
 //! ```
 //!
 
-
 use crate::ItemStateEnum::{Dropped, Superseded};
 use std::alloc::Layout;
 #[allow(unused)]
 use std::backtrace::Backtrace;
 use std::cell::{Cell, UnsafeCell};
 use std::fmt::Formatter;
-use std::marker::{PhantomData};
+use std::marker::PhantomData;
 use std::mem;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::panic::UnwindSafe;
-use std::ptr::{addr_of_mut, drop_in_place, NonNull, null, null_mut};
+use std::ptr::{addr_of_mut, drop_in_place, null, null_mut, NonNull};
 use std::sync::atomic::Ordering;
 
 // About unsafe code in this crate:
@@ -340,7 +339,7 @@ impl<T> UnwindSafe for ArcShift<T> {}
 /// and even if all other instances of ArcShift/ArcShiftLight have been dropped.
 /// If this limitation is unacceptable, consider using `ArcShiftLight<Box<T>>` as your datatype,
 /// or possibly using a different crate.
-pub struct ArcShiftLight<T: 'static+?Sized> {
+pub struct ArcShiftLight<T: 'static + ?Sized> {
     item: NonNull<ItemHolderDummy<T>>,
 }
 
@@ -363,25 +362,24 @@ pub struct ArcShiftCell<T: 'static> {
 }
 
 /// ArcShiftCell cannot be Sync, but there's nothing stopping it from being Send.
-unsafe impl<T:'static> Send for ArcShiftCell<T> where T: Send{}
+unsafe impl<T: 'static> Send for ArcShiftCell<T> where T: Send {}
 
-impl<T:'static> Clone for ArcShiftCell<T> {
+impl<T: 'static> Clone for ArcShiftCell<T> {
     fn clone(&self) -> Self {
-        let clone = unsafe{&mut *self.inner.get()}.clone();
+        let clone = unsafe { &mut *self.inner.get() }.clone();
         ArcShiftCell {
             inner: UnsafeCell::new(clone),
             recursion: Cell::new(0),
         }
     }
 }
-impl<T:'static> ArcShiftCell<T> {
-
+impl<T: 'static> ArcShiftCell<T> {
     /// Creates an ArcShiftCell from an ArcShift-instance.
     /// The payload is not cloned, the two pointers keep pointing to the same object.
     pub fn from_arcshift(input: ArcShift<T>) -> ArcShiftCell<T> {
         ArcShiftCell {
             inner: UnsafeCell::new(input),
-            recursion: Cell::new(0)
+            recursion: Cell::new(0),
         }
     }
     /// Get the value pointed to.
@@ -394,9 +392,9 @@ impl<T:'static> ArcShiftCell<T> {
     pub fn get(&self, f: impl FnOnce(&T)) {
         self.recursion.set(self.recursion.get() + 1);
         let val = if self.recursion.get() == 1 {
-            unsafe{&mut *self.inner.get()}.get()
+            unsafe { &mut *self.inner.get() }.get()
         } else {
-            unsafe{&*self.inner.get()}.shared_get()
+            unsafe { &*self.inner.get() }.shared_get()
         };
         f(val);
         self.recursion.set(self.recursion.get() - 1);
@@ -421,7 +419,7 @@ impl<T:'static> ArcShiftCell<T> {
         // SAFETY:
         // ArcShiftCell is not Sync, and 'reload' does not recursively call into user
         // code, so we know no other operation can be ongoing.
-        unsafe{&mut *self.inner.get()}.clone()
+        unsafe { &mut *self.inner.get() }.clone()
     }
 }
 
@@ -476,43 +474,44 @@ impl<T: 'static> Clone for ArcShiftLight<T> {
     }
 }
 
-fn make_sized_holder<T,M:IMetadata>(item :ItemHolder<T,M>) -> *mut ItemHolderDummy<T> {
+fn make_sized_holder<T, M: IMetadata>(item: ItemHolder<T, M>) -> *mut ItemHolderDummy<T> {
     let cur_ptr = Box::into_raw(Box::new(item));
     cur_ptr as _
 }
 
 #[repr(transparent)]
-struct Metadata<T:?Sized> {
-    #[cfg(feature="nightly")]
+struct Metadata<T: ?Sized> {
+    #[cfg(feature = "nightly")]
     meta: <T as std::ptr::Pointee>::Metadata,
-    #[cfg(not(feature="nightly"))]
+    #[cfg(not(feature = "nightly"))]
     meta: usize,
-    phantom: PhantomData<T>
+    phantom: PhantomData<T>,
 }
-impl<T:?Sized> Clone for Metadata<T> {
+impl<T: ?Sized> Clone for Metadata<T> {
     fn clone(&self) -> Self {
         Metadata {
             meta: self.meta,
-            phantom: PhantomData
+            phantom: PhantomData,
         }
     }
 }
-impl<T:?Sized> Copy for Metadata<T> {
-
-}
-impl<T:?Sized> std::fmt::Debug for Metadata<T> {
+impl<T: ?Sized> Copy for Metadata<T> {}
+impl<T: ?Sized> std::fmt::Debug for Metadata<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Metadata({:?})", self.meta)
     }
 }
 
 #[allow(dead_code)]
-struct FatPtr<T:?Sized> {
+struct FatPtr<T: ?Sized> {
     ptr: *mut u8,
     meta: Metadata<T>,
 }
 
-fn arc_from_raw_parts_mut<T:?Sized,M:IMetadata>(data_ptr: *mut u8, metadata: Metadata<T>) -> *mut ItemHolder<T,M> {
+fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
+    data_ptr: *mut u8,
+    metadata: Metadata<T>,
+) -> *mut ItemHolder<T, M> {
     unsafe {
         std::mem::transmute_copy(&FatPtr {
             ptr: data_ptr,
@@ -520,7 +519,10 @@ fn arc_from_raw_parts_mut<T:?Sized,M:IMetadata>(data_ptr: *mut u8, metadata: Met
         })
     }
 }
-fn arc_from_raw_parts<T:?Sized,M:IMetadata>(data_ptr: *const u8, metadata: Metadata<T>) -> *const ItemHolder<T,M> {
+fn arc_from_raw_parts<T: ?Sized, M: IMetadata>(
+    data_ptr: *const u8,
+    metadata: Metadata<T>,
+) -> *const ItemHolder<T, M> {
     unsafe {
         std::mem::transmute_copy(&FatPtr {
             ptr: data_ptr as *mut u8,
@@ -529,11 +531,9 @@ fn arc_from_raw_parts<T:?Sized,M:IMetadata>(data_ptr: *const u8, metadata: Metad
     }
 }
 
-impl<T:?Sized> Metadata<T> {
-
+impl<T: ?Sized> Metadata<T> {
     #[cfg(not(feature = "nightly"))]
-    fn polyfill_metadata(cur_ptr: *const T) -> usize
-    {
+    fn polyfill_metadata(cur_ptr: *const T) -> usize {
         if is_sized::<T>() {
             0 //Not correct, but we're never using this function for sized data
         } else {
@@ -553,37 +553,39 @@ impl<T:?Sized> Metadata<T> {
     }
 }
 
-fn get_holder_layout<T:?Sized+'static, M: IMetadata>(ptr: *const T) -> Layout {
+fn get_holder_layout<T: ?Sized + 'static, M: IMetadata>(ptr: *const T) -> Layout {
     //let the_size = unsafe { std::mem::size_of_val_raw(ptr) };
     //let the_align = unsafe {std::mem::align_of_val_raw(ptr) };
-    let payload_layout = Layout::for_value(unsafe{&*ptr});
+    let payload_layout = Layout::for_value(unsafe { &*ptr });
     if is_sized::<T>() {
-        let layout = Layout::new::<ItemHolder<(),NoMeta>>();
+        let layout = Layout::new::<ItemHolder<(), NoMeta>>();
         let (layout, _) = layout.extend(payload_layout).unwrap();
         layout.pad_to_align()
     } else {
         let layout = Layout::new::<Metadata<T>>();
-        let (layout, _) = layout.extend(Layout::new::<ItemHolder<(), Metadata<T>>>()).unwrap();
+        let (layout, _) = layout
+            .extend(Layout::new::<ItemHolder<(), Metadata<T>>>())
+            .unwrap();
         let (layout, _) = layout.extend(payload_layout).unwrap();
         layout.pad_to_align()
     }
 }
 
 #[allow(unused)]
-fn make_unsized_holder_from_box<T:?Sized>(item : Box<T>) -> *const ItemHolderDummy<T> {
+fn make_unsized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDummy<T> {
     let cur_ptr = Box::into_raw(item);
 
     println!("thesize: {:?}", cur_ptr);
-    let item_holder_ptr: *mut ItemHolder<T,Metadata<T>>;
+    let item_holder_ptr: *mut ItemHolder<T, Metadata<T>>;
     //let the_size = unsafe { std::mem::size_of_val_raw(cur_ptr) };
 
-    let payload_layout = Layout::for_value(unsafe{&*cur_ptr});
+    let payload_layout = Layout::for_value(unsafe { &*cur_ptr });
     let the_size = payload_layout.size();
 
     if is_sized::<T>() {
         unreachable!()
-    } else  {
-        let layout = get_holder_layout::<T,Metadata<T>>(cur_ptr);
+    } else {
+        let layout = get_holder_layout::<T, Metadata<T>>(cur_ptr);
 
         let metadata = Metadata::new(cur_ptr);
         println!("Layout: {:?}, meta: {:?}", layout, metadata);
@@ -592,22 +594,23 @@ fn make_unsized_holder_from_box<T:?Sized>(item : Box<T>) -> *const ItemHolderDum
         // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
         // The returned memory is uninitialized, but we will initialize the required parts of it
         // below.
-        item_holder_ptr = unsafe { arc_from_raw_parts_mut(std::alloc::alloc(layout) as *mut _, metadata.clone()) };
+        item_holder_ptr = unsafe {
+            arc_from_raw_parts_mut(std::alloc::alloc(layout) as *mut _, metadata.clone())
+        };
         println!("Sized result ptr: {:?}", item_holder_ptr);
         // SAFETY:
         // result_ptr is a valid pointer
         unsafe {
-            addr_of_mut!((*item_holder_ptr).the_size)
-                .write(metadata);
+            addr_of_mut!((*item_holder_ptr).the_size).write(metadata);
         }
     }
 
-
     // SAFETY:
     // The copy is safe because MaybeUninit<ItemHolder<T>> is guaranteed to have the same
     // memory layout as ItemHolder<T>, so we're just copying a value of T to a new location.
     unsafe {
-        (addr_of_mut!((*item_holder_ptr).payload) as *mut u8).copy_from(cur_ptr as *mut u8, the_size);
+        (addr_of_mut!((*item_holder_ptr).payload) as *mut u8)
+            .copy_from(cur_ptr as *mut u8, the_size);
     }
     // SAFETY:
     // next is just an AtomicPtr-type, for which all bit patterns are valid.
@@ -636,7 +639,6 @@ fn make_unsized_holder_from_box<T:?Sized>(item : Box<T>) -> *const ItemHolderDum
             .write(std::sync::atomic::AtomicU64::new(0x1234123412348111));
     }
 
-
     // SAFETY:
     // input_ptr is a *mut T that has been created from a Box<T>.
     // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-function
@@ -644,31 +646,33 @@ fn make_unsized_holder_from_box<T:?Sized>(item : Box<T>) -> *const ItemHolderDum
     let _t: Box<ManuallyDrop<T>> = unsafe { Box::from_raw(cur_ptr as *mut ManuallyDrop<T>) }; //Free the memory, but don't drop 'input'
 
     let ret = item_holder_ptr as *const ItemHolderDummy<T>;
-    println!("ret item holder dummy ptr: {:?}, next: {:?}", ret, unsafe{(&*item_holder_ptr).next_and_state.load(Ordering::SeqCst)});
-    println!("Next : {:?}",get_next_and_state(ret));
+    println!("ret item holder dummy ptr: {:?}, next: {:?}", ret, unsafe {
+        (&*item_holder_ptr).next_and_state.load(Ordering::SeqCst)
+    });
+    println!("Next : {:?}", get_next_and_state(ret));
     ret
-
 }
 
 #[allow(unused)]
-fn make_sized_holder_from_box<T:?Sized>(item : Box<T>) -> *const ItemHolderDummy<T> {
+fn make_sized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDummy<T> {
     let cur_ptr = Box::into_raw(item);
 
     println!("thesize: {:?}", cur_ptr);
-    let item_holder_ptr: *mut ItemHolder<T,NoMeta>;
+    let item_holder_ptr: *mut ItemHolder<T, NoMeta>;
 
-    let payload_layout = Layout::for_value(unsafe{&*cur_ptr});
+    let payload_layout = Layout::for_value(unsafe { &*cur_ptr });
     let the_size = payload_layout.size();
 
-    let layout = get_holder_layout::<T,NoMeta>(cur_ptr);
+    let layout = get_holder_layout::<T, NoMeta>(cur_ptr);
 
-    item_holder_ptr = unsafe  { std::mem::transmute_copy(&std::alloc::alloc(layout)) };
+    item_holder_ptr = unsafe { std::mem::transmute_copy(&std::alloc::alloc(layout)) };
 
     // SAFETY:
     // The copy is safe because MaybeUninit<ItemHolder<T>> is guaranteed to have the same
     // memory layout as ItemHolder<T>, so we're just copying a value of T to a new location.
     unsafe {
-        (addr_of_mut!((*item_holder_ptr).payload) as *mut u8).copy_from(cur_ptr as *mut u8, the_size);
+        (addr_of_mut!((*item_holder_ptr).payload) as *mut u8)
+            .copy_from(cur_ptr as *mut u8, the_size);
     }
     // SAFETY:
     // next is just an AtomicPtr-type, for which all bit patterns are valid.
@@ -697,7 +701,6 @@ fn make_sized_holder_from_box<T:?Sized>(item : Box<T>) -> *const ItemHolderDummy
             .write(std::sync::atomic::AtomicU64::new(0x1234123412348111));
     }
 
-
     // SAFETY:
     // input_ptr is a *mut T that has been created from a Box<T>.
     // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-function
@@ -705,27 +708,37 @@ fn make_sized_holder_from_box<T:?Sized>(item : Box<T>) -> *const ItemHolderDummy
     let _t: Box<ManuallyDrop<T>> = unsafe { Box::from_raw(cur_ptr as *mut ManuallyDrop<T>) }; //Free the memory, but don't drop 'input'
 
     let ret = item_holder_ptr as *const ItemHolderDummy<T>;
-    println!("ret item holder dummy ptr: {:?}, next: {:?}", ret, unsafe{(&*item_holder_ptr).next_and_state.load(Ordering::SeqCst)});
-    println!("Next : {:?}",get_next_and_state(ret));
+    println!("ret item holder dummy ptr: {:?}, next: {:?}", ret, unsafe {
+        (&*item_holder_ptr).next_and_state.load(Ordering::SeqCst)
+    });
+    println!("Next : {:?}", get_next_and_state(ret));
     ret
-
 }
-fn get_ptr<T:?Sized>(dummy: NonNull<ItemHolderDummy<T>>) -> *const ItemHolderDummy<T> {
+fn get_ptr<T: ?Sized>(dummy: NonNull<ItemHolderDummy<T>>) -> *const ItemHolderDummy<T> {
     dummy.as_ptr() as *const ItemHolderDummy<T>
 }
-fn get_full_ptr<T:?Sized,M:IMetadata>(dummy: NonNull<ItemHolderDummy<T>>) -> *const ItemHolder<T,M> {
+fn get_full_ptr<T: ?Sized, M: IMetadata>(
+    dummy: NonNull<ItemHolderDummy<T>>,
+) -> *const ItemHolder<T, M> {
     get_full_ptr_raw(dummy.as_ptr())
 }
-fn get_full_ptr_raw<T:?Sized,M:IMetadata>(dummy: *const ItemHolderDummy<T>) -> *const ItemHolder<T,M> {
+fn get_full_ptr_raw<T: ?Sized, M: IMetadata>(
+    dummy: *const ItemHolderDummy<T>,
+) -> *const ItemHolder<T, M> {
     if is_sized::<T>() {
-        debug_assert_eq!(size_of::<*const ItemHolder<T,M>>(), size_of::<*const ItemHolderDummy<T>>()); //Verify that *const T is not a fat ptr
+        debug_assert_eq!(
+            size_of::<*const ItemHolder<T, M>>(),
+            size_of::<*const ItemHolderDummy<T>>()
+        ); //Verify that *const T is not a fat ptr
         unsafe { std::mem::transmute_copy(&dummy) }
     } else {
         let ptr_data = dummy as *const _;
         println!("Dummy data: {:?}", ptr_data);
         let metadata_ptr = dummy as *const Metadata<T>;
-        println!("Unsized, meta: {:?}, val: {:?}", metadata_ptr, unsafe{*metadata_ptr});
-        let metadata = unsafe{*metadata_ptr };
+        println!("Unsized, meta: {:?}, val: {:?}", metadata_ptr, unsafe {
+            *metadata_ptr
+        });
+        let metadata = unsafe { *metadata_ptr };
         arc_from_raw_parts(ptr_data, metadata)
     }
 }
@@ -740,12 +753,14 @@ fn get_full_ptr_raw<T:?Sized,M:IMetadata>(dummy: *const ItemHolderDummy<T>) -> *
         arc_from_raw_parts(dummy as *const _, metadata)
     }
 }*/
-impl<T:'static + ?Sized> ArcShiftLight<T> {
+impl<T: 'static + ?Sized> ArcShiftLight<T> {
     /// Load 'next'.
     /// If 'next' is tentative, convert it to superseded.
     /// 'curitem' must be a valid pointer.
     #[inline]
-    fn load_nontentative_next(curitem: *const ItemHolderDummy<T>) -> Option<*const ItemHolderDummy<T>> {
+    fn load_nontentative_next(
+        curitem: *const ItemHolderDummy<T>,
+    ) -> Option<*const ItemHolderDummy<T>> {
         let next = get_next_and_state(curitem).load(Ordering::SeqCst);
 
         debug_println!(
@@ -782,7 +797,6 @@ impl<T:'static + ?Sized> ArcShiftLight<T> {
             Some(next)
         }
     }
-
 }
 
 impl<T: 'static> ArcShiftLight<T> {
@@ -825,7 +839,8 @@ impl<T: 'static> ArcShiftLight<T> {
             debug_println!("ArcShiftLight::reload, next = {:?}", next);
             if undecorate(next).is_null() {
                 if strength > 1 {
-                    let count = get_refcount(self.item.as_ptr()).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                    let count =
+                        get_refcount(self.item.as_ptr()).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
                     debug_println!(
                         "ArcShiftLight::reload, next = {:?}, adjusting count {} -> {}",
                         self.item,
@@ -849,7 +864,7 @@ impl<T: 'static> ArcShiftLight<T> {
 
             if strength > 0 {
                 let count = get_refcount(self.item.as_ptr()).fetch_sub(strength, Ordering::SeqCst);
-                    debug_println!(
+                debug_println!(
                     "ArcShiftLight::reload, next = {:?}, releasing {} -> {}",
                     next,
                     count,
@@ -870,7 +885,7 @@ impl<T: 'static> ArcShiftLight<T> {
 
             // SAFETY:
             // next cannot be null, because of the if-statement further up
-            self.item = unsafe{NonNull::new_unchecked(undecorate(next) as *mut _)};
+            self.item = unsafe { NonNull::new_unchecked(undecorate(next) as *mut _) };
         }
     }
 
@@ -906,7 +921,12 @@ impl<T: 'static> ArcShiftLight<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut ItemHolderDummy<T>, true, null());
+        ArcShift::update_shared_impl(
+            self.item.as_ptr(),
+            new_ptr as *mut ItemHolderDummy<T>,
+            true,
+            null(),
+        );
     }
 
     /// Retrieves the internal node count, counted from this instance.
@@ -922,7 +942,7 @@ impl<T: 'static> ArcShiftLight<T> {
             }
             curitem = undecorate(next);
             if curitem.is_null() {
-                return  count;
+                return count;
             }
         }
     }
@@ -955,7 +975,12 @@ impl<T: 'static> ArcShiftLight<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut ItemHolderDummy<T>, false, null());
+        ArcShift::update_shared_impl(
+            self.item.as_ptr(),
+            new_ptr as *mut ItemHolderDummy<T>,
+            false,
+            null(),
+        );
         self.reload();
     }
     /// Update the contents of this ArcShiftLight, and all other instances cloned from this
@@ -1002,7 +1027,6 @@ impl<T: 'static> ArcShiftLight<T> {
         let new_ptr = ArcShift::from_box_impl(new_payload);
         ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true, null());
     }
-
 
     /// Create an ArcShift instance from this ArcShiftLight.
     pub fn upgrade(&self) -> ArcShift<T> {
@@ -1081,7 +1105,7 @@ impl<T: 'static> ArcShiftLight<T> {
     }
 }
 
-impl<T: 'static+?Sized> Drop for ArcShiftLight<T> {
+impl<T: 'static + ?Sized> Drop for ArcShiftLight<T> {
     fn drop(&mut self) {
         debug_println!("ArcShiftLight::drop: {:?}", self.item);
         drop_root_item(get_ptr(self.item), 1)
@@ -1111,21 +1135,18 @@ impl<T: ?Sized> Drop for ArcShift<T> {
 // It is possible to access next_and_state and refcount without knowing if the ItemHolder
 // has fixed size.
 #[repr(transparent)]
-struct ItemHolderDummy<T:'static+?Sized>(u8, PhantomData<T>);
+struct ItemHolderDummy<T: 'static + ?Sized>(u8, PhantomData<T>);
 
 struct NoMeta;
-trait IMetadata {
-}
-impl IMetadata for NoMeta {
-}
-impl<T:?Sized> IMetadata for Metadata<T> {
-}
+trait IMetadata {}
+impl IMetadata for NoMeta {}
+impl<T: ?Sized> IMetadata for Metadata<T> {}
 
 /// Align 4 is needed, since we store flags in the lower 2 bits of the ItemHolder-pointers
 /// In practice, the alignment of ItemHolder is 8 anyway, but we specify it here for clarity.
 #[repr(align(8))]
 #[repr(C)] // Just to get the 'magic' first and last in memory. Shouldn't hurt.
-struct ItemHolder<T: 'static + ?Sized, M:IMetadata> {
+struct ItemHolder<T: 'static + ?Sized, M: IMetadata> {
     the_size: M,
     #[cfg(feature = "validate")]
     magic1: std::sync::atomic::AtomicU64,
@@ -1140,13 +1161,13 @@ struct ItemHolder<T: 'static + ?Sized, M:IMetadata> {
 #[cfg(all(any(loom, feature = "shuttle"), feature = "validate"))]
 static MAGIC: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
-impl<T: 'static+?Sized,M:IMetadata> ItemHolder<T,M> {
+impl<T: 'static + ?Sized, M: IMetadata> ItemHolder<T, M> {
     #[cfg_attr(test, mutants::skip)]
-    #[cfg(feature="validate")]
+    #[cfg(feature = "validate")]
     fn verify(ptr2: *const ItemHolderDummy<T>) {
         {
             assert_is_undecorated(ptr2);
-            let ptr = ptr2 as *const ItemHolder<(),M>;
+            let ptr = ptr2 as *const ItemHolder<(), M>;
 
             // SAFETY:
             // This function is never called with a null-ptr. Also, this is
@@ -1230,7 +1251,7 @@ impl<T: 'static+?Sized,M:IMetadata> ItemHolder<T,M> {
 #[inline]
 #[allow(unused)]
 #[cfg_attr(test, mutants::skip)]
-fn verify_item_impl<T:?Sized,M:IMetadata>(_ptr: *const ItemHolderDummy<T>) {
+fn verify_item_impl<T: ?Sized, M: IMetadata>(_ptr: *const ItemHolderDummy<T>) {
     #[cfg(feature = "validate")]
     {
         let ptr = _ptr;
@@ -1241,28 +1262,28 @@ fn verify_item_impl<T:?Sized,M:IMetadata>(_ptr: *const ItemHolderDummy<T>) {
         if x.is_null() {
             return;
         }
-        ItemHolder::<T,M>::verify(x)
+        ItemHolder::<T, M>::verify(x)
     }
 }
 /// Check the magic values of the supplied pointer, validating it in a best-effort fashion
 #[inline]
 #[cfg_attr(test, mutants::skip)]
-fn verify_item<T:?Sized>(_ptr: *const ItemHolderDummy<T>) {
+fn verify_item<T: ?Sized>(_ptr: *const ItemHolderDummy<T>) {
     #[cfg(feature = "validate")]
     {
         if is_sized::<T>() {
-            verify_item_impl::<T,NoMeta>(_ptr)
+            verify_item_impl::<T, NoMeta>(_ptr)
         } else {
-            verify_item_impl::<T,Metadata<T>>(_ptr)
+            verify_item_impl::<T, Metadata<T>>(_ptr)
         }
     }
 }
 #[cfg(feature = "validate")]
 #[cfg_attr(test, mutants::skip)] // This is only used for validation and test, it has no behaviour
-impl<T:?Sized,M:IMetadata> Drop for ItemHolder<T,M> {
+impl<T: ?Sized, M: IMetadata> Drop for ItemHolder<T, M> {
     fn drop(&mut self) {
         Self::verify(self as *mut _ as *mut ItemHolderDummy<T>);
-        debug_println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T,M>);
+        debug_println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T, M>);
         {
             self.magic1 = std::sync::atomic::AtomicU64::new(0xDEADDEA1DEADDEA1);
             self.magic2 = std::sync::atomic::AtomicU64::new(0xDEADDEA2DEADDEA2);
@@ -1296,7 +1317,10 @@ enum ItemStateEnum {
 
 /// Decorate the given pointer with the enum value.
 /// The decoration is the least significant 2 bits.
-fn decorate<T:?Sized>(ptr: *const ItemHolderDummy<T>, e: ItemStateEnum) -> *const ItemHolderDummy<T> {
+fn decorate<T: ?Sized>(
+    ptr: *const ItemHolderDummy<T>,
+    e: ItemStateEnum,
+) -> *const ItemHolderDummy<T> {
     let curdecoration = (ptr as usize) & 3;
     ((ptr as *const u8).wrapping_offset((e as isize) - (curdecoration as isize)))
         as *const ItemHolderDummy<T>
@@ -1304,7 +1328,7 @@ fn decorate<T:?Sized>(ptr: *const ItemHolderDummy<T>, e: ItemStateEnum) -> *cons
 
 /// Panic if the pointer is decorated
 #[cfg_attr(test, mutants::skip)]
-fn assert_is_undecorated<T:?Sized>(_ptr: *const ItemHolderDummy<T>) {
+fn assert_is_undecorated<T: ?Sized>(_ptr: *const ItemHolderDummy<T>) {
     #[cfg(feature = "validate")]
     {
         let raw = _ptr as usize & 3;
@@ -1317,7 +1341,7 @@ fn assert_is_undecorated<T:?Sized>(_ptr: *const ItemHolderDummy<T>) {
 /// Return an undecorated version of the given pointer.
 /// Supplying an already undecorated pointer is not an error, and returns
 /// the value unmodified.
-fn undecorate<T:?Sized>(cand: *const ItemHolderDummy<T>) -> *const ItemHolderDummy<T> {
+fn undecorate<T: ?Sized>(cand: *const ItemHolderDummy<T>) -> *const ItemHolderDummy<T> {
     let raw = cand as usize & 3;
     if raw != 0 {
         ((cand as *const u8).wrapping_offset(-(raw as isize))) as *const ItemHolderDummy<T>
@@ -1329,7 +1353,7 @@ fn undecorate<T:?Sized>(cand: *const ItemHolderDummy<T>) -> *const ItemHolderDum
 /// Get the state encoded in the decoration, if any.
 /// Returns None if the pointer is undecorated null.
 /// The pointer must be valid.
-fn get_state<T:?Sized>(ptr: *const ItemHolderDummy<T>) -> Option<ItemStateEnum> {
+fn get_state<T: ?Sized>(ptr: *const ItemHolderDummy<T>) -> Option<ItemStateEnum> {
     if ptr.is_null() {
         return None;
     }
@@ -1358,7 +1382,8 @@ fn is_superseded_by_tentative(state: Option<ItemStateEnum>) -> bool {
 impl<T: 'static> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         debug_println!("ArcShift::clone({:?})", self.item);
-        let rescount = get_refcount(self.item.as_ptr()).fetch_add(MAX_ROOTS, atomic::Ordering::Relaxed);
+        let rescount =
+            get_refcount(self.item.as_ptr()).fetch_add(MAX_ROOTS, atomic::Ordering::Relaxed);
 
         debug_println!(
             "Clone - adding count to {:?}, resulting in count {}",
@@ -1382,28 +1407,34 @@ impl<T> Deref for ArcShift<T> {
 
 // ptr must be a valid pointer
 #[inline(always)]
-fn get_next_and_state<'a, T:?Sized>(ptr: *const ItemHolderDummy<T>) -> &'a atomic::AtomicPtr<ItemHolderDummy<T>> {
+fn get_next_and_state<'a, T: ?Sized>(
+    ptr: *const ItemHolderDummy<T>,
+) -> &'a atomic::AtomicPtr<ItemHolderDummy<T>> {
     if is_sized::<T>() {
         let offset = mem::offset_of!(ItemHolder<T,NoMeta>, next_and_state);
-        let retptr = (ptr as *const u8).wrapping_offset(offset as isize) as *const atomic::AtomicPtr<ItemHolderDummy<T>>;
-        unsafe{&*retptr}
+        let retptr = (ptr as *const u8).wrapping_offset(offset as isize)
+            as *const atomic::AtomicPtr<ItemHolderDummy<T>>;
+        unsafe { &*retptr }
     } else {
         let offset = mem::offset_of!(ItemHolder<T,Metadata<T>>, next_and_state);
-        let retptr = (ptr as *const u8).wrapping_offset(offset as isize) as *const atomic::AtomicPtr<ItemHolderDummy<T>>;
-        unsafe{&*retptr}
+        let retptr = (ptr as *const u8).wrapping_offset(offset as isize)
+            as *const atomic::AtomicPtr<ItemHolderDummy<T>>;
+        unsafe { &*retptr }
     }
 }
 // ptr must be a valid pointer
 
 #[inline(always)]
-fn get_refcount<'a, T:?Sized>(ptr: *const ItemHolderDummy<T>) -> &'a atomic::AtomicUsize {
+fn get_refcount<'a, T: ?Sized>(ptr: *const ItemHolderDummy<T>) -> &'a atomic::AtomicUsize {
     if is_sized::<T>() {
         let offset = mem::offset_of!(ItemHolder<T,NoMeta>, refcount);
-        let retptr = (ptr as *const u8).wrapping_offset(offset as isize) as *const atomic::AtomicUsize;
+        let retptr =
+            (ptr as *const u8).wrapping_offset(offset as isize) as *const atomic::AtomicUsize;
         unsafe { &*retptr }
     } else {
         let offset = mem::offset_of!(ItemHolder<T,Metadata<T>>, refcount);
-        let retptr = (ptr as *const u8).wrapping_offset(offset as isize) as *const atomic::AtomicUsize;
+        let retptr =
+            (ptr as *const u8).wrapping_offset(offset as isize) as *const atomic::AtomicUsize;
         unsafe { &*retptr }
     }
 }
@@ -1442,8 +1473,9 @@ impl<T: 'static> ArcShift<T> {
                     //TODO: asdf
                     // SAFETY:
                     // self_item is always a valid pointer
-                    let mut val =
-                        unsafe { Box::from_raw(self_item as *mut MaybeUninit<ItemHolder<T, NoMeta>>) };
+                    let mut val = unsafe {
+                        Box::from_raw(self_item as *mut MaybeUninit<ItemHolder<T, NoMeta>>)
+                    };
                     // SAFETY:
                     // `val` is a valid box. The pointer created by as_mut_ptr is also valid.
                     // We then 'read' the payload. This is safe, we've marked the contents of self_item as
@@ -1506,16 +1538,19 @@ impl<T: 'static> ArcShift<T> {
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
     /// before this function returns.
-    pub fn rcu_maybe<F>(&mut self, f: F) -> bool where F: FnOnce(&T) -> Option<T> {
+    pub fn rcu_maybe<F>(&mut self, f: F) -> bool
+    where
+        F: FnOnce(&T) -> Option<T>,
+    {
         let old_ptr;
-        let result:ItemHolder<T,NoMeta>;
+        let result: ItemHolder<T, NoMeta>;
         {
             old_ptr = self.shared_get_impl();
             // SAFETY:
             // Pointers returned by shared_get_impl remain valid until
             // self.item is updated.
-            let old_full_ptr = get_full_ptr_raw::<_,NoMeta>(old_ptr);
-            let Some(payload) = f(&unsafe{&*old_full_ptr}.payload) else {
+            let old_full_ptr = get_full_ptr_raw::<_, NoMeta>(old_ptr);
+            let Some(payload) = f(&unsafe { &*old_full_ptr }.payload) else {
                 self.reload();
                 return false;
             };
@@ -1537,7 +1572,12 @@ impl<T: 'static> ArcShift<T> {
         // Note:
         // We do not run into the ABA-problem here, since both pointers that could collide
         // are distinct, valid pointers.
-        let ret = Self::update_shared_impl(self.item.as_ptr(), new_ptr as *mut ItemHolderDummy<T>, true, old_ptr);
+        let ret = Self::update_shared_impl(
+            self.item.as_ptr(),
+            new_ptr as *mut ItemHolderDummy<T>,
+            true,
+            old_ptr,
+        );
         if !ret {
             // SAFETY:
             // new_ptr hasn't been used, since update_shared_impl returned false.
@@ -1547,11 +1587,8 @@ impl<T: 'static> ArcShift<T> {
         self.reload();
         ret
     }
-
-
-
 }
-impl<T: 'static+?Sized> ArcShift<T> {
+impl<T: 'static + ?Sized> ArcShift<T> {
     fn simple_early_drop_opt(cand: *const ItemHolderDummy<T>) -> Option<bool> {
         verify_item(cand);
         let count = get_refcount(cand).load(Ordering::SeqCst);
@@ -1611,11 +1648,15 @@ impl<T: 'static+?Sized> ArcShift<T> {
                             // payload for.
                             let payload_item_mut = unsafe {
                                 if is_sized::<T>() {
-                                    let full_ptr = get_full_ptr_raw::<T,NoMeta>(cand);
-                                    &mut *addr_of_mut!((*(full_ptr as *mut ItemHolder<T,NoMeta>)).payload)
+                                    let full_ptr = get_full_ptr_raw::<T, NoMeta>(cand);
+                                    &mut *addr_of_mut!(
+                                        (*(full_ptr as *mut ItemHolder<T, NoMeta>)).payload
+                                    )
                                 } else {
-                                    let full_ptr = get_full_ptr_raw::<T,Metadata<T>>(cand);
-                                    &mut *addr_of_mut!((*(full_ptr as *mut ItemHolder<T,Metadata<T>>)).payload)
+                                    let full_ptr = get_full_ptr_raw::<T, Metadata<T>>(cand);
+                                    &mut *addr_of_mut!(
+                                        (*(full_ptr as *mut ItemHolder<T, Metadata<T>>)).payload
+                                    )
                                 }
                             };
                             // SAFETY:
@@ -1699,7 +1740,11 @@ impl<T: 'static+?Sized> ArcShift<T> {
     #[inline(never)]
     pub fn reload(&mut self) {
         verify_item(self.item.as_ptr());
-        debug_println!("reload {:?} (next = {:?})", self.item, get_next_and_state(self.item.as_ptr()));
+        debug_println!(
+            "reload {:?} (next = {:?})",
+            self.item,
+            get_next_and_state(self.item.as_ptr())
+        );
 
         let mut new_self = get_ptr(self.item);
         verify_item(new_self);
@@ -1896,7 +1941,7 @@ impl<T: 'static+?Sized> ArcShift<T> {
         // SAFETY:
         // new_self cannot be null, since it is either self.item (not null), or
         // has been assigned by code which first checked for null.
-        self.item = unsafe{ NonNull::new_unchecked(new_self as *mut _) };
+        self.item = unsafe { NonNull::new_unchecked(new_self as *mut _) };
     }
     /// The returned pointer is never null. Even for zero-sized T.
     fn from_box_impl(input: Box<T>) -> *const ItemHolderDummy<T> {
@@ -1913,7 +1958,7 @@ impl<T: 'static+?Sized> ArcShift<T> {
         ArcShift {
             // SAFETY:
             // from_box_impl never creates a null-pointer from a Box.
-            item: unsafe { NonNull::new_unchecked(Self::from_box_impl(input) as *mut _) }
+            item: unsafe { NonNull::new_unchecked(Self::from_box_impl(input) as *mut _) },
         }
     }
 
@@ -1938,7 +1983,6 @@ impl<T: 'static+?Sized> ArcShift<T> {
         next_self_item
     }
 
-
     /// Like 'get', but only requires a &self, not &mut self.
     ///
     /// WARNING!
@@ -1955,34 +1999,33 @@ impl<T: 'static+?Sized> ArcShift<T> {
         debug_println!("Getting {:?}", self.item);
         // SAFETY:
         // `self.item` is always a valid pointer
-        let cand =
-            get_next_and_state(self.item.as_ptr()).load(atomic::Ordering::Relaxed);
+        let cand = get_next_and_state(self.item.as_ptr()).load(atomic::Ordering::Relaxed);
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             if is_sized::<T>() {
                 // SAFETY:
                 // the pointer returned by shared_get_impl is always valid.
-                return &unsafe { &*get_full_ptr_raw::<T,NoMeta>(self.shared_get_impl()) }.payload;
+                return &unsafe { &*get_full_ptr_raw::<T, NoMeta>(self.shared_get_impl()) }.payload;
             } else {
                 // SAFETY:
                 // the pointer returned by shared_get_impl is always valid.
-                return &unsafe { &*get_full_ptr_raw::<T,Metadata<T>>(self.shared_get_impl()) }.payload;
+                return &unsafe { &*get_full_ptr_raw::<T, Metadata<T>>(self.shared_get_impl()) }
+                    .payload;
             }
         }
         debug_println!("Returned payload for {:?}", self.item);
         if is_sized::<T>() {
             // SAFETY:
             // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T,NoMeta>(self.item) }.payload
+            &unsafe { &*get_full_ptr::<T, NoMeta>(self.item) }.payload
         } else {
             // SAFETY:
             // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T,Metadata<T>>(self.item) }.payload
+            &unsafe { &*get_full_ptr::<T, Metadata<T>>(self.item) }.payload
         }
     }
 }
-impl<T: 'static+Sized> ArcShift<T> {
-
+impl<T: 'static + Sized> ArcShift<T> {
     /// Create a new ArcShift instance, containing the given value.
     pub fn new(payload: T) -> ArcShift<T> {
         let item = ItemHolder {
@@ -2003,8 +2046,6 @@ impl<T: 'static+Sized> ArcShift<T> {
         }
     }
 
-
-
     /// Try to obtain a mutable reference to the value.
     /// This only succeeds if this instance of ArcShift is the only instance
     /// of the smart pointer.
@@ -2018,24 +2059,24 @@ impl<T: 'static+Sized> ArcShift<T> {
         self.reload();
 
         if get_refcount(self.item.as_ptr()).load(Ordering::SeqCst) == MAX_ROOTS {
-            if !undecorate(get_next_and_state(self.item.as_ptr()).load(Ordering::SeqCst)).is_null() {
+            if !undecorate(get_next_and_state(self.item.as_ptr()).load(Ordering::SeqCst)).is_null()
+            {
                 return None;
             }
             // SAFETY:
             // We always have refcount for self.item, and it is guaranteed valid
             if is_sized::<T>() {
-                let full_ptr = get_full_ptr::<T, NoMeta>(self.item) as *mut ItemHolder<T,NoMeta>;
+                let full_ptr = get_full_ptr::<T, NoMeta>(self.item) as *mut ItemHolder<T, NoMeta>;
                 Some(unsafe { &mut (*(full_ptr)).payload })
             } else {
-                let full_ptr = get_full_ptr::<T, Metadata<T>>(self.item) as *mut ItemHolder<T, Metadata<T>>;
+                let full_ptr =
+                    get_full_ptr::<T, Metadata<T>>(self.item) as *mut ItemHolder<T, Metadata<T>>;
                 Some(unsafe { &mut (*(full_ptr)).payload })
             }
         } else {
             None
         }
     }
-
-
 
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -2059,7 +2100,12 @@ impl<T: 'static+Sized> ArcShift<T> {
             refcount: atomic::AtomicUsize::new(MAX_ROOTS),
         };
         let new_ptr = Box::into_raw(Box::new(item));
-        Self::update_shared_impl(self.item.as_ptr(), new_ptr as *mut ItemHolderDummy<T>, true, null());
+        Self::update_shared_impl(
+            self.item.as_ptr(),
+            new_ptr as *mut ItemHolderDummy<T>,
+            true,
+            null(),
+        );
     }
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -2080,9 +2126,12 @@ impl<T: 'static+Sized> ArcShift<T> {
         Self::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true, null());
     }
 
-
-
-    fn update_shared_impl(self_item: *const ItemHolderDummy<T>, new_ptr: *mut ItemHolderDummy<T>, make_tentative: bool, expect_next: *const ItemHolderDummy<T>) -> bool {
+    fn update_shared_impl(
+        self_item: *const ItemHolderDummy<T>,
+        new_ptr: *mut ItemHolderDummy<T>,
+        make_tentative: bool,
+        expect_next: *const ItemHolderDummy<T>,
+    ) -> bool {
         debug_println!("Upgrading {:?} -> {:?} ", self_item, new_ptr);
         verify_item(new_ptr);
         let mut candidate = self_item;
@@ -2097,17 +2146,25 @@ impl<T: 'static+Sized> ArcShift<T> {
             } else if undecorate(curnext).is_null() {
                 null_mut()
             } else {
-
                 loop {
                     let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
                         atomic::spin_loop();
                         continue;
                     };
                     if early_dropped {
-                        debug_println!("\n----------------------------------------------------------\n");
-                        let _dbg = get_refcount(undecorate(curnext)).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                        debug_println!("Early_drop_adjust3 for {:?}.{:?} {} -> {}", candidate, curnext, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
-                        assert!(_dbg > MAX_ROOTS-1);
+                        debug_println!(
+                            "\n----------------------------------------------------------\n"
+                        );
+                        let _dbg = get_refcount(undecorate(curnext))
+                            .fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                        debug_println!(
+                            "Early_drop_adjust3 for {:?}.{:?} {} -> {}",
+                            candidate,
+                            curnext,
+                            _dbg,
+                            _dbg.wrapping_sub(MAX_ROOTS - 1)
+                        );
+                        assert!(_dbg > MAX_ROOTS - 1);
                     }
                     break;
                 }
@@ -2170,9 +2227,16 @@ impl<T: 'static+Sized> ArcShift<T> {
                             };
                             if early_dropped {
                                 debug_println!("\n----------------------------------------------------------\n");
-                                let _dbg = get_refcount(new_ptr).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                                debug_println!("Early_drop_adjust for {:?}.{:?} {} -> {}", candidate, new_ptr, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
-                                assert!(_dbg > MAX_ROOTS-1);
+                                let _dbg = get_refcount(new_ptr)
+                                    .fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                                debug_println!(
+                                    "Early_drop_adjust for {:?}.{:?} {} -> {}",
+                                    candidate,
+                                    new_ptr,
+                                    _dbg,
+                                    _dbg.wrapping_sub(MAX_ROOTS - 1)
+                                );
+                                assert!(_dbg > MAX_ROOTS - 1);
                             }
                             break;
                         }
@@ -2184,7 +2248,6 @@ impl<T: 'static+Sized> ArcShift<T> {
                     verify_item(candidate);
                     verify_item(new_ptr);
                     if !is_superseded_by_tentative(get_state(other)) {
-
                         loop {
                             let Some(early_dropped) = Self::simple_early_drop_opt(candidate) else {
                                 atomic::spin_loop();
@@ -2192,9 +2255,16 @@ impl<T: 'static+Sized> ArcShift<T> {
                             };
                             if early_dropped {
                                 debug_println!("\n----------------------------------------------------------\n");
-                                let _dbg = get_refcount(undecorate(other)).fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
-                                debug_println!("Early_drop_adjust2 for {:?}.{:?} {} -> {}", candidate, other, _dbg, _dbg.wrapping_sub(MAX_ROOTS-1));
-                                assert!(_dbg > MAX_ROOTS-1);
+                                let _dbg = get_refcount(undecorate(other))
+                                    .fetch_sub(MAX_ROOTS - 1, Ordering::SeqCst);
+                                debug_println!(
+                                    "Early_drop_adjust2 for {:?}.{:?} {} -> {}",
+                                    candidate,
+                                    other,
+                                    _dbg,
+                                    _dbg.wrapping_sub(MAX_ROOTS - 1)
+                                );
+                                assert!(_dbg > MAX_ROOTS - 1);
                             }
                             break;
                         }
@@ -2258,12 +2328,15 @@ impl<T: 'static+Sized> ArcShift<T> {
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
     /// before this function returns.
-    pub fn rcu<F>(&mut self, f: F) -> bool where F: FnOnce(&T) -> T {
+    pub fn rcu<F>(&mut self, f: F) -> bool
+    where
+        F: FnOnce(&T) -> T,
+    {
         let old_ptr;
-        let result:ItemHolder<T,NoMeta>;
+        let result: ItemHolder<T, NoMeta>;
         {
             old_ptr = self.shared_get_impl();
-            let old_full_ptr = get_full_ptr_raw::<T,NoMeta>(old_ptr);
+            let old_full_ptr = get_full_ptr_raw::<T, NoMeta>(old_ptr);
             result = ItemHolder {
                 the_size: NoMeta,
                 #[cfg(feature = "validate")]
@@ -2272,7 +2345,7 @@ impl<T: 'static+Sized> ArcShift<T> {
                 magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
                 // SAFETY:
                 // old_ptr is a valid ptr
-                payload: f(&unsafe{&*old_full_ptr}.payload),
+                payload: f(&unsafe { &*old_full_ptr }.payload),
                 next_and_state: atomic::AtomicPtr::default(),
                 refcount: atomic::AtomicUsize::new(MAX_ROOTS),
             };
@@ -2282,7 +2355,12 @@ impl<T: 'static+Sized> ArcShift<T> {
         // Note:
         // We do not run into the ABA-problem here, since both pointers that could collide
         // are distinct, valid pointers.
-        let ret = Self::update_shared_impl(self.item.as_ptr(), new_ptr as *mut ItemHolderDummy<T>, true, old_ptr);
+        let ret = Self::update_shared_impl(
+            self.item.as_ptr(),
+            new_ptr as *mut ItemHolderDummy<T>,
+            true,
+            old_ptr,
+        );
         if !ret {
             // SAFETY:
             // new_ptr hasn't been used, since update_shared_impl returned false.
@@ -2319,11 +2397,6 @@ impl<T: 'static+Sized> ArcShift<T> {
         self.reload();
     }
 
-
-
-
-
-
     /// Return the value pointed to.
     ///
     /// This method is very fast, basically the speed of a regular reference, unless
@@ -2336,8 +2409,7 @@ impl<T: 'static+Sized> ArcShift<T> {
     #[inline]
     pub fn get(&mut self) -> &T {
         debug_println!("Getting {:?}", self.item);
-        let cand =
-            get_next_and_state(self.item.as_ptr()).load(atomic::Ordering::Relaxed);
+        let cand = get_next_and_state(self.item.as_ptr()).load(atomic::Ordering::Relaxed);
         if !cand.is_null() {
             debug_println!("Update to {:?} detected", cand);
             self.reload();
@@ -2346,11 +2418,11 @@ impl<T: 'static+Sized> ArcShift<T> {
         if is_sized::<T>() {
             // SAFETY:
             // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T,NoMeta>(self.item) }.payload
+            &unsafe { &*get_full_ptr::<T, NoMeta>(self.item) }.payload
         } else {
             // SAFETY:
             // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T,Metadata<T>>(self.item) }.payload
+            &unsafe { &*get_full_ptr::<T, Metadata<T>>(self.item) }.payload
         }
     }
 
@@ -2397,7 +2469,9 @@ impl<T: 'static+Sized> ArcShift<T> {
         // SAFETY:
         // curitem cannot be null. It is either equal to self.item, which is not null,
         // or has been assigned from next after first checking for null.
-        ArcShiftLight { item: unsafe { NonNull::new_unchecked(curitem as *mut _) } }
+        ArcShiftLight {
+            item: unsafe { NonNull::new_unchecked(curitem as *mut _) },
+        }
     }
 
     /// This is like 'get', but never reloads the pointer.
@@ -2414,11 +2488,11 @@ impl<T: 'static+Sized> ArcShift<T> {
         if is_sized::<T>() {
             // SAFETY:
             // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T,NoMeta>(self.item) }.payload
+            &unsafe { &*get_full_ptr::<T, NoMeta>(self.item) }.payload
         } else {
             // SAFETY:
             // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T,Metadata<T>>(self.item) }.payload
+            &unsafe { &*get_full_ptr::<T, Metadata<T>>(self.item) }.payload
         }
     }
 }
@@ -2426,7 +2500,7 @@ impl<T: 'static+Sized> ArcShift<T> {
 /// SAFETY:
 /// The 'ptr' must be a valid pointer to an ItemHolder heap item that
 /// is okay to drop.
-fn drop_payload_and_holder<T: 'static+?Sized>(ptr2: *const ItemHolderDummy<T>) -> bool {
+fn drop_payload_and_holder<T: 'static + ?Sized>(ptr2: *const ItemHolderDummy<T>) -> bool {
     verify_item(ptr2);
 
     /*let fullptr = if is_sized::<T>() {
@@ -2436,18 +2510,21 @@ fn drop_payload_and_holder<T: 'static+?Sized>(ptr2: *const ItemHolderDummy<T>) -
     };*/
 
     if is_dropped(get_state(get_next_and_state(ptr2).load(Ordering::SeqCst))) {
-        debug_println!("Dropping holder {:?}, but payload was already dropped", ptr2);
+        debug_println!(
+            "Dropping holder {:?}, but payload was already dropped",
+            ptr2
+        );
         // SAFETY:
         // `ptr` is always a valid pointer.
         // At this position we've established that we can drop the pointee's box memory, but the
         // pointee value has already been dropped.
         //compile_error!("This won't work, because for unsized we have effectively allocated a SizedItemHolder")
         if is_sized::<T>() {
-            let fullptr = get_full_ptr_raw::<T,NoMeta>(ptr2);
-            _ = unsafe { Box::from_raw(fullptr as *mut ManuallyDrop<ItemHolder<T,NoMeta>>) };
+            let fullptr = get_full_ptr_raw::<T, NoMeta>(ptr2);
+            _ = unsafe { Box::from_raw(fullptr as *mut ManuallyDrop<ItemHolder<T, NoMeta>>) };
         } else {
-            let fullptr = get_full_ptr_raw::<T,Metadata<T>>(ptr2);
-            let layout = get_holder_layout::<T,Metadata<T>>(&unsafe{&*fullptr}.payload);
+            let fullptr = get_full_ptr_raw::<T, Metadata<T>>(ptr2);
+            let layout = get_holder_layout::<T, Metadata<T>>(&unsafe { &*fullptr }.payload);
             unsafe { std::alloc::dealloc(fullptr as *mut _, layout) }
         }
         false
@@ -2457,13 +2534,16 @@ fn drop_payload_and_holder<T: 'static+?Sized>(ptr2: *const ItemHolderDummy<T>) -
         // `ptr` is always a valid pointer.
         // At this position we've established that we can drop the pointee.
         if is_sized::<T>() {
-            let fullptr = get_full_ptr_raw::<T,NoMeta>(ptr2);
-            _ = unsafe { Box::from_raw(fullptr as *mut ItemHolder<T,NoMeta>) };
+            let fullptr = get_full_ptr_raw::<T, NoMeta>(ptr2);
+            _ = unsafe { Box::from_raw(fullptr as *mut ItemHolder<T, NoMeta>) };
         } else {
-            let fullptr = get_full_ptr_raw::<T,Metadata<T>>(ptr2) as *mut ItemHolder<T,Metadata<T>>;
-            let layout = get_holder_layout::<T,Metadata<T>>(&unsafe{&*fullptr}.payload);
-            let payload_ptr = addr_of_mut!(unsafe{&mut *fullptr}.payload);
-            unsafe { drop_in_place(payload_ptr); }
+            let fullptr =
+                get_full_ptr_raw::<T, Metadata<T>>(ptr2) as *mut ItemHolder<T, Metadata<T>>;
+            let layout = get_holder_layout::<T, Metadata<T>>(&unsafe { &*fullptr }.payload);
+            let payload_ptr = addr_of_mut!(unsafe { &mut *fullptr }.payload);
+            unsafe {
+                drop_in_place(payload_ptr);
+            }
             unsafe { std::alloc::dealloc(fullptr as *mut _, layout) }
         }
         true
@@ -2472,7 +2552,7 @@ fn drop_payload_and_holder<T: 'static+?Sized>(ptr2: *const ItemHolderDummy<T>) -
 
 /// SAFETY:
 /// 'old_ptr' must be a valid ItemHolder-pointer.
-fn drop_root_item<T:?Sized>(old_ptr: *const ItemHolderDummy<T>, strength: usize) {
+fn drop_root_item<T: ?Sized>(old_ptr: *const ItemHolderDummy<T>, strength: usize) {
     debug_println!(
         "drop_root_item about to reduce count {:?} by {}",
         old_ptr,
@@ -2507,11 +2587,10 @@ fn drop_root_item<T:?Sized>(old_ptr: *const ItemHolderDummy<T>, strength: usize)
         debug_println!("drop_root_item, calling drop_payload {:?}", old_ptr);
     }
 }
-fn drop_item<T:?Sized>(old_ptr: *const ItemHolderDummy<T>) {
+fn drop_item<T: ?Sized>(old_ptr: *const ItemHolderDummy<T>) {
     verify_item(old_ptr);
     ArcShift::drop_impl(old_ptr);
 }
 
 #[cfg(test)]
 pub mod tests;
-

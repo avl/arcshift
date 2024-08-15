@@ -1,14 +1,14 @@
 //! Fuzz-test cases with focus on sending instances between threads
 
-use std::collections::HashSet;
-use super::{atomic, InstanceSpy2, model};
-use crate::tests::leak_detection::{SpyOwner2};
-use crate::{ArcShift, ArcShiftLight, get_refcount, MAX_ROOTS};
-use std::fmt::Debug;
-use std::hash::Hash;
+use super::{atomic, model, InstanceSpy2};
+use crate::tests::leak_detection::SpyOwner2;
+use crate::{get_refcount, ArcShift, ArcShiftLight, MAX_ROOTS};
 use crossbeam_channel::bounded;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::hash::Hash;
 
 enum PipeItem<T: 'static> {
     Shift(ArcShift<T>),
@@ -22,8 +22,9 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     let cmds = make_commands::<T>(rng, &mut constructor);
     let mut all_possible: HashSet<T> = HashSet::new();
     for cmd in cmds.iter() {
-        if let FuzzerCommand::CreateUpdateArc(_, val) | FuzzerCommand::CreateArcLight(_, val) | FuzzerCommand::CreateUpdateArcLight(_, val) =
-            cmd
+        if let FuzzerCommand::CreateUpdateArc(_, val)
+        | FuzzerCommand::CreateArcLight(_, val)
+        | FuzzerCommand::CreateUpdateArcLight(_, val) = cmd
         {
             all_possible.insert(val.clone());
         }
@@ -52,8 +53,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     let start_arc_light = ArcShiftLight::new(initial);
     for (threadnr, (cmds, receiver)) in batches.into_iter().zip(receivers).enumerate() {
         let thread_senders = std::sync::Arc::clone(&senders);
-        let thread_all_possible: std::sync::Arc<HashSet<T>> =
-            std::sync::Arc::clone(&all_possible);
+        let thread_all_possible: std::sync::Arc<HashSet<T>> = std::sync::Arc::clone(&all_possible);
         let start_arc0 = start_arc_light.upgrade();
         let start_arc_light = start_arc_light.clone();
         let jh = atomic::thread::Builder::new().name(format!("thread{}", threadnr)).spawn(move || {
@@ -180,9 +180,7 @@ impl<T> FuzzerCommand<T> {
 }
 
 #[test]
-#[cfg(
-    not(any(loom, miri, feature = "shuttle"))
-)] //Neither loom nor shuttle allows this many iterations
+#[cfg(not(any(loom, miri, feature = "shuttle")))] //Neither loom nor shuttle allows this many iterations
 #[should_panic(expected = "Max limit of ArcShiftLight clones (524288) was reached")]
 fn check_too_many_roots() {
     model(|| {
@@ -195,9 +193,7 @@ fn check_too_many_roots() {
     });
 }
 #[test]
-#[cfg(
-    not(miri)
-)] // We shouldn't run miri on this, since this test uses unsafe code to leak memory.
+#[cfg(not(miri))] // We shouldn't run miri on this, since this test uses unsafe code to leak memory.
 #[should_panic(expected = "Max limit of ArcShiftLight clones (524288) was reached")]
 fn check_too_many_roots2() {
     model(|| {
@@ -291,9 +287,9 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
     let mut ret = Vec::new();
 
     #[cfg(not(loom))]
-    const COUNT:usize = 50;
+    const COUNT: usize = 50;
     #[cfg(loom)]
-    const COUNT:usize = 10;
+    const COUNT: usize = 10;
 
     for _x in 0..50 {
         match rng.gen_range(0..12) {
@@ -366,7 +362,7 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 }
 
 #[test]
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_all() {
     #[cfg(miri)]
     const COUNT: u64 = 30;
@@ -396,7 +392,7 @@ fn generic_thread_fuzzing_all() {
     }
 }
 #[test]
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_21() {
     {
         let i = 21;
@@ -416,7 +412,7 @@ fn generic_thread_fuzzing_21() {
     }
 }
 #[test]
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_8() {
     {
         let i = 8;
@@ -436,9 +432,7 @@ fn generic_thread_fuzzing_8() {
     }
 }
 #[test]
-#[cfg(
-    all(not(loom), not(feature = "shuttle"))
-)] //No point in running loom on this test, it's not multi-threaded
+#[cfg(all(not(loom), not(feature = "shuttle")))] //No point in running loom on this test, it's not multi-threaded
 fn generic_fuzzing_all() {
     #[cfg(miri)]
     const COUNT: u64 = 100;

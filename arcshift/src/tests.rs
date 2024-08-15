@@ -3,6 +3,9 @@
 #![allow(unused_imports)]
 use super::*;
 use crossbeam_channel::bounded;
+use leak_detection::{InstanceSpy, InstanceSpy2, SpyOwner2};
+use rand::prelude::StdRng;
+use rand::{Rng, SeedableRng};
 use std::alloc::Layout;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -12,15 +15,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use leak_detection::{InstanceSpy2, SpyOwner2, InstanceSpy};
-use rand::prelude::StdRng;
-use rand::{Rng, SeedableRng};
 
-
+mod custom_fuzz;
 mod leak_detection;
 mod race_detector;
-mod custom_fuzz;
-
 
 // All tests are wrapped by these 'model' calls.
 // This is needed to make the tests runnable from within the Shuttle and Loom frameworks.
@@ -42,11 +40,9 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
     loom::model(x)
 }
 
-
-
-#[cfg(all(feature="shuttle", coverage))]
+#[cfg(all(feature = "shuttle", coverage))]
 const SHUTTLE_ITERATIONS: usize = 50;
-#[cfg(all(feature="shuttle", not(coverage)))]
+#[cfg(all(feature = "shuttle", not(coverage)))]
 const SHUTTLE_ITERATIONS: usize = 500;
 
 #[cfg(feature = "shuttle")]
@@ -61,7 +57,6 @@ fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
         shuttle::check_random(x, SHUTTLE_ITERATIONS);
     }
 }
-
 
 // Here follows some simple basic tests
 
@@ -82,7 +77,7 @@ fn simple_box() {
 #[test]
 fn simple_unsized() {
     model(|| {
-        let biggish = vec![1u32,2u32].into_boxed_slice();
+        let biggish = vec![1u32, 2u32].into_boxed_slice();
         let mut _shift = ArcShift::from_box(biggish);
         println!("Drop");
         //assert_eq!(shift.get(), &vec![1,2]);
@@ -91,12 +86,12 @@ fn simple_unsized() {
 
 #[test]
 fn simple_cell() {
-    model(||{
+    model(|| {
         let owner = SpyOwner2::new();
         {
             let mut root = ArcShift::new(owner.create("root"));
             let cell = ArcShiftCell::from_arcshift(root.clone());
-            cell.get(|val|{
+            cell.get(|val| {
                 assert_eq!(val.str(), "root");
             });
             root.update(owner.create("new"));
@@ -106,14 +101,14 @@ fn simple_cell() {
             cell.reload();
             assert_eq!(owner.count(), 1);
 
-            cell.get(|val|{
+            cell.get(|val| {
                 assert_eq!(val.str(), "new");
             });
 
             root.update(owner.create("new2"));
             assert_eq!(owner.count(), 2);
 
-            cell.get(|val|{
+            cell.get(|val| {
                 assert_eq!(val.str(), "new2");
             });
 
@@ -150,7 +145,7 @@ fn simple_cell_recursion() {
 fn simple_rcu() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
-        assert!(shift.rcu(|x|x+1));
+        assert!(shift.rcu(|x| x + 1));
         assert_eq!(*shift.get(), 43u32);
     })
 }
@@ -158,9 +153,9 @@ fn simple_rcu() {
 fn simple_rcu_maybe() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
-        assert!(shift.rcu_maybe(|x|Some(x+1)));
+        assert!(shift.rcu_maybe(|x| Some(x + 1)));
         assert_eq!(*shift.get(), 43u32);
-        assert_eq!(shift.rcu_maybe(|_x|None), false);
+        assert_eq!(shift.rcu_maybe(|_x| None), false);
         assert_eq!(*shift.get(), 43u32);
     })
 }
@@ -224,7 +219,6 @@ fn simple_try_into() {
     })
 }
 
-
 #[test]
 fn simple_clone_light() {
     model(|| {
@@ -252,7 +246,7 @@ fn simple_update_box_light() {
 #[test]
 // There's no point in running this test under shuttle/loom,
 // and since it can take some time, let's just disable it.
-#[cfg(not(any(loom, feature="shuttle")))]
+#[cfg(not(any(loom, feature = "shuttle")))]
 fn simple_large() {
     model(|| {
         #[cfg(not(miri))]
@@ -352,8 +346,6 @@ fn simple_update5() {
         assert_eq!(*shift.get(), 45u32);
     });
 }
-
-
 
 #[test]
 fn simple_upgrade3a1() {
@@ -623,7 +615,6 @@ fn simple_threading2c() {
     });
 }
 
-
 #[test]
 fn simple_threading3a() {
     model(|| {
@@ -799,8 +790,8 @@ fn simple_threading2_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                while !shift1.rcu(|old|*old + 1) {};
-                while !shift1.rcu(|old|*old + 1) {};
+                while !shift1.rcu(|old| *old + 1) {}
+                while !shift1.rcu(|old| *old + 1) {}
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -810,8 +801,8 @@ fn simple_threading2_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                while !shift2.rcu(|old|*old + 1) {};
-                while !shift2.rcu(|old|*old + 1) {};
+                while !shift2.rcu(|old| *old + 1) {}
+                while !shift2.rcu(|old| *old + 1) {}
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -821,7 +812,7 @@ fn simple_threading2_rcu() {
         assert_eq!(*shift0.get(), 4);
     });
 }
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading3_rcu() {
     model(|| {
@@ -835,8 +826,8 @@ fn simple_threading3_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                while !shift1.rcu(|old|*old + 1) {};
-                while !shift1.rcu(|old|*old + 1) {};
+                while !shift1.rcu(|old| *old + 1) {}
+                while !shift1.rcu(|old| *old + 1) {}
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -846,8 +837,8 @@ fn simple_threading3_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                while !shift2.rcu(|old|*old + 1) {};
-                while !shift2.rcu(|old|*old + 1) {};
+                while !shift2.rcu(|old| *old + 1) {}
+                while !shift2.rcu(|old| *old + 1) {}
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -857,8 +848,8 @@ fn simple_threading3_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                while !shift3.rcu(|old|*old + 1) {};
-                while !shift3.rcu(|old|*old + 1) {};
+                while !shift3.rcu(|old| *old + 1) {}
+                while !shift3.rcu(|old| *old + 1) {}
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
@@ -868,7 +859,7 @@ fn simple_threading3_rcu() {
         assert_eq!(*shift0.get(), 6);
     });
 }
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4a() {
     model(|| {
@@ -925,7 +916,7 @@ fn simple_threading4a() {
     });
 }
 
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4b() {
     model(|| {
@@ -985,7 +976,7 @@ fn simple_threading4b() {
     });
 }
 
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4c() {
     model(|| {
@@ -1058,7 +1049,7 @@ fn simple_threading4c() {
         count.validate();
     });
 }
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4d() {
     model(|| {
@@ -1123,7 +1114,7 @@ fn simple_threading4d() {
         drop(count);
     });
 }
-#[cfg(not(feature="disable_slow_tests"))]
+#[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4e() {
     model(|| {
@@ -1177,4 +1168,3 @@ fn simple_threading4e() {
         _ = t4.join().unwrap();
     });
 }
-

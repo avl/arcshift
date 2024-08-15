@@ -51,7 +51,6 @@ impl SpyOwner2 {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct InstanceSpy2 {
     x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
@@ -75,10 +74,7 @@ impl InstanceSpy2 {
     pub(crate) fn str(&self) -> &'static str {
         self.name
     }
-    fn new(
-        x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
-        name: &'static str,
-    ) -> InstanceSpy2 {
+    fn new(x: std::sync::Arc<Mutex<HashSet<&'static str>>>, name: &'static str) -> InstanceSpy2 {
         let mut guard = x.lock().unwrap();
         guard.insert(name);
         debug_println!("++ InstanceSpy ++ {:?} (added: {})", &*guard, name);
