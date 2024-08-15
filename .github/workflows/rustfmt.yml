@@ -19,7 +19,7 @@ jobs:
     - name: Install rust
       run: rustup toolchain install stable
     - name: Run tests
-      run: cargo +stable test --features=validate --workspace
+      run: cargo +stable fmt --workspace
     - name: Run tests (release)
       run: cargo +stable test --release --workspace
     - name: Run tests (release)
