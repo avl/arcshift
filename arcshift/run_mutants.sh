@@ -1,1 +1,1 @@
-cargo mutants --features=validate,shuttle -- --release
+cargo mutants --features=validate,shuttle -- --release  $@

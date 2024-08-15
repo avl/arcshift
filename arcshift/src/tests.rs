@@ -84,8 +84,66 @@ fn simple_unsized() {
     model(|| {
         let biggish = vec![1u32,2u32].into_boxed_slice();
         let mut _shift = ArcShift::from_box(biggish);
+        println!("Drop");
         //assert_eq!(shift.get(), &vec![1,2]);
     })
+}
+
+#[test]
+fn simple_cell() {
+    model(||{
+        let owner = SpyOwner2::new();
+        {
+            let mut root = ArcShift::new(owner.create("root"));
+            let cell = ArcShiftCell::from_arcshift(root.clone());
+            cell.get(|val|{
+                assert_eq!(val.str(), "root");
+            });
+            root.update(owner.create("new"));
+
+            assert_eq!(owner.count(), 2);
+
+            cell.reload();
+            assert_eq!(owner.count(), 1);
+
+            cell.get(|val|{
+                assert_eq!(val.str(), "new");
+            });
+
+            root.update(owner.create("new2"));
+            assert_eq!(owner.count(), 2);
+
+            cell.get(|val|{
+                assert_eq!(val.str(), "new2");
+            });
+
+            assert_eq!(owner.count(), 1);
+        }
+        owner.validate();
+    });
+}
+#[test]
+fn simple_cell_recursion() {
+    model(|| {
+        let owner = SpyOwner2::new();
+        {
+            let mut root = ArcShift::new(owner.create("root"));
+            let cell = ArcShiftCell::from_arcshift(root.clone());
+            cell.get(|val| {
+                assert_eq!(val.str(), "root");
+                cell.get(|val| {
+                    assert_eq!(val.str(), "root");
+                    root.update(owner.create("B"));
+                    cell.get(|val| {
+                        assert_eq!(val.str(), "B");
+                    });
+                    assert_eq!(val.str(), "root");
+                });
+                assert_eq!(val.str(), "root");
+            });
+        }
+        owner.validate();
+    });
 }
 
 #[test]

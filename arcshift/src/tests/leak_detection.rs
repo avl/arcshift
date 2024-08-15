@@ -45,6 +45,10 @@ impl SpyOwner2 {
             panic!("Leaked: {:?}", &*guard);
         }
     }
+    pub(crate) fn count(&self) -> usize {
+        let guard = self.data.lock().unwrap();
+        guard.len()
+    }
 }
 
 
@@ -68,7 +72,7 @@ impl PartialEq<Self> for InstanceSpy2 {
 impl Eq for InstanceSpy2 {}
 
 impl InstanceSpy2 {
-    fn str(&self) -> &'static str {
+    pub(crate) fn str(&self) -> &'static str {
         self.name
     }
     fn new(
