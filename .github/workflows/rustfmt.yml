@@ -1,0 +1,26 @@
+name: Rustfmt
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install rust
+      run: rustup toolchain install stable
+    - name: Run tests
+      run: cargo +stable test --features=validate --workspace
+    - name: Run tests (release)
+      run: cargo +stable test --release --workspace
+    - name: Run tests (release)
+      run: cargo +stable test --release --features=validate --workspace
