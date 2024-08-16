@@ -80,7 +80,7 @@ fn simple_unsized() {
         let biggish = vec![1u32, 2u32].into_boxed_slice();
         let mut shift = ArcShift::from_box(biggish);
         debug_println!("Drop");
-        assert_eq!(shift.get(), &vec![1,2]);
+        assert_eq!(shift.get(), &vec![1, 2]);
     })
 }
 

@@ -626,14 +626,13 @@ fn make_unsized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDum
 
         let metadata = Metadata::new(cur_ptr);
         debug_println!("Layout: {:?}, meta: {:?}", layout, metadata);
-        // SAFETY:
-        // std::alloc::alloc requires the allocated layout to have a nonzero size. This
-        // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
-        // The returned memory is uninitialized, but we will initialize the required parts of it
-        // below.
-        item_holder_ptr = unsafe {
-            arc_from_raw_parts_mut(std::alloc::alloc(layout) as *mut _, metadata)
-        };
+        item_holder_ptr =
+            // SAFETY:
+            // std::alloc::alloc requires the allocated layout to have a nonzero size. This
+            // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
+            // The returned memory is uninitialized, but we will initialize the required parts of it
+            // below.
+            unsafe { arc_from_raw_parts_mut(std::alloc::alloc(layout) as *mut _, metadata) };
         debug_println!("Sized result ptr: {:?}", item_holder_ptr);
         // SAFETY:
         // result_ptr is a valid pointer
@@ -683,9 +682,13 @@ fn make_unsized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDum
     let _t: Box<ManuallyDrop<T>> = unsafe { Box::from_raw(cur_ptr as *mut ManuallyDrop<T>) }; //Free the memory, but don't drop 'input'
 
     let ret = item_holder_ptr as *const ItemHolderDummy<T>;
-    debug_println!("ret item holder dummy ptr: {:?}, next: {:?}", ret, unsafe {
-        (&*item_holder_ptr).next_and_state.load(Ordering::SeqCst)
-    });
+    debug_println!(
+        "ret item holder dummy ptr: {:?}, next: {:?}",
+        ret,
+        // SAFETY:
+        // 'item_holder_ptr' is a valid pointer.
+        unsafe { (*item_holder_ptr).next_and_state.load(Ordering::SeqCst) }
+    );
     debug_println!("Next : {:?}", get_next_and_state(ret));
     ret
 }
@@ -695,7 +698,6 @@ fn make_sized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDummy
     let cur_ptr = Box::into_raw(item);
 
     debug_println!("thesize: {:?}", cur_ptr);
-
 
     // SAFETY:
     // 'cur_ptr' is a valid pointer, it's just been created by Box::into_raw
@@ -709,7 +711,8 @@ fn make_sized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDummy
     // the compiler treats it like a fat pointer with a zero-size metadata, which is not
     // the exact same thing as a thin pointer (is my guess).
     // Using transmute_copy to trim off the metadata is sound.
-    let item_holder_ptr: *mut ItemHolder<T, NoMeta> = unsafe { std::mem::transmute_copy(&std::alloc::alloc(layout)) };
+    let item_holder_ptr: *mut ItemHolder<T, NoMeta> =
+        unsafe { std::mem::transmute_copy(&std::alloc::alloc(layout)) };
 
     // SAFETY:
     // The copy is safe because MaybeUninit<ItemHolder<T>> is guaranteed to have the same
@@ -752,9 +755,13 @@ fn make_sized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDummy
     let _t: Box<ManuallyDrop<T>> = unsafe { Box::from_raw(cur_ptr as *mut ManuallyDrop<T>) }; //Free the memory, but don't drop 'input'
 
     let ret = item_holder_ptr as *const ItemHolderDummy<T>;
-    debug_println!("ret item holder dummy ptr: {:?}, next: {:?}", ret, unsafe {
-        (&*item_holder_ptr).next_and_state.load(Ordering::SeqCst)
-    });
+    debug_println!(
+        "ret item holder dummy ptr: {:?}, next: {:?}",
+        ret,
+        // SAFETY:
+        // item_holder_ptr is a valid pointer
+        unsafe { (*item_holder_ptr).next_and_state.load(Ordering::SeqCst) }
+    );
     debug_println!("Next : {:?}", get_next_and_state(ret));
     ret
 }
@@ -783,9 +790,13 @@ fn get_full_ptr_raw<T: ?Sized, M: IMetadata>(
         let ptr_data = dummy as *const _;
         debug_println!("Dummy data: {:?}", ptr_data);
         let metadata_ptr = dummy as *const Metadata<T>;
-        debug_println!("Unsized, meta: {:?}, val: {:?}", metadata_ptr, unsafe {
-            *metadata_ptr
-        });
+        debug_println!(
+            "Unsized, meta: {:?}, val: {:?}",
+            metadata_ptr,
+            // SAFETY:
+            // metadata_ptr is a valid pointer
+            unsafe { *metadata_ptr }
+        );
         // SAFETY:
         // metadata_ptr is a valid pointer
         let metadata = unsafe { *metadata_ptr };
@@ -1476,15 +1487,13 @@ fn get_next_and_state<'a, T: ?Sized>(
 fn get_refcount<'a, T: ?Sized>(ptr: *const ItemHolderDummy<T>) -> &'a atomic::AtomicUsize {
     if is_sized::<T>() {
         let offset = mem::offset_of!(ItemHolder<T,NoMeta>, refcount) as isize;
-        let retptr =
-            (ptr as *const u8).wrapping_offset(offset) as *const atomic::AtomicUsize;
+        let retptr = (ptr as *const u8).wrapping_offset(offset) as *const atomic::AtomicUsize;
         // SAFETY:
         // retptr is a valid pointer
         unsafe { &*retptr }
     } else {
         let offset = mem::offset_of!(ItemHolder<T,Metadata<T>>, refcount) as isize;
-        let retptr =
-            (ptr as *const u8).wrapping_offset(offset) as *const atomic::AtomicUsize;
+        let retptr = (ptr as *const u8).wrapping_offset(offset) as *const atomic::AtomicUsize;
         // SAFETY:
         // retptr is a valid pointer
         unsafe { &*retptr }
@@ -2510,7 +2519,6 @@ impl<T: 'static + Sized> ArcShift<T> {
         debug_println!("self.reload()");
         self.reload();
     }
-
 
     #[cfg_attr(test, mutants::skip)]
     fn verify_count(count: usize) {
