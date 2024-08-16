@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "nightly", feature(layout_for_ptr))]
 #![cfg_attr(feature = "nightly", feature(ptr_metadata))]
 #![deny(warnings)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
@@ -524,6 +523,7 @@ struct FatPtr<T: ?Sized> {
     meta: Metadata<T>,
 }
 
+#[inline]
 fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
     data_ptr: *mut u8,
     metadata: Metadata<T>,
@@ -543,6 +543,7 @@ fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
         std::ptr::from_raw_parts_mut(data_ptr, metadata.meta)
     }
 }
+#[inline]
 fn arc_from_raw_parts<T: ?Sized, M: IMetadata>(
     data_ptr: *const u8,
     metadata: Metadata<T>,
@@ -564,10 +565,12 @@ fn arc_from_raw_parts<T: ?Sized, M: IMetadata>(
 }
 
 impl<T: ?Sized> Metadata<T> {
+
+    #[inline]
     #[cfg(not(feature = "nightly"))]
     fn polyfill_metadata(cur_ptr: *const T) -> usize {
         if is_sized::<T>() {
-            0 //Not correct, but we're never using this function for sized data
+            unreachable!() //We're never using this function for sized data
         } else {
             let ptrptr = &cur_ptr as *const *const T as *const usize;
             // SAFETY:
@@ -578,6 +581,7 @@ impl<T: ?Sized> Metadata<T> {
         }
     }
 
+    #[inline]
     pub fn new(cur_ptr: *const T) -> Metadata<T> {
         Metadata {
             #[cfg(feature = "nightly")]
@@ -2119,34 +2123,6 @@ impl<T: 'static + ?Sized> ArcShift<T> {
             &unsafe { &*get_full_ptr::<T, Metadata<T>>(self.item) }.payload
         }
     }
-}
-
-enum RcuResult {
-    Update,
-    NoUpdate,
-    Race,
-}
-
-impl<T: 'static + Sized> ArcShift<T> {
-    /// Create a new ArcShift instance, containing the given value.
-    pub fn new(payload: T) -> ArcShift<T> {
-        let item = ItemHolder {
-            the_size: NoMeta,
-            #[cfg(feature = "validate")]
-            magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
-            #[cfg(feature = "validate")]
-            magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
-            payload,
-            next_and_state: atomic::AtomicPtr::default(),
-            refcount: atomic::AtomicUsize::new(MAX_ROOTS),
-        };
-        let cur_ptr = Box::into_raw(Box::new(item));
-        ArcShift { item:
-            // SAFETY:
-            // cur_ptr has just been created by Box::into_raw, and cannot be null
-            unsafe { NonNull::new_unchecked(cur_ptr as *mut ItemHolderDummy<T>) }
-        }
-    }
 
     /// Try to obtain a mutable reference to the value.
     /// This only succeeds if this instance of ArcShift is the only instance
@@ -2182,36 +2158,6 @@ impl<T: 'static + Sized> ArcShift<T> {
         } else {
             None
         }
-    }
-
-    /// Update the contents of this ArcShift, and all other instances cloned from this
-    /// instance. The next time such an instance of ArcShift is dereferenced, this
-    /// new value will be returned.
-    ///
-    /// This method never blocks, it will return quickly.
-    ///
-    /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
-    /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance is dropped or reloaded.
-    pub fn update_shared(&self, new_payload: T) {
-        let item = ItemHolder {
-            the_size: NoMeta,
-            #[cfg(feature = "validate")]
-            magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
-            #[cfg(feature = "validate")]
-            magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
-            payload: new_payload,
-            next_and_state: atomic::AtomicPtr::default(),
-            refcount: atomic::AtomicUsize::new(MAX_ROOTS),
-        };
-        let new_ptr = Box::into_raw(Box::new(item));
-        Self::update_shared_impl(
-            self.item.as_ptr(),
-            new_ptr as *mut ItemHolderDummy<T>,
-            true,
-            null(),
-        );
     }
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -2392,6 +2338,166 @@ impl<T: 'static + Sized> ArcShift<T> {
     ///
     /// This method never blocks, it will return quickly.
     ///
+    /// This function is useful for types T which are too large to fit on the stack.
+    /// The value T will be moved directly to the internal heap-structure, without
+    /// being even temporarily stored on the stack, even in debug builds.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance upgrades to the new value. This update happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this function returns.
+    pub fn update_box(&mut self, new_payload: Box<T>) {
+        self.update_shared_box(new_payload);
+        debug_println!("self.reload()");
+        self.reload();
+    }
+
+
+    #[cfg_attr(test, mutants::skip)]
+    fn verify_count(count: usize) {
+        if (count & (MAX_ROOTS - 1)) == MAX_ROOTS - 1 {
+            panic!("Maximum number of ArcShiftLight-instances has been reached.");
+        }
+    }
+
+    /// Create an instance of ArcShiftLight, pointing to the same value as 'self'.
+    ///
+    /// WARNING!
+    /// A maximum of 524287 ArcShiftLight-instances can be created for each value.
+    /// An attempt to create more instances than this will fail with a panic.
+    pub fn make_light(&self) -> ArcShiftLight<T> {
+        let mut curitem = self.item.as_ptr() as *const _;
+        loop {
+            let Some(next) = ArcShiftLight::load_nontentative_next(curitem) else {
+                atomic::spin_loop();
+                continue;
+            };
+
+            if !next.is_null() {
+                curitem = undecorate(next);
+                atomic::spin_loop();
+                continue;
+            }
+
+            let count = get_refcount(curitem).load(Ordering::SeqCst);
+
+            Self::verify_count(count);
+
+            if get_refcount(curitem)
+                .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                atomic::spin_loop();
+                continue;
+            }
+            debug_println!("{:?}, changed refcount {} -> {}", curitem, count, count + 1);
+            break;
+        }
+        // SAFETY:
+        // curitem cannot be null. It is either equal to self.item, which is not null,
+        // or has been assigned from next after first checking for null.
+        ArcShiftLight {
+            // SAFETY:
+            // curitem is not null here. The exit conditions in the loop above guarantee this.
+            item: unsafe { NonNull::new_unchecked(curitem as *mut _) },
+        }
+    }
+
+    /// This is like 'get', but never reloads the pointer.
+    /// This means that any new value supplied using one of the update methods will not be
+    /// available.
+    /// This method is ever so slightly faster than regular 'get'.
+    ///
+    /// WARNING!
+    /// You should probably not be using this method.
+    /// One use-case is if you can control locations where an update is possible, and arrange
+    /// for '&mut self' to be available so that `ArcShift::reload` can be called at those locations.
+    #[inline(always)]
+    pub fn shared_non_reloading_get(&self) -> &T {
+        if is_sized::<T>() {
+            // SAFETY:
+            // `self.item` is always a valid pointer
+            &unsafe { &*get_full_ptr::<T, NoMeta>(self.item) }.payload
+        } else {
+            // SAFETY:
+            // `self.item` is always a valid pointer
+            &unsafe { &*get_full_ptr::<T, Metadata<T>>(self.item) }.payload
+        }
+    }
+
+}
+
+enum RcuResult {
+    Update,
+    NoUpdate,
+    Race,
+}
+
+impl<T: 'static + Sized> ArcShift<T> {
+    /// Create a new ArcShift instance, containing the given value.
+    pub fn new(payload: T) -> ArcShift<T> {
+        let item = ItemHolder {
+            the_size: NoMeta,
+            #[cfg(feature = "validate")]
+            magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+            #[cfg(feature = "validate")]
+            magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+            payload,
+            next_and_state: atomic::AtomicPtr::default(),
+            refcount: atomic::AtomicUsize::new(MAX_ROOTS),
+        };
+        let cur_ptr = Box::into_raw(Box::new(item));
+        ArcShift { item:
+            // SAFETY:
+            // cur_ptr has just been created by Box::into_raw, and cannot be null
+            unsafe { NonNull::new_unchecked(cur_ptr as *mut ItemHolderDummy<T>) }
+        }
+    }
+
+
+    /// Update the contents of this ArcShift, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
+    /// WARNING!
+    /// Calling this function does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance is dropped or reloaded.
+    pub fn update_shared(&self, new_payload: T) {
+        let item = ItemHolder {
+            the_size: NoMeta,
+            #[cfg(feature = "validate")]
+            magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+            #[cfg(feature = "validate")]
+            magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+            payload: new_payload,
+            next_and_state: atomic::AtomicPtr::default(),
+            refcount: atomic::AtomicUsize::new(MAX_ROOTS),
+        };
+        let new_ptr = Box::into_raw(Box::new(item));
+        Self::update_shared_impl(
+            self.item.as_ptr(),
+            new_ptr as *mut ItemHolderDummy<T>,
+            true,
+            null(),
+        );
+    }
+
+
+    /// Update the contents of this ArcShift, and all other instances cloned from this
+    /// instance. The next time such an instance of ArcShift is dereferenced, this
+    /// new value will be returned.
+    ///
+    /// This method never blocks, it will return quickly.
+    ///
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
@@ -2494,103 +2600,7 @@ impl<T: 'static + Sized> ArcShift<T> {
             RcuResult::Update
         }
     }
-    /// Update the contents of this ArcShift, and all other instances cloned from this
-    /// instance. The next time such an instance of ArcShift is dereferenced, this
-    /// new value will be returned.
-    ///
-    /// This method never blocks, it will return quickly.
-    ///
-    /// This function is useful for types T which are too large to fit on the stack.
-    /// The value T will be moved directly to the internal heap-structure, without
-    /// being even temporarily stored on the stack, even in debug builds.
-    ///
-    /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
-    /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
-    /// when the last instance is dropped or reloaded.
-    ///
-    /// Note, this method, in contrast to 'upgrade_shared', actually does reload
-    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
-    /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
-    pub fn update_box(&mut self, new_payload: Box<T>) {
-        self.update_shared_box(new_payload);
-        debug_println!("self.reload()");
-        self.reload();
-    }
 
-    #[cfg_attr(test, mutants::skip)]
-    fn verify_count(count: usize) {
-        if (count & (MAX_ROOTS - 1)) == MAX_ROOTS - 1 {
-            panic!("Maximum number of ArcShiftLight-instances has been reached.");
-        }
-    }
-
-    /// Create an instance of ArcShiftLight, pointing to the same value as 'self'.
-    ///
-    /// WARNING!
-    /// A maximum of 524287 ArcShiftLight-instances can be created for each value.
-    /// An attempt to create more instances than this will fail with a panic.
-    pub fn make_light(&self) -> ArcShiftLight<T> {
-        let mut curitem = self.item.as_ptr() as *const _;
-        loop {
-            let Some(next) = ArcShiftLight::load_nontentative_next(curitem) else {
-                atomic::spin_loop();
-                continue;
-            };
-
-            if !next.is_null() {
-                curitem = undecorate(next);
-                atomic::spin_loop();
-                continue;
-            }
-
-            let count = get_refcount(curitem).load(Ordering::SeqCst);
-
-            Self::verify_count(count);
-
-            if get_refcount(curitem)
-                .compare_exchange(count, count + 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
-                atomic::spin_loop();
-                continue;
-            }
-            debug_println!("{:?}, changed refcount {} -> {}", curitem, count, count + 1);
-            break;
-        }
-        // SAFETY:
-        // curitem cannot be null. It is either equal to self.item, which is not null,
-        // or has been assigned from next after first checking for null.
-        ArcShiftLight {
-            // SAFETY:
-            // curitem is not null here. The exit conditions in the loop above guarantee this.
-            item: unsafe { NonNull::new_unchecked(curitem as *mut _) },
-        }
-    }
-
-    /// This is like 'get', but never reloads the pointer.
-    /// This means that any new value supplied using one of the update methods will not be
-    /// available.
-    /// This method is ever so slightly faster than regular 'get'.
-    ///
-    /// WARNING!
-    /// You should probably not be using this method.
-    /// One use-case is if you can control locations where an update is possible, and arrange
-    /// for '&mut self' to be available so that `ArcShift::reload` can be called at those locations.
-    #[inline(always)]
-    pub fn shared_non_reloading_get(&self) -> &T {
-        if is_sized::<T>() {
-            // SAFETY:
-            // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T, NoMeta>(self.item) }.payload
-        } else {
-            // SAFETY:
-            // `self.item` is always a valid pointer
-            &unsafe { &*get_full_ptr::<T, Metadata<T>>(self.item) }.payload
-        }
-    }
 }
 
 /// SAFETY:
