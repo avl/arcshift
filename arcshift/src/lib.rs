@@ -502,7 +502,7 @@ struct Metadata<T: ?Sized> {
     #[cfg(feature = "nightly")]
     meta: <T as std::ptr::Pointee>::Metadata,
     #[cfg(not(feature = "nightly"))]
-    meta: usize,
+    meta: *const (),
     phantom: PhantomData<T>,
 }
 impl<T: ?Sized> Clone for Metadata<T> {
@@ -518,6 +518,7 @@ impl<T: ?Sized> std::fmt::Debug for Metadata<T> {
 }
 
 #[allow(dead_code)]
+#[repr(C)]
 struct FatPtr<T: ?Sized> {
     ptr: *mut u8,
     meta: Metadata<T>,
@@ -567,11 +568,11 @@ fn arc_from_raw_parts<T: ?Sized, M: IMetadata>(
 impl<T: ?Sized> Metadata<T> {
     #[inline]
     #[cfg(not(feature = "nightly"))]
-    fn polyfill_metadata(cur_ptr: *const T) -> usize {
+    fn polyfill_metadata(cur_ptr: *const T) -> *const () {
         if is_sized::<T>() {
             unreachable!() //We're never using this function for sized data
         } else {
-            let ptrptr = &cur_ptr as *const *const T as *const usize;
+            let ptrptr = &cur_ptr as *const *const T as *const *const ();
             // SAFETY:
             // This is a trick to get at the 'metadata'-part of the fat-ptr 'cur_ptr'.
             // It works in practice, as long as the internal representation of fat pointers doesn't
@@ -1009,7 +1010,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
+    /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
     ///
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
@@ -1049,7 +1050,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
+    /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
     ///
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
@@ -1595,7 +1596,7 @@ impl<T: 'static> ArcShift<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
+    /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
     ///
     /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
@@ -1635,7 +1636,7 @@ impl<T: 'static> ArcShift<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
+    /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
     ///
     /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
@@ -2344,7 +2345,7 @@ impl<T: 'static + ?Sized> ArcShift<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
+    /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
     ///
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
@@ -2496,7 +2497,7 @@ impl<T: 'static + Sized> ArcShift<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
+    /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
     ///
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
@@ -2528,7 +2529,7 @@ impl<T: 'static + Sized> ArcShift<T> {
     /// WARNING!
     /// Calling this function does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
-    /// ArcShift instance upgrades to the new value. This update happens only
+    /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
     ///
     /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload

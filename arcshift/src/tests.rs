@@ -84,6 +84,36 @@ fn simple_unsized() {
     })
 }
 
+trait ExampleTrait {
+    fn call(&self) -> u32;
+}
+struct ExampleStruct {
+    x: u32,
+}
+impl ExampleTrait for ExampleStruct {
+    fn call(&self) -> u32 {
+        self.x
+    }
+}
+#[test]
+fn simple_unsized_closure() {
+    model(|| {
+        let boxed_trait : Box<dyn ExampleTrait> = Box::new(ExampleStruct{x: 42});
+        let mut shift = ArcShift::from_box(boxed_trait);
+        debug_println!("Drop");
+        assert_eq!(shift.get().call(), 42);
+    })
+}
+#[test]
+fn simple_unsized_str() {
+    model(|| {
+        let boxed_str: Box<str> = Box::new("hello".to_string()).into_boxed_str();
+        let mut shift = ArcShift::from_box(boxed_str);
+        debug_println!("Drop");
+        assert_eq!(shift.get(), "hello");
+    })
+}
+
 #[test]
 fn simple_cell() {
     model(|| {
@@ -183,6 +213,8 @@ fn simple_rcu_project3() {
     });
     debug_println!("Escaped: {:?}", escape);
 }
+
+
 #[test]
 fn simple_rcu_maybe() {
     model(|| {
