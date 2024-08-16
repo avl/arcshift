@@ -98,7 +98,7 @@ impl ExampleTrait for ExampleStruct {
 #[test]
 fn simple_unsized_closure() {
     model(|| {
-        let boxed_trait : Box<dyn ExampleTrait> = Box::new(ExampleStruct{x: 42});
+        let boxed_trait: Box<dyn ExampleTrait> = Box::new(ExampleStruct { x: 42 });
         let mut shift = ArcShift::from_box(boxed_trait);
         debug_println!("Drop");
         assert_eq!(shift.get().call(), 42);
@@ -213,7 +213,6 @@ fn simple_rcu_project3() {
     });
     debug_println!("Escaped: {:?}", escape);
 }
-
 
 #[test]
 fn simple_rcu_maybe() {
