@@ -565,7 +565,6 @@ fn arc_from_raw_parts<T: ?Sized, M: IMetadata>(
 }
 
 impl<T: ?Sized> Metadata<T> {
-
     #[inline]
     #[cfg(not(feature = "nightly"))]
     fn polyfill_metadata(cur_ptr: *const T) -> usize {
@@ -2358,7 +2357,6 @@ impl<T: 'static + ?Sized> ArcShift<T> {
         self.reload();
     }
 
-
     #[cfg_attr(test, mutants::skip)]
     fn verify_count(count: usize) {
         if (count & (MAX_ROOTS - 1)) == MAX_ROOTS - 1 {
@@ -2430,7 +2428,6 @@ impl<T: 'static + ?Sized> ArcShift<T> {
             &unsafe { &*get_full_ptr::<T, Metadata<T>>(self.item) }.payload
         }
     }
-
 }
 
 enum RcuResult {
@@ -2459,7 +2456,6 @@ impl<T: 'static + Sized> ArcShift<T> {
             unsafe { NonNull::new_unchecked(cur_ptr as *mut ItemHolderDummy<T>) }
         }
     }
-
 
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -2490,7 +2486,6 @@ impl<T: 'static + Sized> ArcShift<T> {
             null(),
         );
     }
-
 
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -2600,7 +2595,6 @@ impl<T: 'static + Sized> ArcShift<T> {
             RcuResult::Update
         }
     }
-
 }
 
 /// SAFETY:
