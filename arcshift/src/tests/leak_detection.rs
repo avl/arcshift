@@ -45,8 +45,11 @@ impl SpyOwner2 {
             panic!("Leaked: {:?}", &*guard);
         }
     }
+    pub(crate) fn count(&self) -> usize {
+        let guard = self.data.lock().unwrap();
+        guard.len()
+    }
 }
-
 
 #[derive(Debug, Clone)]
 pub(crate) struct InstanceSpy2 {
@@ -68,13 +71,10 @@ impl PartialEq<Self> for InstanceSpy2 {
 impl Eq for InstanceSpy2 {}
 
 impl InstanceSpy2 {
-    fn str(&self) -> &'static str {
+    pub(crate) fn str(&self) -> &'static str {
         self.name
     }
-    fn new(
-        x: std::sync::Arc<Mutex<HashSet<&'static str>>>,
-        name: &'static str,
-    ) -> InstanceSpy2 {
+    fn new(x: std::sync::Arc<Mutex<HashSet<&'static str>>>, name: &'static str) -> InstanceSpy2 {
         let mut guard = x.lock().unwrap();
         guard.insert(name);
         debug_println!("++ InstanceSpy ++ {:?} (added: {})", &*guard, name);

@@ -5,7 +5,8 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
-
+  schedule:
+    - cron: "37 7 * * 1,5"
 env:
   CARGO_TERM_COLOR: always
 
@@ -24,3 +25,7 @@ jobs:
       run: cargo +stable test --release --workspace
     - name: Run tests (release)
       run: cargo +stable test --release --features=validate --workspace
+    - name: Install nightly
+      run: rustup toolchain install nightly
+    - name: Run tests (release, nightly-only-features)
+      run: cargo +nightly test --release --features=validate,nightly --workspace

@@ -1,22 +1,22 @@
 //! Fuzzing-test cases which explicit focus on simultaneous operations in different threads
 
-use crate::{ArcShift, ArcShiftLight, atomic};
-use crate::tests::{InstanceSpy2, model, model2};
 use crate::tests::leak_detection::SpyOwner2;
+use crate::tests::{model, model2, InstanceSpy2};
+use crate::{atomic, ArcShift, ArcShiftLight};
 
 fn generic_3thread_ops_a<
     F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
     F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
     F3: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
 >(
     f1: F1,
     f2: F2,
@@ -72,18 +72,22 @@ fn generic_3thread_ops_a<
     });
 }
 fn generic_3thread_ops_b<
-    F1: Fn(&SpyOwner2, ArcShiftLight<InstanceSpy2>, &'static str) -> Option<ArcShiftLight<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+    F1: Fn(
+            &SpyOwner2,
+            ArcShiftLight<InstanceSpy2>,
+            &'static str,
+        ) -> Option<ArcShiftLight<InstanceSpy2>>
+        + Sync
+        + Send
+        + 'static,
     F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
     F3: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
 >(
     f1: F1,
     f2: F2,
@@ -150,13 +154,14 @@ fn generic_3threading_b_all() {
     generic_3threading_b_all_impl(0, 0, 0, None);
 }
 
-fn generic_3threading_b_all_impl(
-    skip1: usize,
-    skip2: usize,
-    skip3: usize,
-    repro: Option<&str>,
-) {
-    let ops1: Vec<fn(&SpyOwner2, ArcShiftLight<InstanceSpy2>, &'static str) -> Option<ArcShiftLight<InstanceSpy2>>> = vec![
+fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro: Option<&str>) {
+    let ops1: Vec<
+        fn(
+            &SpyOwner2,
+            ArcShiftLight<InstanceSpy2>,
+            &'static str,
+        ) -> Option<ArcShiftLight<InstanceSpy2>>,
+    > = vec![
         |_, shift, _| {
             _ = shift.upgrade();
             Some(shift)
@@ -303,6 +308,6 @@ fn generic_3threading2() {
             shift3.update(owner3.create(thread));
             Some(shift3)
         },
-        None
+        None,
     );
 }

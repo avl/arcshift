@@ -5,6 +5,8 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
+  schedule:
+    - cron: "37 7 * * 1,5"
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,5 +20,7 @@ jobs:
       - uses: actions/checkout@v3
       - name: Install nightly
         run: rustup toolchain install nightly
-      - name: Miri (nightly)
+      - name: Miri
         run: rustup component add --toolchain nightly miri && cd arcshift && cargo +nightly miri test --features=disable_slow_tests
+      - name: Miri (nightly-only-feature)
+        run: rustup component add --toolchain nightly miri && cd arcshift && cargo +nightly miri test --features=disable_slow_tests,nightly

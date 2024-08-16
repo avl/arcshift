@@ -1,6 +1,6 @@
 [package]
 name = "arcshift"
-version = "0.1.7"
+version = "0.1.8"
 documentation = "https://docs.rs/arcshift/"
 homepage = "https://github.com/avl/arcshift/"
 repository = "https://github.com/avl/arcshift/"
@@ -28,6 +28,11 @@ debug = []
 # Feature which disables the slowest tests
 disable_slow_tests = []
 # Feature for internal use, for testing using the 'shuttle' framework
+
+# Enables use of some compiler features which are not yet available on stable.
+# Doesn't actually change the function, but is more forward compatible, and more guaranteed to work
+# on future compilers.
+nightly = []
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"], optional = true }
