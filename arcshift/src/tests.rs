@@ -78,9 +78,9 @@ fn simple_box() {
 fn simple_unsized() {
     model(|| {
         let biggish = vec![1u32, 2u32].into_boxed_slice();
-        let mut _shift = ArcShift::from_box(biggish);
-        println!("Drop");
-        //assert_eq!(shift.get(), &vec![1,2]);
+        let mut shift = ArcShift::from_box(biggish);
+        debug_println!("Drop");
+        assert_eq!(shift.get(), &vec![1,2]);
     })
 }
 
@@ -169,7 +169,7 @@ fn simple_rcu_project2() {
         );
     })
 }
-#[cfg(not(feature = "shuttle"))]
+#[cfg(not(any(feature = "shuttle", loom)))]
 #[test]
 fn simple_rcu_project3() {
     let outerstuff = "hej".to_string();

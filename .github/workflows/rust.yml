@@ -24,5 +24,7 @@ jobs:
       run: cargo +stable test --release --workspace
     - name: Run tests (release)
       run: cargo +stable test --release --features=validate --workspace
+    - name: Install nightly
+      run: rustup toolchain install nightly
     - name: Run tests (release, nightly-only-features)
-      run: cargo +stable test --release --features=validate,nightly --workspace
+      run: cargo +nightly test --release --features=validate,nightly --workspace

@@ -19,4 +19,4 @@ jobs:
     - name: Install rust
       run: rustup toolchain install stable
     - name: Run tests
-      run: cargo +stable fmt
+      run: cargo +stable fmt --check
