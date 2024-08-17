@@ -422,9 +422,9 @@ impl<T: 'static> ArcShiftCell<T> {
     /// Assign the given ArcShift to this instance.
     /// This does not copy the value T, it replaces the ArcShift instance of Self
     /// with a clone of 'other'.
-    pub fn assign(&self, other: &ArcShift<T>) -> Result<(),()> {
+    pub fn assign(&self, other: &ArcShift<T>) -> Result<(), ()> {
         if self.recursion.get() == 0 {
-            *unsafe{&mut *self.inner.get()} = other.clone();
+            *unsafe { &mut *self.inner.get() } = other.clone();
             Ok(())
         } else {
             Err(())
@@ -2453,7 +2453,6 @@ enum RcuResult {
 }
 
 impl<T: 'static + Sized> ArcShift<T> {
-
     /// Create a new ArcShift instance, containing the given value.
     pub fn new(payload: T) -> ArcShift<T> {
         let item = ItemHolder {
