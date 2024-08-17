@@ -113,6 +113,28 @@ fn simple_unsized_str() {
         assert_eq!(shift.get(), "hello");
     })
 }
+use std::cell::{Cell, RefCell};
+
+thread_local! {
+    pub static THREADLOCAL_FOO: ArcShiftCell<String> = ArcShiftCell::new(String::new());
+}
+
+#[cfg(not(any(loom,feature="shuttle")))] //This test doesn't work in shuttle or loom, since the lazy drop of the threadlocal ends up happening outside of the shuttle model
+#[test]
+fn simple_threadlocal_cell() {
+    model(|| {
+        let shift = ArcShift::new("hello".to_string());
+        THREADLOCAL_FOO.with(|local|{
+            local.assign(&shift).unwrap();
+        });
+        THREADLOCAL_FOO.with(|local|{
+            local.get(|value|{
+                assert_eq!(value, "hello");
+            });
+        });
+        debug_println!("Drop");
+    })
+}
 
 #[test]
 fn simple_cell() {

@@ -385,6 +385,10 @@ impl<T: 'static> Clone for ArcShiftCell<T> {
     }
 }
 impl<T: 'static> ArcShiftCell<T> {
+    /// Create a new ArcShiftCell with the given value.
+    pub fn new(value: T) -> ArcShiftCell<T> {
+        ArcShiftCell::from_arcshift(ArcShift::new(value))
+    }
     /// Creates an ArcShiftCell from an ArcShift-instance.
     /// The payload is not cloned, the two pointers keep pointing to the same object.
     pub fn from_arcshift(input: ArcShift<T>) -> ArcShiftCell<T> {
@@ -415,6 +419,17 @@ impl<T: 'static> ArcShiftCell<T> {
         self.recursion.set(self.recursion.get() - 1);
     }
 
+    /// Assign the given ArcShift to this instance.
+    /// This does not copy the value T, it replaces the ArcShift instance of Self
+    /// with a clone of 'other'.
+    pub fn assign(&self, other: &ArcShift<T>) -> Result<(),()> {
+        if self.recursion.get() == 0 {
+            *unsafe{&mut *self.inner.get()} = other.clone();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
     /// Reload this ArcShiftCell-instance.
     /// This allows dropping heap blocks kept alive by this instance of
     /// ArcShiftCell to be dropped.
@@ -2438,6 +2453,7 @@ enum RcuResult {
 }
 
 impl<T: 'static + Sized> ArcShift<T> {
+
     /// Create a new ArcShift instance, containing the given value.
     pub fn new(payload: T) -> ArcShift<T> {
         let item = ItemHolder {
