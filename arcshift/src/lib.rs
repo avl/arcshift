@@ -224,7 +224,7 @@ use std::alloc::Layout;
 #[allow(unused)]
 use std::backtrace::Backtrace;
 use std::cell::{Cell, UnsafeCell};
-use std::fmt::Formatter;
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::mem;
 use std::mem::{ManuallyDrop, MaybeUninit};
@@ -384,6 +384,25 @@ impl<T: 'static> Clone for ArcShiftCell<T> {
         }
     }
 }
+
+/// Error type representing the case that an operation was attempted from within
+/// a 'get'-function closure.
+pub struct RecursionDetected;
+
+impl Debug for RecursionDetected {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RecursionDetected")
+    }
+}
+
+impl Display for RecursionDetected {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RecursionDetected")
+    }
+}
+
+impl std::error::Error for RecursionDetected {}
+
 impl<T: 'static> ArcShiftCell<T> {
     /// Create a new ArcShiftCell with the given value.
     pub fn new(value: T) -> ArcShiftCell<T> {
@@ -422,12 +441,17 @@ impl<T: 'static> ArcShiftCell<T> {
     /// Assign the given ArcShift to this instance.
     /// This does not copy the value T, it replaces the ArcShift instance of Self
     /// with a clone of 'other'.
-    pub fn assign(&self, other: &ArcShift<T>) -> Result<(), ()> {
+    /// This returns Err if recursion is detected, and has no effect in this case.
+    /// Recursion occurs if 'assign' is called from within the closure supplied to
+    /// the 'get'-function.
+    pub fn assign(&self, other: &ArcShift<T>) -> Result<(), RecursionDetected> {
         if self.recursion.get() == 0 {
+            // SAFETY:
+            // Getting the inner value is safe, no other thread can be accessing it now
             *unsafe { &mut *self.inner.get() } = other.clone();
             Ok(())
         } else {
-            Err(())
+            Err(RecursionDetected)
         }
     }
     /// Reload this ArcShiftCell-instance.
