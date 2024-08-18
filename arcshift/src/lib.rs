@@ -421,8 +421,9 @@ impl<T: 'static> ArcShiftCell<T> {
     /// This method is very fast, basically the speed of a regular reference, unless
     /// the value has been modified by calling one of the update-methods.
     ///
-    /// This method will drop older values which are no longer needed
+    /// This method will do a reload (drop older values which are no longer needed).
     /// This method is reentrant - you are allowed to call it from within the closure 'f'.
+    /// However, only the outermost invocation will cause a reload.
     pub fn get(&self, f: impl FnOnce(&T)) {
         self.recursion.set(self.recursion.get() + 1);
         let val = if self.recursion.get() == 1 {

@@ -195,7 +195,25 @@ fn simple_cell_recursion() {
         owner.validate();
     });
 }
+#[test]
+fn simple_cell_assign() {
+    model(|| {
+        let owner = SpyOwner2::new();
+        {
+            let cell = ArcShiftCell::new(owner.create("original"));
+            let new_value = ArcShift::new(owner.create("new"));
 
+            cell.get(|val| {
+                assert_eq!(val.str(), "original");
+                assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
+            });
+
+            cell.assign(&new_value).unwrap();
+
+            cell.get(|val| assert_eq!(val.str(), "new"));
+        }
+    });
+}
 #[test]
 fn simple_rcu() {
     model(|| {
