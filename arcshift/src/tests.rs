@@ -170,6 +170,7 @@ fn simple_cell() {
         owner.validate();
     });
 }
+
 #[test]
 fn simple_cell_recursion() {
     model(|| {
@@ -179,6 +180,7 @@ fn simple_cell_recursion() {
             let cell = ArcShiftCell::from_arcshift(root.clone());
             cell.get(|val| {
                 assert_eq!(val.str(), "root");
+                assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
                 cell.get(|val| {
                     assert_eq!(val.str(), "root");
                     root.update(owner.create("B"));

@@ -440,10 +440,11 @@ impl<T: 'static> ArcShiftCell<T> {
 
     /// Assign the given ArcShift to this instance.
     /// This does not copy the value T, it replaces the ArcShift instance of Self
-    /// with a clone of 'other'.
+    /// with a clone of 'other'. It does not clone T, only the ArcShift holding it.
+    ///
     /// This returns Err if recursion is detected, and has no effect in this case.
     /// Recursion occurs if 'assign' is called from within the closure supplied to
-    /// the 'get'-function.
+    /// the 'ArcShiftCell::get'-function.
     pub fn assign(&self, other: &ArcShift<T>) -> Result<(), RecursionDetected> {
         if self.recursion.get() == 0 {
             // SAFETY:
