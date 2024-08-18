@@ -224,7 +224,7 @@ use std::alloc::Layout;
 #[allow(unused)]
 use std::backtrace::Backtrace;
 use std::cell::{Cell, UnsafeCell};
-use std::fmt::Formatter;
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::mem;
 use std::mem::{ManuallyDrop, MaybeUninit};
@@ -384,7 +384,30 @@ impl<T: 'static> Clone for ArcShiftCell<T> {
         }
     }
 }
+
+/// Error type representing the case that an operation was attempted from within
+/// a 'get'-function closure.
+pub struct RecursionDetected;
+
+impl Debug for RecursionDetected {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RecursionDetected")
+    }
+}
+
+impl Display for RecursionDetected {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RecursionDetected")
+    }
+}
+
+impl std::error::Error for RecursionDetected {}
+
 impl<T: 'static> ArcShiftCell<T> {
+    /// Create a new ArcShiftCell with the given value.
+    pub fn new(value: T) -> ArcShiftCell<T> {
+        ArcShiftCell::from_arcshift(ArcShift::new(value))
+    }
     /// Creates an ArcShiftCell from an ArcShift-instance.
     /// The payload is not cloned, the two pointers keep pointing to the same object.
     pub fn from_arcshift(input: ArcShift<T>) -> ArcShiftCell<T> {
@@ -398,8 +421,9 @@ impl<T: 'static> ArcShiftCell<T> {
     /// This method is very fast, basically the speed of a regular reference, unless
     /// the value has been modified by calling one of the update-methods.
     ///
-    /// This method will drop older values which are no longer needed
+    /// This method will do a reload (drop older values which are no longer needed).
     /// This method is reentrant - you are allowed to call it from within the closure 'f'.
+    /// However, only the outermost invocation will cause a reload.
     pub fn get(&self, f: impl FnOnce(&T)) {
         self.recursion.set(self.recursion.get() + 1);
         let val = if self.recursion.get() == 1 {
@@ -415,6 +439,23 @@ impl<T: 'static> ArcShiftCell<T> {
         self.recursion.set(self.recursion.get() - 1);
     }
 
+    /// Assign the given ArcShift to this instance.
+    /// This does not copy the value T, it replaces the ArcShift instance of Self
+    /// with a clone of 'other'. It does not clone T, only the ArcShift holding it.
+    ///
+    /// This returns Err if recursion is detected, and has no effect in this case.
+    /// Recursion occurs if 'assign' is called from within the closure supplied to
+    /// the 'ArcShiftCell::get'-function.
+    pub fn assign(&self, other: &ArcShift<T>) -> Result<(), RecursionDetected> {
+        if self.recursion.get() == 0 {
+            // SAFETY:
+            // Getting the inner value is safe, no other thread can be accessing it now
+            *unsafe { &mut *self.inner.get() } = other.clone();
+            Ok(())
+        } else {
+            Err(RecursionDetected)
+        }
+    }
     /// Reload this ArcShiftCell-instance.
     /// This allows dropping heap blocks kept alive by this instance of
     /// ArcShiftCell to be dropped.

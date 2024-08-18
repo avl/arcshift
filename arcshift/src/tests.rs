@@ -113,6 +113,29 @@ fn simple_unsized_str() {
         assert_eq!(shift.get(), "hello");
     })
 }
+use std::cell::{Cell, RefCell};
+
+thread_local! {
+    pub static THREADLOCAL_FOO: ArcShiftCell<String> = ArcShiftCell::new(String::new());
+}
+
+#[cfg(not(any(loom, feature = "shuttle")))]
+//This test doesn't work in shuttle or loom, since the lazy drop of the threadlocal ends up happening outside of the shuttle model
+#[test]
+fn simple_threadlocal_cell() {
+    model(|| {
+        let shift = ArcShift::new("hello".to_string());
+        THREADLOCAL_FOO.with(|local| {
+            local.assign(&shift).unwrap();
+        });
+        THREADLOCAL_FOO.with(|local| {
+            local.get(|value| {
+                assert_eq!(value, "hello");
+            });
+        });
+        debug_println!("Drop");
+    })
+}
 
 #[test]
 fn simple_cell() {
@@ -147,6 +170,7 @@ fn simple_cell() {
         owner.validate();
     });
 }
+
 #[test]
 fn simple_cell_recursion() {
     model(|| {
@@ -156,6 +180,7 @@ fn simple_cell_recursion() {
             let cell = ArcShiftCell::from_arcshift(root.clone());
             cell.get(|val| {
                 assert_eq!(val.str(), "root");
+                assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
                 cell.get(|val| {
                     assert_eq!(val.str(), "root");
                     root.update(owner.create("B"));
@@ -170,7 +195,25 @@ fn simple_cell_recursion() {
         owner.validate();
     });
 }
+#[test]
+fn simple_cell_assign() {
+    model(|| {
+        let owner = SpyOwner2::new();
+        {
+            let cell = ArcShiftCell::new(owner.create("original"));
+            let new_value = ArcShift::new(owner.create("new"));
 
+            cell.get(|val| {
+                assert_eq!(val.str(), "original");
+                assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
+            });
+
+            cell.assign(&new_value).unwrap();
+
+            cell.get(|val| assert_eq!(val.str(), "new"));
+        }
+    });
+}
 #[test]
 fn simple_rcu() {
     model(|| {
