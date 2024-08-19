@@ -384,7 +384,7 @@ impl<'a, T: 'static> Drop for ArcShiftCellHandle<'a, T> {
             // SAFETY:
             // There are no references to 'inner', so it's safe to obtain
             // a mutable reference.
-            unsafe { (&mut *self.cell.inner.get()).reload() };
+            unsafe { (*self.cell.inner.get()).reload() };
         }
         self.cell.recursion.set(rec);
     }
