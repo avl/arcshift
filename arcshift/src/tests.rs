@@ -170,6 +170,65 @@ fn simple_cell() {
         owner.validate();
     });
 }
+#[test]
+fn simple_cell_handle() {
+    model(|| {
+        let owner = SpyOwner2::new();
+        {
+            let mut root = ArcShift::new(owner.create("root"));
+            let cell = ArcShiftCell::from_arcshift(root.clone());
+            let r = cell.borrow();
+            assert_eq!(r.str(), "root");
+            assert_eq!(owner.count(), 1);
+            root.update(owner.create("new"));
+            assert_eq!(owner.count(), 2); // Since we haven't dropped 'r', its value must be kept
+            drop(r);
+            assert_eq!(owner.count(), 1); //'cell' should now have been reloaded.
+        }
+    });
+}
+
+#[test]
+fn simple_multiple_cell_handles() {
+    model(|| {
+        let owner = SpyOwner2::new();
+        {
+            let mut root = ArcShift::new(owner.create("root"));
+            let cell = ArcShiftCell::from_arcshift(root.clone());
+            {
+                let r = cell.borrow();
+                assert_eq!(r.str(), "root");
+                assert_eq!(owner.count(), 1);
+            }
+
+            root.update(owner.create("A"));
+            assert_eq!(owner.count(), 2);
+
+            {
+                let r = cell.borrow();
+                assert_eq!(r.str(), "A");
+                assert_eq!(owner.count(), 1);
+            }
+
+            {
+                let r = cell.borrow();
+                root.update(owner.create("B"));
+                assert_eq!(r.str(), "B");
+                assert_eq!(owner.count(), 1);
+            }
+
+            {
+                let r1 = cell.borrow();
+                let r2 = cell.borrow();
+                root.update(owner.create("C"));
+                assert_eq!(r1.str(), "C");
+                assert_eq!(r2.str(), "C");
+                assert_eq!(owner.count(), 2); //Because we have two references, we can't reload.
+            }
+            assert_eq!(owner.count(), 1); //But when the last ref is dropped, we do reload
+        }
+    });
+}
 
 #[test]
 fn simple_cell_recursion() {
