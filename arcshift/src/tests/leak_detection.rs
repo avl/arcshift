@@ -26,6 +26,8 @@ impl Drop for InstanceSpy {
     }
 }
 
+/// Helper that keeps track of allocated instances of 'InstanceSpy2',
+/// for detecting memory leaks.
 pub(crate) struct SpyOwner2 {
     data: std::sync::Arc<Mutex<HashSet<&'static str>>>,
 }

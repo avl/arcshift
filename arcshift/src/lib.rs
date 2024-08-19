@@ -354,9 +354,61 @@ unsafe impl<T: 'static> Sync for ArcShiftLight<T> where T: Sync {}
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.
 /// However, it is not 'Sync'.
+///
+/// It does not implement 'Deref', but does implement a [`ArcShiftCell::borrow`]-method which returns,
+/// a non-threadsafe `ArcShiftCellHandle<T>`. This handle implements Deref, giving access
+/// to the pointed to &T. This handle should not be leaked,
+/// but if it is leaked, the effect is that whatever value the ArcShiftCell-instance
+/// pointed to at that time, will forever leak also. All the linked-list nodes from
+/// that entry and onward will also leak. So make sure to not leak the handle!
 pub struct ArcShiftCell<T: 'static> {
     inner: UnsafeCell<ArcShift<T>>,
     recursion: Cell<usize>,
+}
+
+/// A handle to the pointed-to value of a ArcShiftCell. This handle should not be leaked,
+/// but if it is leaked, the effect is that whatever value the ArcShiftCell-instance
+/// pointed to at that time, will forever leak also. All the linked-list nodes from
+/// that entry and onward will also leak. So make sure to not leak the handle!
+///
+/// Leaking the handle does not cause unsoundness and is not UB.
+pub struct ArcShiftCellHandle<'a, T: 'static> {
+    cell: &'a ArcShiftCell<T>
+}
+
+impl<'a,T:'static> Drop for ArcShiftCellHandle<'a, T> {
+    fn drop(&mut self) {
+        let mut rec = self.cell.recursion.get();
+        rec -= 1;
+        if rec == 0 {
+            // SAFETY:
+            // There are no references to 'inner', so it's safe to obtain
+            // a mutable reference.
+            unsafe { (&mut *self.cell.inner.get()).reload() };
+        }
+        self.cell.recursion.set(rec);
+    }
+}
+
+impl<'a, T: 'static> Deref for ArcShiftCellHandle<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+
+        if self.cell.recursion.get() == 1 {
+            // SAFETY:
+            // We're the only owner of the ArcShiftCell, and can thus get mutable access.
+            let inner:&mut ArcShift<T> = unsafe { &mut *self.cell.inner.get() };
+            inner.get()
+        } else {
+            // SAFETY:
+            // Shared access to this UnsafeCEll is always allowed.
+            // Actual mutable references to the 'inner' never live long enough
+            // to be visible by the user of this module.
+            let inner:&ArcShift<T> = unsafe { &*self.cell.inner.get() };
+            inner.shared_get()
+        }
+    }
 }
 
 /// ArcShiftCell cannot be Sync, but there's nothing stopping it from being Send.
@@ -408,6 +460,7 @@ impl<T: 'static> ArcShiftCell<T> {
     pub fn new(value: T) -> ArcShiftCell<T> {
         ArcShiftCell::from_arcshift(ArcShift::new(value))
     }
+
     /// Creates an ArcShiftCell from an ArcShift-instance.
     /// The payload is not cloned, the two pointers keep pointing to the same object.
     pub fn from_arcshift(input: ArcShift<T>) -> ArcShiftCell<T> {
@@ -416,12 +469,26 @@ impl<T: 'static> ArcShiftCell<T> {
             recursion: Cell::new(0),
         }
     }
+
+    /// Get a handle to the pointed to T.
+    ///
+    /// Make sure not to leak this handle: See further documentation on
+    /// [`ArcShiftCellHandle`]. Leaking the handle will leak resources, but
+    /// not cause undefined behaviour.
+    pub fn borrow(&self) -> ArcShiftCellHandle<T> {
+        self.recursion.set(self.recursion.get()+1);
+        ArcShiftCellHandle {
+            cell: self
+        }
+    }
+
     /// Get the value pointed to.
     ///
     /// This method is very fast, basically the speed of a regular reference, unless
     /// the value has been modified by calling one of the update-methods.
     ///
     /// This method will do a reload (drop older values which are no longer needed).
+    ///
     /// This method is reentrant - you are allowed to call it from within the closure 'f'.
     /// However, only the outermost invocation will cause a reload.
     pub fn get(&self, f: impl FnOnce(&T)) {
