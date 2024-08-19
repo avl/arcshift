@@ -315,6 +315,23 @@ pub struct ArcShift<T: 'static + ?Sized> {
     item: NonNull<ItemHolderDummy<T>>,
 }
 
+
+impl<T:?Sized + 'static> Debug for ArcShift<T> where T:Debug{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ArcShift({:?})", self.shared_get())
+    }
+}
+impl<T:?Sized + 'static> Debug for ArcShiftLight<T> where T:Debug{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ArcShiftLight(..)")
+    }
+}
+impl<T:?Sized + 'static> Debug for ArcShiftCell<T> where T:Debug{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ArcShiftCell({:?})", &*self.borrow())
+    }
+}
+
 impl<T> UnwindSafe for ArcShift<T> {}
 
 /// ArcShiftLight is like ArcShift, except it does not provide overhead-free access.
@@ -361,7 +378,7 @@ unsafe impl<T: 'static + ?Sized> Sync for ArcShiftLight<T> where T: Sync {}
 /// but if it is leaked, the effect is that whatever value the ArcShiftCell-instance
 /// pointed to at that time, will forever leak also. All the linked-list nodes from
 /// that entry and onward will also leak. So make sure to not leak the handle!
-pub struct ArcShiftCell<T: 'static> {
+pub struct ArcShiftCell<T: 'static+?Sized> {
     inner: UnsafeCell<ArcShift<T>>,
     recursion: Cell<usize>,
 }
@@ -372,11 +389,11 @@ pub struct ArcShiftCell<T: 'static> {
 /// that entry and onward will also leak. So make sure to not leak the handle!
 ///
 /// Leaking the handle does not cause unsoundness and is not UB.
-pub struct ArcShiftCellHandle<'a, T: 'static> {
+pub struct ArcShiftCellHandle<'a, T: 'static + ?Sized> {
     cell: &'a ArcShiftCell<T>,
 }
 
-impl<'a, T: 'static> Drop for ArcShiftCellHandle<'a, T> {
+impl<'a, T: 'static + ?Sized> Drop for ArcShiftCellHandle<'a, T> {
     fn drop(&mut self) {
         let mut rec = self.cell.recursion.get();
         rec -= 1;
@@ -390,7 +407,7 @@ impl<'a, T: 'static> Drop for ArcShiftCellHandle<'a, T> {
     }
 }
 
-impl<'a, T: 'static> Deref for ArcShiftCellHandle<'a, T> {
+impl<'a, T: 'static + ?Sized> Deref for ArcShiftCellHandle<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -422,7 +439,7 @@ impl<'a, T: 'static> Deref for ArcShiftCellHandle<'a, T> {
 /// could call 'get' simultaneously, corrupting the (non-atomic) refcount.
 unsafe impl<T: 'static> Send for ArcShiftCell<T> where T: Send {}
 
-impl<T: 'static> Clone for ArcShiftCell<T> {
+impl<T: 'static + ?Sized> Clone for ArcShiftCell<T> {
     fn clone(&self) -> Self {
         // SAFETY:
         // Accessing the inner value is safe, since we know no other thread
@@ -459,6 +476,8 @@ impl<T: 'static> ArcShiftCell<T> {
     pub fn new(value: T) -> ArcShiftCell<T> {
         ArcShiftCell::from_arcshift(ArcShift::new(value))
     }
+}
+impl<T: 'static+?Sized> ArcShiftCell<T> {
 
     /// Creates an ArcShiftCell from an ArcShift-instance.
     /// The payload is not cloned, the two pointers keep pointing to the same object.
@@ -550,7 +569,7 @@ const fn is_sized<T: ?Sized>() -> bool {
     size_of::<&T>() == size_of::<&()>()
 }
 
-impl<T: 'static> Clone for ArcShiftLight<T> {
+impl<T: 'static + ?Sized> Clone for ArcShiftLight<T> {
     fn clone(&self) -> Self {
         let mut curitem = self.item.as_ptr() as *const _;
         loop {
@@ -956,6 +975,92 @@ impl<T: 'static + ?Sized> ArcShiftLight<T> {
             Some(next)
         }
     }
+
+    /// Create an ArcShift instance from this ArcShiftLight.
+    pub fn upgrade(&self) -> ArcShift<T> {
+        debug_println!("ArcShiftLight Promoting to ArcShift {:?}", self.item);
+        let mut curitem = self.item.as_ptr();
+        loop {
+            let Some(next) = Self::load_nontentative_next(curitem) else {
+                atomic::spin_loop();
+                continue;
+            };
+
+            debug_println!(
+                "ArcShiftLight upgrade {:?}, next: {:?} = {:?}",
+                curitem,
+                next,
+                get_state(next)
+            );
+
+            if !next.is_null() {
+                debug_println!(
+                    "ArcShiftLight traversing chain to {:?} -> {:?}",
+                    curitem,
+                    next
+                );
+                curitem = undecorate(next) as *mut _;
+                atomic::spin_loop();
+                continue;
+            }
+
+            let precount = get_refcount(curitem).fetch_add(MAX_ROOTS, Ordering::SeqCst);
+            if precount >= MAX_ARCSHIFT {
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
+                panic!(
+                    "Maximum supported ArcShift instance count reached: {}",
+                    MAX_ARCSHIFT
+                );
+            }
+            atomic::fence(Ordering::SeqCst); //Just to make loom work
+            debug_println!(
+                "Promote {:?}, prev count: {}, new count {}",
+                curitem,
+                precount,
+                precount + MAX_ROOTS
+            );
+            assert!(precount >= 1);
+            let Some(next) = Self::load_nontentative_next(curitem) else {
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
+                assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
+                atomic::spin_loop();
+                continue;
+            };
+            if !undecorate(next).is_null() {
+                debug_println!(
+                    "ArcShiftLight About to reduce count {:?} by {}, and traversing to {:?}",
+                    curitem,
+                    MAX_ROOTS,
+                    next
+                );
+
+                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
+                assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
+                curitem = undecorate(next) as *mut _;
+                atomic::spin_loop();
+                continue;
+            }
+
+            let mut temp = ArcShift { item:
+            // SAFETY:
+            // curitem cannot be null, since it is either the value of 'self.item', which
+            // cannot be null, or assigned by code above that first checks for null
+            unsafe { NonNull::new_unchecked(curitem) }
+            };
+            temp.reload();
+            return temp;
+        }
+    }
+    #[cfg_attr(test, mutants::skip)]
+    fn verify_count(count: usize) {
+        if (count & (MAX_ROOTS - 1)) >= MAX_ROOTS - 1 {
+            panic!(
+                "Max limit of ArcShiftLight clones ({}) was reached",
+                MAX_ROOTS
+            );
+        }
+    }
+
 }
 
 impl<T: 'static> ArcShiftLight<T> {
@@ -1048,15 +1153,6 @@ impl<T: 'static> ArcShiftLight<T> {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)]
-    fn verify_count(count: usize) {
-        if (count & (MAX_ROOTS - 1)) >= MAX_ROOTS - 1 {
-            panic!(
-                "Max limit of ArcShiftLight clones ({}) was reached",
-                MAX_ROOTS
-            );
-        }
-    }
 
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -1187,81 +1283,7 @@ impl<T: 'static> ArcShiftLight<T> {
         ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true, null());
     }
 
-    /// Create an ArcShift instance from this ArcShiftLight.
-    pub fn upgrade(&self) -> ArcShift<T> {
-        debug_println!("ArcShiftLight Promoting to ArcShift {:?}", self.item);
-        let mut curitem = self.item.as_ptr();
-        loop {
-            let Some(next) = Self::load_nontentative_next(curitem) else {
-                atomic::spin_loop();
-                continue;
-            };
 
-            debug_println!(
-                "ArcShiftLight upgrade {:?}, next: {:?} = {:?}",
-                curitem,
-                next,
-                get_state(next)
-            );
-
-            if !next.is_null() {
-                debug_println!(
-                    "ArcShiftLight traversing chain to {:?} -> {:?}",
-                    curitem,
-                    next
-                );
-                curitem = undecorate(next) as *mut _;
-                atomic::spin_loop();
-                continue;
-            }
-
-            let precount = get_refcount(curitem).fetch_add(MAX_ROOTS, Ordering::SeqCst);
-            if precount >= MAX_ARCSHIFT {
-                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
-                panic!(
-                    "Maximum supported ArcShift instance count reached: {}",
-                    MAX_ARCSHIFT
-                );
-            }
-            atomic::fence(Ordering::SeqCst); //Just to make loom work
-            debug_println!(
-                "Promote {:?}, prev count: {}, new count {}",
-                curitem,
-                precount,
-                precount + MAX_ROOTS
-            );
-            assert!(precount >= 1);
-            let Some(next) = Self::load_nontentative_next(curitem) else {
-                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
-                assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
-                atomic::spin_loop();
-                continue;
-            };
-            if !undecorate(next).is_null() {
-                debug_println!(
-                    "ArcShiftLight About to reduce count {:?} by {}, and traversing to {:?}",
-                    curitem,
-                    MAX_ROOTS,
-                    next
-                );
-
-                let _precount = get_refcount(curitem).fetch_sub(MAX_ROOTS, Ordering::SeqCst);
-                assert!(_precount > MAX_ROOTS && _precount < 1_000_000_000_000);
-                curitem = undecorate(next) as *mut _;
-                atomic::spin_loop();
-                continue;
-            }
-
-            let mut temp = ArcShift { item:
-                // SAFETY:
-                // curitem cannot be null, since it is either the value of 'self.item', which
-                // cannot be null, or assigned by code above that first checks for null
-                unsafe { NonNull::new_unchecked(curitem) }
-            };
-            temp.reload();
-            return temp;
-        }
-    }
 }
 
 impl<T: 'static + ?Sized> Drop for ArcShiftLight<T> {
@@ -1283,7 +1305,9 @@ impl<T: ?Sized> Drop for ArcShift<T> {
     fn drop(&mut self) {
         verify_item(get_ptr(self.item));
 
-        self.reload();
+        if !undecorate(get_next_and_state(self.item.as_ptr()).load(Ordering::Relaxed)).is_null() { //Fast-path, when 'next' is null, don't do the expensive and complicated 'reload'
+            self.reload();
+        }
         debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
         drop_item(get_ptr(self.item));
         debug_println!("ArcShift::drop({:?}) DONE", self.item);
@@ -1539,7 +1563,7 @@ fn is_superseded_by_tentative(state: Option<ItemStateEnum>) -> bool {
     matches!(state, Some(ItemStateEnum::SupersededByTentative))
 }
 
-impl<T: 'static> Clone for ArcShift<T> {
+impl<T: 'static + ?Sized> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         debug_println!("ArcShift::clone({:?})", self.item);
         let rescount =
@@ -1874,7 +1898,7 @@ impl<T: 'static + ?Sized> ArcShift<T> {
             }
 
             debug_println!("drop_impl to reduce count {:?} by {}", self_item, strength);
-            let count = get_refcount(self_item).fetch_sub(strength, atomic::Ordering::SeqCst);
+            let count = get_refcount(self_item).fetch_sub(strength, atomic::Ordering::AcqRel);
             debug_println!(
                 "drop_impl on {:?} - count: {} -> {}",
                 self_item,
