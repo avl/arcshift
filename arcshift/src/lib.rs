@@ -1557,7 +1557,7 @@ impl<T: 'static> Clone for ArcShift<T> {
         ArcShift { item: self.item }
     }
 }
-impl<T> Deref for ArcShift<T> {
+impl<T:?Sized> Deref for ArcShift<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
