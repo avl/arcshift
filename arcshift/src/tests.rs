@@ -230,7 +230,6 @@ fn simple_multiple_cell_handles() {
     });
 }
 
-
 #[test]
 fn simple_cell_recursion() {
     model(|| {

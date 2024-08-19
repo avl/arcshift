@@ -373,10 +373,10 @@ pub struct ArcShiftCell<T: 'static> {
 ///
 /// Leaking the handle does not cause unsoundness and is not UB.
 pub struct ArcShiftCellHandle<'a, T: 'static> {
-    cell: &'a ArcShiftCell<T>
+    cell: &'a ArcShiftCell<T>,
 }
 
-impl<'a,T:'static> Drop for ArcShiftCellHandle<'a, T> {
+impl<'a, T: 'static> Drop for ArcShiftCellHandle<'a, T> {
     fn drop(&mut self) {
         let mut rec = self.cell.recursion.get();
         rec -= 1;
@@ -394,18 +394,17 @@ impl<'a, T: 'static> Deref for ArcShiftCellHandle<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-
         if self.cell.recursion.get() == 1 {
             // SAFETY:
             // We're the only owner of the ArcShiftCell, and can thus get mutable access.
-            let inner:&mut ArcShift<T> = unsafe { &mut *self.cell.inner.get() };
+            let inner: &mut ArcShift<T> = unsafe { &mut *self.cell.inner.get() };
             inner.get()
         } else {
             // SAFETY:
             // Shared access to this UnsafeCEll is always allowed.
             // Actual mutable references to the 'inner' never live long enough
             // to be visible by the user of this module.
-            let inner:&ArcShift<T> = unsafe { &*self.cell.inner.get() };
+            let inner: &ArcShift<T> = unsafe { &*self.cell.inner.get() };
             inner.shared_get()
         }
     }
@@ -476,10 +475,8 @@ impl<T: 'static> ArcShiftCell<T> {
     /// [`ArcShiftCellHandle`]. Leaking the handle will leak resources, but
     /// not cause undefined behaviour.
     pub fn borrow(&self) -> ArcShiftCellHandle<T> {
-        self.recursion.set(self.recursion.get()+1);
-        ArcShiftCellHandle {
-            cell: self
-        }
+        self.recursion.set(self.recursion.get() + 1);
+        ArcShiftCellHandle { cell: self }
     }
 
     /// Get the value pointed to.
