@@ -344,12 +344,12 @@ pub struct ArcShiftLight<T: 'static + ?Sized> {
 /// SAFETY:
 /// ArcShiftLight can be Send as long as T is Send.
 /// ArcShiftLight's mechanisms are compatible with both Send and Sync
-unsafe impl<T: 'static> Send for ArcShiftLight<T> where T: Send {}
+unsafe impl<T: 'static + ?Sized> Send for ArcShiftLight<T> where T: Send {}
 
 /// SAFETY:
 /// ArcShiftLight can be Sync as long as T is Sync.
 /// ArcShiftLight's mechanisms are compatible with both Send and Sync
-unsafe impl<T: 'static> Sync for ArcShiftLight<T> where T: Sync {}
+unsafe impl<T: 'static + ?Sized> Sync for ArcShiftLight<T> where T: Sync {}
 
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.
@@ -1273,11 +1273,11 @@ impl<T: 'static + ?Sized> Drop for ArcShiftLight<T> {
 
 /// SAFETY:
 /// If `T` is `Sync`, `ArcShift<T>` can also be `Sync`
-unsafe impl<T: 'static + Sync> Sync for ArcShift<T> {}
+unsafe impl<T: 'static + Sync + ?Sized> Sync for ArcShift<T> {}
 
 /// SAFETY:
 /// If `T` is `Send`, `ArcShift<T>` can also be `Send`
-unsafe impl<T: 'static + Send> Send for ArcShift<T> {}
+unsafe impl<T: 'static + Send + ?Sized> Send for ArcShift<T> {}
 
 impl<T: ?Sized> Drop for ArcShift<T> {
     fn drop(&mut self) {
