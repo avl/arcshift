@@ -315,18 +315,26 @@ pub struct ArcShift<T: 'static + ?Sized> {
     item: NonNull<ItemHolderDummy<T>>,
 }
 
-
-impl<T:?Sized + 'static> Debug for ArcShift<T> where T:Debug{
+impl<T: ?Sized + 'static> Debug for ArcShift<T>
+where
+    T: Debug,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ArcShift({:?})", self.shared_get())
     }
 }
-impl<T:?Sized + 'static> Debug for ArcShiftLight<T> where T:Debug{
+impl<T: ?Sized + 'static> Debug for ArcShiftLight<T>
+where
+    T: Debug,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ArcShiftLight(..)")
     }
 }
-impl<T:?Sized + 'static> Debug for ArcShiftCell<T> where T:Debug{
+impl<T: ?Sized + 'static> Debug for ArcShiftCell<T>
+where
+    T: Debug,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ArcShiftCell({:?})", &*self.borrow())
     }
@@ -378,7 +386,7 @@ unsafe impl<T: 'static + ?Sized> Sync for ArcShiftLight<T> where T: Sync {}
 /// but if it is leaked, the effect is that whatever value the ArcShiftCell-instance
 /// pointed to at that time, will forever leak also. All the linked-list nodes from
 /// that entry and onward will also leak. So make sure to not leak the handle!
-pub struct ArcShiftCell<T: 'static+?Sized> {
+pub struct ArcShiftCell<T: 'static + ?Sized> {
     inner: UnsafeCell<ArcShift<T>>,
     recursion: Cell<usize>,
 }
@@ -477,8 +485,7 @@ impl<T: 'static> ArcShiftCell<T> {
         ArcShiftCell::from_arcshift(ArcShift::new(value))
     }
 }
-impl<T: 'static+?Sized> ArcShiftCell<T> {
-
+impl<T: 'static + ?Sized> ArcShiftCell<T> {
     /// Creates an ArcShiftCell from an ArcShift-instance.
     /// The payload is not cloned, the two pointers keep pointing to the same object.
     pub fn from_arcshift(input: ArcShift<T>) -> ArcShiftCell<T> {
@@ -1060,7 +1067,6 @@ impl<T: 'static + ?Sized> ArcShiftLight<T> {
             );
         }
     }
-
 }
 
 impl<T: 'static> ArcShiftLight<T> {
@@ -1152,7 +1158,6 @@ impl<T: 'static> ArcShiftLight<T> {
             self.item = unsafe { NonNull::new_unchecked(undecorate(next) as *mut _) };
         }
     }
-
 
     /// Update the contents of this ArcShift, and all other instances cloned from this
     /// instance. The next time such an instance of ArcShift is dereferenced, this
@@ -1282,8 +1287,6 @@ impl<T: 'static> ArcShiftLight<T> {
         let new_ptr = ArcShift::from_box_impl(new_payload);
         ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, true, null());
     }
-
-
 }
 
 impl<T: 'static + ?Sized> Drop for ArcShiftLight<T> {
@@ -1305,7 +1308,8 @@ impl<T: ?Sized> Drop for ArcShift<T> {
     fn drop(&mut self) {
         verify_item(get_ptr(self.item));
 
-        if !undecorate(get_next_and_state(self.item.as_ptr()).load(Ordering::Relaxed)).is_null() { //Fast-path, when 'next' is null, don't do the expensive and complicated 'reload'
+        if !undecorate(get_next_and_state(self.item.as_ptr()).load(Ordering::Relaxed)).is_null() {
+            //Fast-path, when 'next' is null, don't do the expensive and complicated 'reload'
             self.reload();
         }
         debug_println!("ArcShift::drop({:?}) - reloaded", self.item);
@@ -1581,7 +1585,7 @@ impl<T: 'static + ?Sized> Clone for ArcShift<T> {
         ArcShift { item: self.item }
     }
 }
-impl<T:?Sized> Deref for ArcShift<T> {
+impl<T: ?Sized> Deref for ArcShift<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
