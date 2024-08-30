@@ -425,7 +425,7 @@ this line to the cargo mutants-config.
 
 Another challenge is how to handle overflow of ArcShift-instances. The problem is that cargo
 mutants identifies that removing the code for handling ArcShift instance count overflow doesn't
-fail the test suite. However, triggering such an overflow would require creating 2*45 instances 
+fail the test suite. However, triggering such an overflow would require creating 2^45 instances 
 of ArcShift. Unfortunately, this requires at least 280 TB of RAM.
 
 In the end, I just added an exception for this logic. Sanity checks which are not expected
