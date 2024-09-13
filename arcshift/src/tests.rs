@@ -116,7 +116,8 @@ fn simple_unsized_str() {
 use std::cell::{Cell, RefCell};
 
 thread_local! {
-    pub static THREADLOCAL_FOO: ArcShiftCell<String> = ArcShiftCell::new(String::new());
+
+    static THREADLOCAL_FOO: ArcShiftCell<String> = ArcShiftCell::new(String::new());
 }
 
 #[cfg(not(any(loom, feature = "shuttle")))]

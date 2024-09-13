@@ -2814,5 +2814,6 @@ fn drop_item<T: ?Sized>(old_ptr: *const ItemHolderDummy<T>) {
     ArcShift::drop_impl(old_ptr);
 }
 
+/// Module for tests
 #[cfg(test)]
 pub mod tests;
