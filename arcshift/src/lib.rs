@@ -437,7 +437,7 @@ impl<T: 'static> Clone for ArcShiftCell<T> {
 }
 
 /// Error type representing the case that an operation was attempted from within
-/// a 'get'-function closure.
+/// a 'get'-method closure.
 pub struct RecursionDetected;
 
 impl Debug for RecursionDetected {
@@ -509,7 +509,7 @@ impl<T: 'static> ArcShiftCell<T> {
     ///
     /// This returns Err if recursion is detected, and has no effect in this case.
     /// Recursion occurs if 'assign' is called from within the closure supplied to
-    /// the 'ArcShiftCell::get'-function.
+    /// the 'ArcShiftCell::get'-method.
     pub fn assign(&self, other: &ArcShift<T>) -> Result<(), RecursionDetected> {
         if self.recursion.get() == 0 {
             // SAFETY:
@@ -523,8 +523,8 @@ impl<T: 'static> ArcShiftCell<T> {
     /// Reload this ArcShiftCell-instance.
     /// This allows dropping heap blocks kept alive by this instance of
     /// ArcShiftCell to be dropped.
-    /// Note, this function only works when not called from within a closure
-    /// supplied to the 'get' function. If such recursion occurs, this function
+    /// Note, this method only works when not called from within a closure
+    /// supplied to the 'get' method. If such recursion occurs, this method
     /// does nothing.
     pub fn reload(&self) {
         if self.recursion.get() == 0 {
@@ -786,7 +786,7 @@ fn make_unsized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDum
 
     // SAFETY:
     // input_ptr is a *mut T that has been created from a Box<T>.
-    // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-function
+    // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-method
     // of T is not run. We must not drop T here, since we've moved it to the 'result_ptr'.
     let _t: Box<ManuallyDrop<T>> = unsafe { Box::from_raw(cur_ptr as *mut ManuallyDrop<T>) }; //Free the memory, but don't drop 'input'
 
@@ -859,7 +859,7 @@ fn make_sized_holder_from_box<T: ?Sized>(item: Box<T>) -> *const ItemHolderDummy
 
     // SAFETY:
     // input_ptr is a *mut T that has been created from a Box<T>.
-    // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-function
+    // Converting it to a Box<MaybeUninit<T>> is safe, and will make sure that any drop-method
     // of T is not run. We must not drop T here, since we've moved it to the 'result_ptr'.
     let _t: Box<ManuallyDrop<T>> = unsafe { Box::from_raw(cur_ptr as *mut ManuallyDrop<T>) }; //Free the memory, but don't drop 'input'
 
@@ -1065,7 +1065,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// This method never blocks, it will return quickly.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared(&self, new_payload: T) {
@@ -1113,7 +1113,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// This method never blocks, it will return quickly.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
@@ -1121,7 +1121,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
     /// the 'self' ArcShiftLight-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
+    /// before this method returns.
     pub fn update(&mut self, new_payload: T) {
         let item = ItemHolder {
             the_size: NoMeta,
@@ -1148,12 +1148,12 @@ impl<T: 'static> ArcShiftLight<T> {
     ///
     /// This method never blocks, it will return quickly.
     ///
-    /// This function is useful for types T which are too large to fit on the stack.
+    /// This method is useful for types T which are too large to fit on the stack.
     /// The value T will be moved directly to the internal heap-structure, without
     /// being even temporarily stored on the stack, even in debug builds.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
@@ -1161,7 +1161,7 @@ impl<T: 'static> ArcShiftLight<T> {
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
     /// the 'self' ArcShiftLight-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
+    /// before this method returns.
     pub fn update_box(&mut self, new_payload: Box<T>) {
         let new_ptr = ArcShift::from_box_impl(new_payload);
         ArcShift::update_shared_impl(self.item.as_ptr(), new_ptr as *mut _, false, null());
@@ -1174,12 +1174,12 @@ impl<T: 'static> ArcShiftLight<T> {
     ///
     /// This method never blocks, it will return quickly.
     ///
-    /// This function is useful for types T which are too large to fit on the stack.
+    /// This method is useful for types T which are too large to fit on the stack.
     /// The value T will be moved directly to the internal heap-structure, without
     /// being even temporarily stored on the stack, even in debug builds.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
@@ -1680,26 +1680,26 @@ impl<T: 'static> ArcShift<T> {
         retval
     }
 
-    /// This method calls the supplied function 'f' with the previous value pointed to as an
-    /// argument. It then sets the pointee value to the value returned by the function.
+    /// This method calls the supplied closure 'f' with the previous value pointed to as an
+    /// argument. It then sets the pointee value to the value returned by the closure.
     ///
-    /// Note, there is no guarantee that the ArcShift value isn't updated while the supplied function
+    /// Note, there is no guarantee that the ArcShift value isn't updated while the supplied closure
     /// 'f' is running. This will be detected, and the value returned by 'f' will
-    /// be dropped and no update will occur. This function returns (true, _ ) if the value
+    /// be dropped and no update will occur. This method returns (true, _ ) if the value
     /// was updated, otherwise it returns (false, _);
     ///
     /// If other threads do simultaneous updates, there's no particular guarantee
     /// that whatever value is returned by f will ever be read by another thread before it is
-    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-functions.
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-methods.
     ///
     /// This method never blocks, it will return quickly (depending on the execution time
     /// of 'f').
     ///
-    /// The second value of the returned tuple is simply the value produced by the function
+    /// The second value of the returned tuple is simply the value produced by the closure
     /// 'projector', which is called with the current pointee value after any update has occurred.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
@@ -1707,7 +1707,7 @@ impl<T: 'static> ArcShift<T> {
     /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
     /// the 'self' ArcShift-instance. This has the effect that *if* 'self' is the
     /// last remaining instance, the old value that is being replaced *will* be dropped
-    /// before this function returns.
+    /// before this method returns.
     pub fn rcu_project<'s, A>(
         &'s mut self,
         f: impl FnOnce(&T) -> Option<T>,
@@ -1720,26 +1720,26 @@ impl<T: 'static> ArcShift<T> {
         (ret, projector(self.shared_non_reloading_get()))
     }
 
-    /// This method calls the supplied function with the previous value pointed to.
-    /// It then sets the current value to the value returned by the function, if the function
-    /// returns Some(...). If the function returns None, there is no effect and 'rcu_maybe'
+    /// This method calls the supplied closure with the previous value pointed to.
+    /// It then sets the current value to the value returned by the closure, if the closure
+    /// returns Some(...). If the closure returns None, there is no effect and 'rcu_maybe'
     /// returns false.
     ///
-    /// Note, there is no guarantee that the value isn't updated while the supplied function
+    /// Note, there is no guarantee that the value isn't updated while the supplied closure
     /// 'f' is running. This will be detected, and the value returned by 'f' will
-    /// be dropped and no update will occur. This function returns true if the value
+    /// be dropped and no update will occur. This method returns true if the value
     /// was updated, false otherwise. The only reason it can fail is if some other thread
     /// updated the value while 'rcu_maybe' was running.
     ///
     /// If other threads do simultaneous updates, there's no particular guarantee
     /// that whatever value is returned by f will ever be read by another thread before it is
-    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-functions.
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-methods.
     ///
     /// This method never blocks, it will return quickly (depending on the execution time
     /// of 'f').
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
@@ -1747,7 +1747,7 @@ impl<T: 'static> ArcShift<T> {
     /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
+    /// before this method returns.
     pub fn rcu_maybe<F>(&mut self, f: F) -> bool
     where
         F: FnOnce(&T) -> Option<T>,
@@ -1756,6 +1756,48 @@ impl<T: 'static> ArcShift<T> {
             RcuResult::Update => true,
             RcuResult::NoUpdate | RcuResult::Race => false,
         }
+    }
+
+    /// This method calls the supplied closure with the previous value pointed to.
+    /// It then attempts to set the current value to the value returned by the method, if the method
+    /// returns Some(...).
+    ///
+    /// The return value of this method is as follows:
+    ///
+    /// * If 'f' returns None, this method returns [`RcuResult::NoUpdate`].
+    /// * If 'f' returns Some, but a race occurred, this method returns [`RcuResult::Race`].
+    ///   In this case the pointee will not have been updated to a new value.
+    /// * Otherwise, this method returns  [`RcuResult::Update`], and the pointee will have ben
+    ///   updated.
+    ///
+    ///
+    /// Note, there is no guarantee that the value isn't updated while the supplied closure
+    /// is running. This will be detected, and the value returned by 'f' will
+    /// be dropped and no update will occur. The only reason this failure can occur is if some other
+    /// thread updated the value while 'rcu_maybe' was running.
+    ///
+    /// If other threads do simultaneous updates, there's no particular guarantee
+    /// that whatever value is returned by f will ever be read by another thread before it is
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-methods.
+    ///
+    /// This method never blocks, it will return quickly (depending on the execution time
+    /// of 'f').
+    ///
+    /// WARNING!
+    /// Calling this method does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance reloads to the new value. This reload happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this method returns.
+    pub fn rcu_maybe2<F>(&mut self, f: F) -> RcuResult
+    where
+        F: FnOnce(&T) -> Option<T>,
+    {
+        self.rcu_impl(f)
     }
 }
 impl<T: 'static + ?Sized> ArcShift<T> {
@@ -1901,7 +1943,7 @@ impl<T: 'static + ?Sized> ArcShift<T> {
             }
         }
     }
-    /// This function makes sure to update this instance of ArcShift to the newest value.
+    /// This method makes sure to update this instance of ArcShift to the newest value.
     ///
     /// Calling the regular [`ArcShift::get`] already does this, so this is rarely needed.
     /// But if mutable access to a ArcShift is only possible at certain points in the program,
@@ -2234,7 +2276,7 @@ impl<T: 'static + ?Sized> ArcShift<T> {
     /// of the smart pointer.
     ///
     /// Note!
-    /// As a consequence of the rule above, this function will never succeed if
+    /// As a consequence of the rule above, this method will never succeed if
     /// there is a ArcShiftLight instance alive. This is because it is then possible
     /// to create another ArcShift from that ArcShiftLight, and ArcShift does not support
     /// invalidating existing instances of ArcShiftLight (or ArcShift, for that matter).
@@ -2270,12 +2312,12 @@ impl<T: 'static + ?Sized> ArcShift<T> {
     ///
     /// This method never blocks, it will return quickly.
     ///
-    /// This function is useful for types T which are too large to fit on the stack.
+    /// This method is useful for types T which are too large to fit on the stack.
     /// The value T will be moved directly to the internal heap-structure, without
     /// being even temporarily stored on the stack, even in debug builds.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared_box(&self, new_payload: Box<T>) {
@@ -2443,12 +2485,12 @@ impl<T: 'static + ?Sized> ArcShift<T> {
     ///
     /// This method never blocks, it will return quickly.
     ///
-    /// This function is useful for types T which are too large to fit on the stack.
+    /// This method is useful for types T which are too large to fit on the stack.
     /// The value T will be moved directly to the internal heap-structure, without
     /// being even temporarily stored on the stack, even in debug builds.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
@@ -2456,7 +2498,7 @@ impl<T: 'static + ?Sized> ArcShift<T> {
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
+    /// before this method returns.
     pub fn update_box(&mut self, new_payload: Box<T>) {
         self.update_shared_box(new_payload);
         debug_println!("self.reload()");
@@ -2536,9 +2578,15 @@ impl<T: 'static + ?Sized> ArcShift<T> {
     }
 }
 
-enum RcuResult {
+/// The result type for the method [`ArcShift::rcu_maybe2`]
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+pub enum RcuResult {
+    /// The pointee value was updated
     Update,
+    /// No update occurred, because no update was actually desired.
     NoUpdate,
+    /// No update occurred, because the current thread raced with another thread, and lost.
+    /// The other thread has updated the value.
     Race,
 }
 
@@ -2570,7 +2618,7 @@ impl<T: 'static + Sized> ArcShift<T> {
     /// This method never blocks, it will return quickly.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance is dropped or reloaded.
     pub fn update_shared(&self, new_payload: T) {
@@ -2600,7 +2648,7 @@ impl<T: 'static + Sized> ArcShift<T> {
     /// This method never blocks, it will return quickly.
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
@@ -2608,31 +2656,31 @@ impl<T: 'static + Sized> ArcShift<T> {
     /// Note, this method, in contrast to 'upgrade_shared', actually does reload
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
+    /// before this method returns.
     pub fn update(&mut self, new_payload: T) {
         self.update_shared(new_payload);
         debug_println!("self.reload()");
         self.reload();
     }
 
-    /// This method calls the supplied function with the previous value pointed to.
-    /// It then sets the current value to the value returned by the function.
+    /// This method calls the supplied closure with the previous value pointed to.
+    /// It then sets the current value to the value returned by the closure.
     ///
-    /// Note, there is no guarantee that the value isn't updated while the supplied function
+    /// Note, there is no guarantee that the value isn't updated while the supplied closure
     /// 'f' is running. This will be detected, and the value returned by 'f' will
-    /// be dropped and no update will occur. This function returns true if the value
+    /// be dropped and no update will occur. This method returns true if the value
     /// was updated, false otherwise. The only reason it can fail is if some other thread
     /// updated the value while 'rcu' was running.
     ///
     /// If other threads do simultaneous updates, there's no particular guarantee
     /// that whatever value is returned by f will ever be read by another thread before it is
-    /// overwritten, unless the other writes also use the 'rcu'-function.
+    /// overwritten, unless the other writes also use one of the 'rcu'-methods.
     ///
     /// This method never blocks, it will return quickly (depending on the execution time
     /// of 'f').
     ///
     /// WARNING!
-    /// Calling this function does *not* cause the old value to be dropped before
+    /// Calling this method does *not* cause the old value to be dropped before
     /// the new value is stored. The old instance of T is dropped when the last
     /// ArcShift instance reloads to the new value. This reload happens only
     /// when the last instance is dropped or reloaded.
@@ -2640,7 +2688,7 @@ impl<T: 'static + Sized> ArcShift<T> {
     /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
     /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
     /// last remaining instance, the old value that is being replaced will be dropped
-    /// before this function returns.
+    /// before this method returns.
     pub fn rcu<F>(&mut self, f: F) -> bool
     where
         F: FnOnce(&T) -> T,
