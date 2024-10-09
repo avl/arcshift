@@ -2607,7 +2607,7 @@ impl<T: 'static + ?Sized> ArcShift<T> {
 }
 
 /// The result type for the method [`ArcShift::rcu_maybe2`]
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RcuResult {
     /// The pointee value was updated
     Update,
