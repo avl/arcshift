@@ -327,7 +327,17 @@ fn simple_rcu_maybe() {
         assert_eq!(*shift.get(), 43u32);
     })
 }
-
+#[test]
+fn simple_rcu_maybe2() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        assert_eq!(shift.rcu_maybe2(|x| Some(x + 1)), RcuResult::Update);
+        assert_eq!(shift.rcu_maybe2(|_x| None), RcuResult::NoUpdate);
+        assert_eq!(*shift.get(), 43u32);
+        assert_eq!(shift.rcu_maybe(|_x| None), false);
+        assert_eq!(*shift.get(), 43u32);
+    })
+}
 #[test]
 fn simple_deref() {
     model(|| {
