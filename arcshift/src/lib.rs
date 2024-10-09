@@ -1787,8 +1787,8 @@ impl<T: 'static> ArcShift<T> {
     }
 
     /// This method calls the supplied closure with the previous value pointed to.
-    /// It then attempts to set the current value to the value returned by the method, if the method
-    /// returns Some(...).
+    /// It then attempts to set the current value to the value returned by the closure, unless
+    /// the closure returned None..
     ///
     /// The return value of this method is as follows:
     ///
