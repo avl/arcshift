@@ -225,6 +225,7 @@ use std::alloc::Layout;
 use std::backtrace::Backtrace;
 use std::cell::{Cell, UnsafeCell};
 use std::fmt::{Debug, Display, Formatter};
+use std::hint::spin_loop;
 use std::marker::PhantomData;
 use std::mem;
 use std::mem::{ManuallyDrop, MaybeUninit};
@@ -1783,6 +1784,45 @@ impl<T: 'static> ArcShift<T> {
         match self.rcu_impl(f) {
             RcuResult::Update => true,
             RcuResult::NoUpdate | RcuResult::Race => false,
+        }
+    }
+
+    /// This method calls the supplied closure with the previous value pointed to.
+    /// It then sets the current value to the first value returned by the closure.
+    ///
+    /// When this method returns, the value will have been updated. Note,
+    /// the closure may be called multiple times, if there are other threads
+    /// updating this instance concurrently.
+    ///
+    /// If other threads do simultaneous updates, there's no particular guarantee
+    /// that whatever value is returned by f will ever be read by another thread before it is
+    /// overwritten, unless the other writes also use the 'rcu'/'rcu_x'-methods.
+    ///
+    /// This method never blocks, it will return quickly (depending on the execution time
+    /// of 'f').
+    ///
+    /// WARNING!
+    /// Calling this method does *not* cause the old value to be dropped before
+    /// the new value is stored. The old instance of T is dropped when the last
+    /// ArcShift instance reloads to the new value. This reload happens only
+    /// when the last instance is dropped or reloaded.
+    ///
+    /// Note, this method, in contrast to (for example) 'upgrade_shared', actually does reload
+    /// the 'self' ArcShift-instance. This has the effect that if 'self' is the
+    /// last remaining instance, the old value that is being replaced will be dropped
+    /// before this method returns.
+    pub fn rcu_safe<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&T) -> T
+    {
+        loop {
+            match self.rcu_impl(|prev|{
+                Some(f(prev))
+            }) {
+                RcuResult::Update => return,
+                RcuResult::NoUpdate | RcuResult::Race => {},
+            }
+            spin_loop()
         }
     }
 

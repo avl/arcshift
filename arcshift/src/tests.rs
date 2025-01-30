@@ -328,6 +328,14 @@ fn simple_rcu_maybe() {
     })
 }
 #[test]
+fn simple_rcu_safe() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        shift.rcu_safe(|x| x + 1);
+        assert_eq!(*shift.get(), 43u32);
+    })
+}
+#[test]
 fn simple_rcu_maybe2() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
@@ -738,6 +746,33 @@ fn simple_threading2d() {
             _ = t2.join().unwrap();
         }
         owner.validate();
+    });
+}
+
+#[test]
+fn simple_threading_rcu() {
+    model(|| {
+        let mut shift1 = ArcShift::new(42u32);
+        let mut shift2 = ArcShift::clone(&shift1);
+        let mut shift3 = ArcShift::clone(&shift1);
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift1.rcu_safe(|prev|*prev+1);
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.rcu_safe(|prev|*prev+1);
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+        assert_eq!(*shift3.get(), 44);
     });
 }
 
