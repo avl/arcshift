@@ -402,7 +402,7 @@ pub struct ArcShiftCellHandle<'a, T: 'static + ?Sized> {
     cell: &'a ArcShiftCell<T>,
 }
 
-impl<'a, T: 'static + ?Sized> Drop for ArcShiftCellHandle<'a, T> {
+impl<T: 'static + ?Sized> Drop for ArcShiftCellHandle<'_, T> {
     fn drop(&mut self) {
         let mut rec = self.cell.recursion.get();
         rec -= 1;
@@ -416,7 +416,7 @@ impl<'a, T: 'static + ?Sized> Drop for ArcShiftCellHandle<'a, T> {
     }
 }
 
-impl<'a, T: 'static + ?Sized> Deref for ArcShiftCellHandle<'a, T> {
+impl<T: 'static + ?Sized> Deref for ArcShiftCellHandle<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -1813,14 +1813,12 @@ impl<T: 'static> ArcShift<T> {
     /// before this method returns.
     pub fn rcu_safe<F>(&mut self, mut f: F)
     where
-        F: FnMut(&T) -> T
+        F: FnMut(&T) -> T,
     {
         loop {
-            match self.rcu_impl(|prev|{
-                Some(f(prev))
-            }) {
+            match self.rcu_impl(|prev| Some(f(prev))) {
                 RcuResult::Update => return,
-                RcuResult::NoUpdate | RcuResult::Race => {},
+                RcuResult::NoUpdate | RcuResult::Race => {}
             }
             spin_loop()
         }

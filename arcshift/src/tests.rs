@@ -759,7 +759,7 @@ fn simple_threading_rcu() {
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
-                shift1.rcu_safe(|prev|*prev+1);
+                shift1.rcu_safe(|prev| *prev + 1);
             })
             .unwrap();
 
@@ -767,7 +767,7 @@ fn simple_threading_rcu() {
             .name("t2".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
-                shift2.rcu_safe(|prev|*prev+1);
+                shift2.rcu_safe(|prev| *prev + 1);
             })
             .unwrap();
         _ = t1.join().unwrap();
