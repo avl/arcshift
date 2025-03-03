@@ -2,7 +2,7 @@
 
 use crate::tests::leak_detection::SpyOwner2;
 use crate::tests::{model, model2, InstanceSpy2};
-use crate::{atomic, ArcShift, ArcShiftLight};
+use crate::{atomic, ArcShift, ArcShiftWeak};
 
 fn generic_3thread_ops_a<
     F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
@@ -74,9 +74,9 @@ fn generic_3thread_ops_a<
 fn generic_3thread_ops_b<
     F1: Fn(
             &SpyOwner2,
-            ArcShiftLight<InstanceSpy2>,
+            ArcShiftWeak<InstanceSpy2>,
             &'static str,
-        ) -> Option<ArcShiftLight<InstanceSpy2>>
+        ) -> Option<ArcShiftWeak<InstanceSpy2>>
         + Sync
         + Send
         + 'static,
@@ -104,7 +104,7 @@ fn generic_3thread_ops_b<
             let f3 = f3.clone();
             let owner = std::sync::Arc::new(SpyOwner2::new());
             {
-                let shift1 = ArcShiftLight::new(owner.create("orig"));
+                let shift1 = ArcShiftWeak::new(owner.create("orig"));
                 let shift2 = shift1.upgrade();
                 let shift3 = shift1.upgrade();
                 let owner_ref1 = owner.clone();
@@ -158,9 +158,9 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
     let ops1: Vec<
         fn(
             &SpyOwner2,
-            ArcShiftLight<InstanceSpy2>,
+            ArcShiftWeak<InstanceSpy2>,
             &'static str,
-        ) -> Option<ArcShiftLight<InstanceSpy2>>,
+        ) -> Option<ArcShiftWeak<InstanceSpy2>>,
     > = vec![
         |_, shift, _| {
             _ = shift.upgrade();

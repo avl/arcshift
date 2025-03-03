@@ -409,14 +409,14 @@ fn simple_try_into() {
 #[test]
 fn simple_clone_light() {
     model(|| {
-        let shift = ArcShiftLight::new(42u32);
+        let shift = ArcShiftWeak::new(42u32);
         _ = shift.clone();
     });
 }
 #[test]
 fn simple_update_light() {
     model(|| {
-        let mut shift = ArcShiftLight::new(42u32);
+        let mut shift = ArcShiftWeak::new(42u32);
         shift.update(43);
         assert_eq!(*shift.upgrade().get(), 43);
     });
@@ -424,7 +424,7 @@ fn simple_update_light() {
 #[test]
 fn simple_update_box_light() {
     model(|| {
-        let mut shift = ArcShiftLight::new(42u32);
+        let mut shift = ArcShiftWeak::new(42u32);
         shift.update_box(Box::new(43));
         assert_eq!(*shift.upgrade().get(), 43);
     });
@@ -510,7 +510,7 @@ fn simple_update3() {
 #[test]
 fn simple_update4() {
     model(|| {
-        let mut shiftlight = ArcShiftLight::new(1);
+        let mut shiftlight = ArcShiftWeak::new(1);
         shiftlight.update(2);
         assert_eq!(*shiftlight.upgrade().get(), 2);
 
@@ -538,7 +538,7 @@ fn simple_update5() {
 fn simple_upgrade3a1() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+        let shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
 
         debug_println!("==== running shift.get() = ");
         let mut shift = shiftlight.upgrade();
@@ -559,7 +559,7 @@ fn simple_upgrade3a1() {
 fn simple_upgrade3a0() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shift = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+        let shift = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
         let mut arc = shift.upgrade();
         for _ in 0..10 {
             arc.update(InstanceSpy::new(count.clone()));
@@ -576,7 +576,7 @@ fn simple_upgrade3a0() {
 fn simple_upgrade3b() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shift = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+        let shift = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
         let mut arc = shift.upgrade();
         for _ in 0..10 {
             arc.update(InstanceSpy::new(count.clone()));
@@ -595,7 +595,7 @@ fn simple_upgrade3b() {
 fn simple_upgrade4() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+        let shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
         let shift = shiftlight.upgrade();
         debug_println!("== Calling update_shared ==");
         shift.update_shared(InstanceSpy::new(count.clone()));
@@ -613,7 +613,7 @@ fn simple_upgrade4() {
 fn simple_upgrade5() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+        let mut shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
         assert_eq!(count.load(Ordering::Relaxed), 1);
         let shift = shiftlight.upgrade();
         debug_println!("== Calling update_shared ==");
@@ -629,7 +629,7 @@ fn simple_upgrade6() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         {
-            let mut shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+            let mut shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
             assert_eq!(shiftlight.get_internal_node_count(), 1);
             debug_println!("== Calling update_shared ==");
             shiftlight.update_shared(InstanceSpy::new(count.clone()));
@@ -649,7 +649,7 @@ fn simple_upgrade4b() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         {
-            let shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+            let shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
             let _shiftlight1 = shiftlight.clone();
             let _shiftlight2 = shiftlight.clone();
             let _shiftlight3 = shiftlight.clone();
@@ -672,7 +672,7 @@ fn simple_upgrade4c() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         {
-            let mut shiftlight = ArcShiftLight::new(InstanceSpy::new(count.clone()));
+            let mut shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
             let _shiftlight1 = shiftlight.clone();
             let _shiftlight2 = shiftlight.clone();
             let _shiftlight3 = shiftlight.clone();
@@ -721,7 +721,7 @@ fn simple_threading2d() {
     model(|| {
         let owner = std::sync::Arc::new(SpyOwner2::new());
         {
-            let shiftlight = ArcShiftLight::new(owner.create("orig"));
+            let shiftlight = ArcShiftWeak::new(owner.create("orig"));
             let mut shift = shiftlight.upgrade();
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
@@ -779,7 +779,7 @@ fn simple_threading_rcu() {
 #[test]
 fn simple_threading2b() {
     model(|| {
-        let shift1 = ArcShiftLight::new(42u32);
+        let shift1 = ArcShiftWeak::new(42u32);
         let mut shift2 = shift1.upgrade();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -805,7 +805,7 @@ fn simple_threading2b() {
 #[test]
 fn simple_threading2c() {
     model(|| {
-        let shift1 = ArcShiftLight::new(42u32);
+        let shift1 = ArcShiftWeak::new(42u32);
         let mut shift2 = shift1.upgrade();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -955,7 +955,7 @@ fn simple_threading3c() {
 #[test]
 fn simple_threading3d() {
     model(|| {
-        let shift1 = std::sync::Arc::new(ArcShiftLight::new(42u32));
+        let shift1 = std::sync::Arc::new(ArcShiftWeak::new(42u32));
         let shift2 = std::sync::Arc::clone(&shift1);
         let shift3 = (*shift1).upgrade();
         let t1 = atomic::thread::Builder::new()
@@ -1270,7 +1270,7 @@ fn simple_threading4d() {
         let count = std::sync::Arc::new(SpyOwner2::new());
         {
             let count3 = count.clone();
-            let shift1 = std::sync::Arc::new(ArcShiftLight::new(count.create("orig")));
+            let shift1 = std::sync::Arc::new(ArcShiftWeak::new(count.create("orig")));
 
             let shift2 = shift1.upgrade();
             let shift3 = shift1.upgrade();
@@ -1332,7 +1332,7 @@ fn simple_threading4d() {
 #[test]
 fn simple_threading4e() {
     model(|| {
-        let shift = std::sync::Arc::new(ArcShiftLight::new(42u32));
+        let shift = std::sync::Arc::new(ArcShiftWeak::new(42u32));
         let shift1 = shift.upgrade();
         let shift2 = shift.upgrade();
         let shift3 = shift.upgrade();

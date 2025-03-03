@@ -2,7 +2,7 @@
 
 use super::{atomic, model, InstanceSpy2};
 use crate::tests::leak_detection::SpyOwner2;
-use crate::{get_refcount, ArcShift, ArcShiftLight, MAX_ROOTS};
+use crate::{get_refcount, ArcShift, ArcShiftWeak, MAX_ROOTS};
 use crossbeam_channel::bounded;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
@@ -12,7 +12,7 @@ use std::hash::Hash;
 
 enum PipeItem<T: 'static> {
     Shift(ArcShift<T>),
-    Root(ArcShiftLight<T>),
+    Root(ArcShiftWeak<T>),
 }
 
 fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
@@ -50,7 +50,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     let senders = std::sync::Arc::new(senders);
     let all_possible: std::sync::Arc<HashSet<T>> = std::sync::Arc::new(all_possible);
     //println!("Start iteration");
-    let start_arc_light = ArcShiftLight::new(initial);
+    let start_arc_light = ArcShiftWeak::new(initial);
     for (threadnr, (cmds, receiver)) in batches.into_iter().zip(receivers).enumerate() {
         let thread_senders = std::sync::Arc::clone(&senders);
         let thread_all_possible: std::sync::Arc<HashSet<T>> = std::sync::Arc::clone(&all_possible);
@@ -58,7 +58,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
         let start_arc_light = start_arc_light.clone();
         let jh = atomic::thread::Builder::new().name(format!("thread{}", threadnr)).spawn(move || {
             let mut curval: Option<ArcShift<T>> = Some(start_arc0);
-            let mut curvalroot: Option<ArcShiftLight<T>> = Some(start_arc_light);
+            let mut curvalroot: Option<ArcShiftWeak<T>> = Some(start_arc_light);
             for cmd in cmds {
                 if let Ok(val) = receiver.try_recv() {
                     match val {
@@ -108,7 +108,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                         if let Some(curvalroot) = curvalroot.as_ref() {
                             curvalroot.update_shared(val);
                         } else {
-                            curvalroot = Some(ArcShiftLight::new(val));
+                            curvalroot = Some(ArcShiftWeak::new(val));
                         }
                     }
                     FuzzerCommand::CloneArcLight { .. } => {
@@ -121,7 +121,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                         if let Some(curvalroot) = &mut curvalroot {
                             curvalroot.update_shared(val);
                         } else {
-                            curvalroot = Some(ArcShiftLight::new(val));
+                            curvalroot = Some(ArcShiftWeak::new(val));
                         }
                     }
                     FuzzerCommand::UpgradeLight(_) => {
@@ -185,7 +185,7 @@ impl<T> FuzzerCommand<T> {
 fn check_too_many_roots() {
     model(|| {
         let mut temp = vec![];
-        let light = ArcShiftLight::new(1u8);
+        let light = ArcShiftWeak::new(1u8);
         for _ in 0..MAX_ROOTS {
             temp.push(light.clone());
             atomic::spin_loop();
@@ -198,7 +198,7 @@ fn check_too_many_roots() {
 fn check_too_many_roots2() {
     model(|| {
         let mut temp = vec![];
-        let light = ArcShiftLight::new(1u8);
+        let light = ArcShiftWeak::new(1u8);
         // When running under 'shuttle', we can't do too many steps, so we can't
         // exhaust all MAX_ROOTS-items naturally, we have to cheat like this.
         get_refcount(light.item.as_ptr()).fetch_add(MAX_ROOTS - 2, atomic::Ordering::SeqCst);
@@ -215,7 +215,7 @@ fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
 ) {
     let cmds = make_commands::<T>(rng, &mut constructor);
     let mut arcs: [Option<ArcShift<T>>; 3] = [(); 3].map(|_| None);
-    let mut arcroots: [Option<ArcShiftLight<T>>; 3] = [(); 3].map(|_| None);
+    let mut arcroots: [Option<ArcShiftWeak<T>>; 3] = [(); 3].map(|_| None);
     debug_println!("Starting fuzzrun");
     for cmd in cmds {
         debug_println!("\n=== Applying cmd: {:?} ===", cmd);
@@ -249,7 +249,7 @@ fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                 arcs[chn as usize] = None;
             }
             FuzzerCommand::CreateArcLight(chn, val) => {
-                arcroots[chn as usize] = Some(ArcShiftLight::new(val));
+                arcroots[chn as usize] = Some(ArcShiftWeak::new(val));
             }
             FuzzerCommand::CloneArcLight { from, to } => {
                 let clone = arcroots[from as usize].clone();
@@ -259,7 +259,7 @@ fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                 if let Some(arc) = &mut arcroots[chn as usize] {
                     arc.update_shared(val);
                 } else {
-                    arcroots[chn as usize] = Some(ArcShiftLight::new(val));
+                    arcroots[chn as usize] = Some(ArcShiftWeak::new(val));
                 }
             }
             FuzzerCommand::UpgradeLight(chn) => {
