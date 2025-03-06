@@ -29,6 +29,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
             all_possible.insert(val.clone());
         }
     }
+    println!("Cmds: {:?}", cmds);
     let mut batches = Vec::new();
     let mut senders = vec![];
     let mut receivers = vec![];
@@ -262,8 +263,14 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 ) -> Vec<FuzzerCommand<T>> {
     let mut ret = Vec::new();
 
+    compile_error!("\
+
+    this provokes the error:
+    cargo test --release generic_thread_fuzzing_121 --features=debug
+
+    ")
     #[cfg(not(loom))]
-    const COUNT: usize = 50;
+    const COUNT: usize = 2; //TODO: Increase to 50?
     #[cfg(loom)]
     const COUNT: usize = 10;
 
@@ -432,9 +439,9 @@ db9664c9966d4b962cdbb265db926c4b9224599224db926ddb962dc9b26d4b966ccb9665cbb2
 }
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
-fn generic_thread_fuzzing_13176() {
+fn generic_thread_fuzzing_121() {
     {
-        let i = 13176;
+        let i = 121;
         let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
         println!("--- Seed {} ---", i);
         model(move || {
@@ -512,6 +519,19 @@ fn generic_fuzzing_all() {
 #[test]
 fn generic_fuzzing_159() {
     let seed = 159;
+    model(move || {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut counter = 0u32;
+        debug_println!("Running seed {}", seed);
+        run_fuzz(&mut rng, move || -> u32 {
+            counter += 1;
+            counter
+        });
+    })
+}
+#[test]
+fn generic_fuzzing_121() {
+    let seed = 121;
     model(move || {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut counter = 0u32;
