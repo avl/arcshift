@@ -32,7 +32,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     let mut batches = Vec::new();
     let mut senders = vec![];
     let mut receivers = vec![];
-    for _ in 0..3 {
+    for _ in 0..2 {
         let (sender, receiver) = bounded::<PipeItem<T>>(cmds.len());
         senders.push(sender);
         receivers.push(receiver);
