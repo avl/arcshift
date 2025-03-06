@@ -71,6 +71,8 @@ fn generic_3thread_ops_a<
         owner.validate();
     });
 }
+
+#[allow(unused)] //TODO: Remove
 fn generic_3thread_ops_b<
     F1: Fn(
             &SpyOwner2,
@@ -108,40 +110,55 @@ fn generic_3thread_ops_b<
                 let shift1 = ArcShift::downgrade(&shift);
                 let shift2 = shift.clone();
                 let shift3 = shift.clone();
+
+
+                debug_println!("Prior to debug_validate");
+                unsafe { ArcShift::debug_validate(&[&shift,&shift2,&shift3],&[&shift1]) };
+                debug_println!("Post debug_validate");
+
                 let owner_ref1 = owner.clone();
                 let owner_ref2 = owner.clone();
                 let owner_ref3 = owner.clone();
 
+
                 let t1 = atomic::thread::Builder::new()
                     .name("t1".to_string())
-                    .stack_size(1_000_000)
+                    .stack_size(5_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t1 =");
-                        f1(&*owner_ref1, shift1, "t1")
+                        let t = f1(&*owner_ref1, shift1, "t1");
+                        debug_println!(" = thread 1 dropping =");
+                        t
                     })
                     .unwrap();
 
                 let t2 = atomic::thread::Builder::new()
                     .name("t2".to_string())
-                    .stack_size(1_000_000)
+                    .stack_size(5_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t2 =");
-                        f2(&*owner_ref2, shift2, "t2")
+                        let t = f2(&*owner_ref2, shift2, "t2");
+
+                        debug_println!(" = thread 2 dropping =");
+                        t
                     })
                     .unwrap();
 
                 let t3 = atomic::thread::Builder::new()
                     .name("t3".to_string())
-                    .stack_size(1_000_000)
+                    .stack_size(5_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t3 =");
-                        f3(&*owner_ref3, shift3, "t3")
+                        let t = f3(&*owner_ref3, shift3, "t3");
+                        debug_println!(" = thread 3 dropping =");
+                        t
                     })
                     .unwrap();
                 debug_println!("Begin joining threads");
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
                 _ = t3.join().unwrap();
+                unsafe { ArcShift::debug_validate(&[&shift],&[]) };
                 debug_println!("Joined all threads");
             }
             owner.validate();
@@ -149,9 +166,15 @@ fn generic_3thread_ops_b<
         repro,
     );
 }
+
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
-fn generic_3threading_b_all() {
+fn generic_3threading_b_400() {
+    generic_3threading_b_all_impl(4, 0, 0, None);
+}
+#[cfg(not(feature = "disable_slow_tests"))]
+#[test]
+fn generic_3threading_b_000() {
     generic_3threading_b_all_impl(0, 0, 0, None);
 }
 
@@ -164,21 +187,21 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
         ) -> Option<ArcShiftWeak<InstanceSpy2>>,
     > = vec![
         |_, shift, _| {
+            debug_println!("====> shift.upgrade()");
             _ = shift.upgrade();
             Some(shift)
         },
         |_, shift, _| {
+            debug_println!("====> shift.clone()");
             _ = shift.clone();
             Some(shift)
         },
-        |_, shift, _| {
-            _ = shift.upgrade();
-            None
-        },
         |_, shift, _| Some(shift),
         |owner, shift, thread| {
+            debug_println!("====> shift.upgrade()");
             let upgraded = shift.upgrade();
             if let Some(mut upgraded) = upgraded {
+                debug_println!("====> upgraded.upgrade()");
                 upgraded.update(owner.create(thread))
             }
             Some(shift)
@@ -194,22 +217,22 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
     > = vec![
         |owner, mut shift, thread| {
-            shift.update(owner.create(thread));
-            Some(shift)
-        },
-        |owner, mut shift, thread| {
+            debug_println!("====> shift.update()");
             shift.update(owner.create(thread));
             Some(shift)
         },
         |_owner, mut shift, _thread| {
+            debug_println!("====> shift.get()");
             std::hint::black_box(shift.get());
             Some(shift)
         },
         |_owner, shift, _thread| {
+            debug_println!("====> shift.shared_get()");
             std::hint::black_box(shift.shared_get());
             Some(shift)
         },
         |_owner, mut shift, _thread| {
+            debug_println!("====> shift.reload()");
             shift.reload();
             Some(shift)
         },

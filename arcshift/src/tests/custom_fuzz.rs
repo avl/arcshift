@@ -70,7 +70,9 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                         }
                     }
                 }
-                debug_println!("Apply cmd {:?}: {:?}", cmd, atomic::thread::current().id());
+                debug_println!(" === Apply cmd {:?}: {:?} ===", cmd, atomic::thread::current().id());
+                //loom::sync::atomic::spin_loop_hint();
+                //atomic::spin_loop();
                 match cmd {
                     FuzzerCommand::CreateUpdateArc(_, val) => {
                         if let Some(curval) = &mut curval {
@@ -131,6 +133,8 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     for jh in jhs {
         jh.join().unwrap();
     }
+    drop(senders);
+    unsafe { ArcShift::debug_validate(&[&start_arc0], &[]) };
 }
 
 #[derive(Debug)]
@@ -263,7 +267,7 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
     #[cfg(loom)]
     const COUNT: usize = 10;
 
-    for _x in 0..50 {
+    for _x in 0..COUNT {
         match rng.gen_range(0..9) {
             0 => {
                 let chn = rng.gen_range(0..3);
@@ -318,7 +322,37 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
     }
     ret
 }
+#[test]
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_thread_fuzzing_57() {
+    #[cfg(miri)]
+    const COUNT: u64 = 30;
+    #[cfg(any(loom))]
+    const COUNT: u64 = 100;
+    #[cfg(all(feature = "shuttle", not(coverage)))]
+    const COUNT: u64 = 1000;
+    #[cfg(coverage)]
+    const COUNT: u64 = 10;
 
+    let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
+    const COUNT: u64 = 100000;
+    {
+        let i = 57;
+        println!("--- Seed {} ---", i);
+        model(move || {
+            let mut rng = StdRng::seed_from_u64(i);
+            let mut counter = 0usize;
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            let owner_ref = owner.clone();
+            run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
+                counter += 1;
+                owner_ref.create(statics[counter % 10])
+            });
+            owner.validate();
+        });
+    }
+}
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_all() {
@@ -335,6 +369,73 @@ fn generic_thread_fuzzing_all() {
     #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
     const COUNT: u64 = 100000;
     for i in 0..COUNT {
+        println!("--- Seed {} ---", i);
+        model(move || {
+            let mut rng = StdRng::seed_from_u64(i);
+            let mut counter = 0usize;
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            let owner_ref = owner.clone();
+            run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
+                counter += 1;
+                owner_ref.create(statics[counter % 10])
+            });
+            owner.validate();
+        });
+    }
+}
+#[test]
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_thread_fuzzing_repro_all() {
+    #[cfg(miri)]
+    const COUNT: u64 = 30;
+    #[cfg(any(loom))]
+    const COUNT: u64 = 100;
+    #[cfg(all(feature = "shuttle", not(coverage)))]
+    const COUNT: u64 = 1000;
+    #[cfg(coverage)]
+    const COUNT: u64 = 10;
+
+    let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
+    const COUNT: u64 = 100000;
+
+    {
+        let i = 0;
+        println!("--- Seed {} ---", i);
+        crate::tests::model2(move || {
+            let mut rng = StdRng::seed_from_u64(i);
+            let mut counter = 0usize;
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            let owner_ref = owner.clone();
+            run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
+                counter += 1;
+                owner_ref.create(statics[counter % 10])
+            });
+            owner.validate();
+        }, Some(
+            "
+9102e707cc949d96eea7cd80a60100000000200920480a140442a020d0a64dd3a669c9b62d9b
+b66c53142d91a249daa6499a142949924cca962c99b648cb942c9396659bb26dd3b26c923445
+ca2425d116659b12295b1665dba24c9b946c52a66c8a926c99a425d1b42d5132495ba26d91b6
+65c9a26d52b66c5aa4495a244551b2494a24698b922593942999b424db266551a629c9944d8a
+3445d3966459a649daa449d29449993649d9a268532425d2962891a24c519425cab249dbb228
+4a922cc9a62dd1b26c52266d53344589b24891b6255a146d99b249999425d3a26892b22d5194
+2c52146d99246dd1b26c4ba6458924455b36498912495926294bb625c9b664c9b62559b66c5b
+926ddbb22cd9b26cc992255b92655b926459b22459b264cbb66c49b62d49b664c9b2655bb62d
+db9664c9966d4b962cdbb265db926c4b9224599224db926ddb962dc9b26d4b966ccb9665cbb2
+2c4992655b962d499625d9b624cb966c49966cdb9224dbb62c4bb225d9b22559b625db92654b
+9624cbb26d59b62409
+"
+
+        ));
+    }
+}
+#[test]
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_thread_fuzzing_13176() {
+    {
+        let i = 13176;
+        let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
         println!("--- Seed {} ---", i);
         model(move || {
             let mut rng = StdRng::seed_from_u64(i);

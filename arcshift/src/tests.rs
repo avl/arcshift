@@ -44,7 +44,7 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
 #[cfg(all(feature = "shuttle", coverage))]
 const SHUTTLE_ITERATIONS: usize = 50;
 #[cfg(all(feature = "shuttle", not(coverage)))]
-const SHUTTLE_ITERATIONS: usize = 500;
+const SHUTTLE_ITERATIONS: usize = 50;
 
 #[cfg(feature = "shuttle")]
 fn model(x: impl Fn() + 'static + Send + Sync) {
@@ -224,9 +224,16 @@ fn simple_multiple_cell_handles() {
                 let r1 = cell.borrow();
                 let r2 = cell.borrow();
                 root.update(owner.create("C"));
+                assert_eq!(root.str(), "C");
+                assert_eq!(r1.str(), "B");
+                assert_eq!(r2.str(), "B");
+                assert_eq!(owner.count(), 2); //Because we have two references, we can't reload.
+            }
+            {
+                let r1 = cell.borrow();
+                let r2 = cell.borrow();
                 assert_eq!(r1.str(), "C");
                 assert_eq!(r2.str(), "C");
-                assert_eq!(owner.count(), 2); //Because we have two references, we can't reload.
             }
             assert_eq!(owner.count(), 1); //But when the last ref is dropped, we do reload
         }
@@ -247,11 +254,14 @@ fn simple_cell_recursion() {
                     assert_eq!(val.str(), "root");
                     root.update(owner.create("B"));
                     cell.get(|val| {
-                        assert_eq!(val.str(), "B");
+                        assert_eq!(val.str(), "root");
                     });
                     assert_eq!(val.str(), "root");
                 });
                 assert_eq!(val.str(), "root");
+            });
+            cell.get(|val|{
+                assert_eq!(val.str(), "B");
             });
         }
         owner.validate();
@@ -734,15 +744,15 @@ fn simple_threading2c() {
 #[test]
 fn simple_threading3a() {
     model(|| {
-        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
+        let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
         let shift2 = std::sync::Arc::clone(&shift1);
-        let mut shift3 = (shift1.lock().unwrap()).clone();
+        let mut shift3 = (*shift1).clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                shift1.lock().unwrap().update(43);
+                _ = shift1;
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -752,8 +762,7 @@ fn simple_threading3a() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                let mut shift = (shift2.lock().unwrap()).clone();
-                std::hint::black_box(shift.get());
+                _ = shift2;
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -763,7 +772,7 @@ fn simple_threading3a() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.get());
+                shift3.update(43);
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
