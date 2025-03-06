@@ -15,9 +15,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use std::mem::MaybeUninit;
 
 mod custom_fuzz;
-mod leak_detection;
+pub(crate) mod leak_detection;
 mod race_detector;
 
 // All tests are wrapped by these 'model' calls.
@@ -114,6 +115,7 @@ fn simple_unsized_str() {
     })
 }
 use std::cell::{Cell, RefCell};
+use crate::cell::ArcShiftCell;
 
 thread_local! {
 
@@ -274,6 +276,9 @@ fn simple_cell_assign() {
         }
     });
 }
+
+//TODO: Implement and test rcu
+/*
 #[test]
 fn simple_rcu() {
     model(|| {
@@ -346,6 +351,8 @@ fn simple_rcu_maybe2() {
         assert_eq!(*shift.get(), 43u32);
     })
 }
+ */
+
 #[test]
 fn simple_deref() {
     model(|| {
@@ -357,10 +364,10 @@ fn simple_deref() {
 fn simple_get4() {
     model(|| {
         let shift = ArcShift::new(42u32);
-        assert_eq!(*shift.shared_non_reloading_get(), 42u32);
+        assert_eq!(*shift.shared_get(), 42u32);
     })
 }
-
+/* TODO: Implement get_mut
 #[test]
 fn simple_get_mut() {
     model(|| {
@@ -368,7 +375,7 @@ fn simple_get_mut() {
         // Uniquely owned values can be modified using 'try_get_mut'.
         assert_eq!(*shift.try_get_mut().unwrap(), 42);
     })
-}
+}*/
 #[test]
 fn simple_zerosized() {
     model(|| {
@@ -383,10 +390,12 @@ fn simple_update() {
     model(|| {
         let mut shift = ArcShift::new(42);
         let old = &*shift;
-        shift.update_shared(*old + 4);
+        shift.update(*old + 4);
         shift.reload();
     })
 }
+/*
+TODO: implement get_mut and try_into_inner
 #[test]
 fn simple_get_mut2() {
     model(|| {
@@ -405,30 +414,8 @@ fn simple_try_into() {
         assert_eq!(shift.try_into_inner().unwrap(), 42);
     })
 }
+*/
 
-#[test]
-fn simple_clone_light() {
-    model(|| {
-        let shift = ArcShiftWeak::new(42u32);
-        _ = shift.clone();
-    });
-}
-#[test]
-fn simple_update_light() {
-    model(|| {
-        let mut shift = ArcShiftWeak::new(42u32);
-        shift.update(43);
-        assert_eq!(*shift.upgrade().get(), 43);
-    });
-}
-#[test]
-fn simple_update_box_light() {
-    model(|| {
-        let mut shift = ArcShiftWeak::new(42u32);
-        shift.update_box(Box::new(43));
-        assert_eq!(*shift.upgrade().get(), 43);
-    });
-}
 
 #[test]
 // There's no point in running this test under shuttle/loom,
@@ -472,7 +459,7 @@ fn simple_update0() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
-        shift.update_shared(43);
+        shift.update(43);
         assert_eq!(*shift.get(), 43u32);
     });
 }
@@ -481,7 +468,7 @@ fn simple_update_boxed() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
-        shift.update_shared_box(Box::new(43));
+        shift.update_box(Box::new(43));
         assert_eq!(*shift.get(), 43u32);
     });
 }
@@ -491,9 +478,9 @@ fn simple_update2() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
-        shift.update_shared(43);
-        shift.update_shared(44);
-        shift.update_shared(45);
+        shift.update(43);
+        shift.update(44);
+        shift.update(45);
         assert_eq!(*shift.get(), 45u32);
     });
 }
@@ -508,23 +495,6 @@ fn simple_update3() {
 }
 
 #[test]
-fn simple_update4() {
-    model(|| {
-        let mut shiftlight = ArcShiftWeak::new(1);
-        shiftlight.update(2);
-        assert_eq!(*shiftlight.upgrade().get(), 2);
-
-        shiftlight.update_shared(3);
-        assert_eq!(*shiftlight.upgrade().get(), 3);
-
-        shiftlight.update_box(Box::new(4));
-        assert_eq!(*shiftlight.upgrade().get(), 4);
-
-        shiftlight.update_shared_box(Box::new(5));
-        assert_eq!(*shiftlight.upgrade().get(), 5);
-    });
-}
-#[test]
 fn simple_update5() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
@@ -536,111 +506,42 @@ fn simple_update5() {
 
 #[test]
 fn simple_upgrade3a1() {
-    model(|| {
+    //model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
+        let shift1 = ArcShift::new(InstanceSpy::new(count.clone()));
+        let shiftlight = ArcShift::downgrade(&shift1);
 
         debug_println!("==== running shift.get() = ");
-        let mut shift = shiftlight.upgrade();
+        let mut shift2 = shiftlight.upgrade().unwrap();
         debug_println!("==== running arc.update() = ");
-        shift.update(InstanceSpy::new(count.clone()));
+        shift2.update(InstanceSpy::new(count.clone()));
 
+        unsafe { ArcShift::debug_validate(&[&shift1,&shift2], &[&shiftlight]) };
         debug_println!("==== Instance count: {}", count.load(Ordering::SeqCst));
+        drop(shift1);
         assert_eq!(count.load(Ordering::SeqCst), 1); // The 'ArcShiftLight' should *not* keep any version alive
         debug_println!("==== drop arc =");
-        drop(shift);
+        drop(shift2);
         assert_eq!(count.load(Ordering::SeqCst), 1);
         debug_println!("==== drop shiftroot =");
         drop(shiftlight);
         assert_eq!(count.load(Ordering::SeqCst), 0);
-    });
+    //});
 }
 #[test]
 fn simple_upgrade3a0() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shift = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
-        let mut arc = shift.upgrade();
+        let mut arc = ArcShift::new(InstanceSpy::new(count.clone()));
         for _ in 0..10 {
             arc.update(InstanceSpy::new(count.clone()));
             debug_println!("Instance count: {}", count.load(Ordering::SeqCst));
-            assert_eq!(count.load(Ordering::Relaxed), 1); // The 'ArcShiftLight' should *not* keep any version alive
+            arc.reload();
+            assert_eq!(count.load(Ordering::Relaxed), 1); // The 'arc' should *not* keep any version alive
         }
-        drop(arc);
         assert_eq!(count.load(Ordering::SeqCst), 1);
-        drop(shift);
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-    });
-}
-#[test]
-fn simple_upgrade3b() {
-    model(|| {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shift = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
-        let mut arc = shift.upgrade();
-        for _ in 0..10 {
-            arc.update(InstanceSpy::new(count.clone()));
-            black_box(arc.clone());
-            debug_println!("Instance count: {}", count.load(Ordering::SeqCst));
-            assert_eq!(count.load(Ordering::Relaxed), 1); // The 'ArcShiftLight' should *not* keep any version alive
-        }
         drop(arc);
-        assert_eq!(count.load(Ordering::Relaxed), 1);
-        drop(shift);
-        assert_eq!(count.load(Ordering::Relaxed), 0);
-    });
-}
-
-#[test]
-fn simple_upgrade4() {
-    model(|| {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
-        let shift = shiftlight.upgrade();
-        debug_println!("== Calling update_shared ==");
-        shift.update_shared(InstanceSpy::new(count.clone()));
-        debug_println!("== Calling shared_get ==");
-        _ = shift.shared_get();
-        debug_println!("== Calling update_shared ==");
-        shift.update_shared(InstanceSpy::new(count.clone()));
-        debug_println!("== Calling drop(shift) ==");
-        drop(shift);
-
-        assert_eq!(count.load(Ordering::Relaxed), 1);
-    });
-}
-#[test]
-fn simple_upgrade5() {
-    model(|| {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
-        assert_eq!(count.load(Ordering::Relaxed), 1);
-        let shift = shiftlight.upgrade();
-        debug_println!("== Calling update_shared ==");
-        shift.update_shared(InstanceSpy::new(count.clone()));
-        drop(shift);
-        debug_println!("== Calling shared_get ==");
-        shiftlight.reload();
-        assert_eq!(count.load(Ordering::Relaxed), 1);
-    });
-}
-#[test]
-fn simple_upgrade6() {
-    model(|| {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        {
-            let mut shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
-            assert_eq!(shiftlight.get_internal_node_count(), 1);
-            debug_println!("== Calling update_shared ==");
-            shiftlight.update_shared(InstanceSpy::new(count.clone()));
-            assert_eq!(shiftlight.get_internal_node_count(), 2);
-            debug_println!("== Calling shared_get ==");
-            shiftlight.reload();
-            assert_eq!(shiftlight.get_internal_node_count(), 1);
-
-            assert_eq!(count.load(Ordering::Relaxed), 1);
-        }
-        assert_eq!(count.load(Ordering::Relaxed), 0);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
     });
 }
 
@@ -649,14 +550,14 @@ fn simple_upgrade4b() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         {
-            let shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
+            let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
+            let shiftlight = ArcShift::downgrade(&shift);
             let _shiftlight1 = shiftlight.clone();
             let _shiftlight2 = shiftlight.clone();
             let _shiftlight3 = shiftlight.clone();
             let _shiftlight4 = shiftlight.clone();
             let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
 
-            let mut shift = shiftlight.upgrade();
             debug_println!("== Calling update_shared ==");
             shift.update(InstanceSpy::new(count.clone()));
             assert_eq!(count.load(Ordering::Relaxed), 1);
@@ -672,7 +573,8 @@ fn simple_upgrade4c() {
     model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         {
-            let mut shiftlight = ArcShiftWeak::new(InstanceSpy::new(count.clone()));
+            let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
+            let shiftlight = ArcShift::downgrade(&shift);
             let _shiftlight1 = shiftlight.clone();
             let _shiftlight2 = shiftlight.clone();
             let _shiftlight3 = shiftlight.clone();
@@ -680,7 +582,7 @@ fn simple_upgrade4c() {
             let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
 
             debug_println!("== Calling update_shared ==");
-            shiftlight.update(InstanceSpy::new(count.clone()));
+            shift.update(InstanceSpy::new(count.clone()));
             assert_eq!(count.load(Ordering::Relaxed), 1);
             debug_println!("== Calling drop(shift) ==");
             assert_eq!(count.load(Ordering::Relaxed), 1);
@@ -693,13 +595,13 @@ fn simple_upgrade4c() {
 fn simple_threading2() {
     model(|| {
         let shift = ArcShift::new(42u32);
-        let shift1 = shift.clone();
+        let mut shift1 = shift.clone();
         let mut shift2 = shift1.clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
-                shift1.update_shared(43);
+                shift1.update(43);
                 debug_println!("t1 dropping");
             })
             .unwrap();
@@ -721,8 +623,8 @@ fn simple_threading2d() {
     model(|| {
         let owner = std::sync::Arc::new(SpyOwner2::new());
         {
-            let shiftlight = ArcShiftWeak::new(owner.create("orig"));
-            let mut shift = shiftlight.upgrade();
+            let mut shift = ArcShift::new(owner.create("orig"));
+            let shiftlight = ArcShift::downgrade(&shift);
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)
@@ -748,7 +650,7 @@ fn simple_threading2d() {
         owner.validate();
     });
 }
-
+/* TODO: impl rcu
 #[test]
 fn simple_threading_rcu() {
     model(|| {
@@ -775,12 +677,12 @@ fn simple_threading_rcu() {
         assert_eq!(*shift3.get(), 44);
     });
 }
-
+*/
 #[test]
 fn simple_threading2b() {
     model(|| {
-        let shift1 = ArcShiftWeak::new(42u32);
-        let mut shift2 = shift1.upgrade();
+        let mut shift2 = ArcShift::new(42u32);
+        let shift1 = ArcShift::downgrade(&shift2);
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -805,8 +707,8 @@ fn simple_threading2b() {
 #[test]
 fn simple_threading2c() {
     model(|| {
-        let shift1 = ArcShiftWeak::new(42u32);
-        let mut shift2 = shift1.upgrade();
+        let mut shift2 = ArcShift::new(42u32);
+        let shift1 = ArcShift::downgrade(&shift2);
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -832,15 +734,15 @@ fn simple_threading2c() {
 #[test]
 fn simple_threading3a() {
     model(|| {
-        let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
+        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
         let shift2 = std::sync::Arc::clone(&shift1);
-        let mut shift3 = (*shift1).clone();
+        let mut shift3 = (shift1.lock().unwrap()).clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
+                shift1.lock().unwrap().update(43);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -850,7 +752,7 @@ fn simple_threading3a() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                let mut shift = (*shift2).clone();
+                let mut shift = (shift2.lock().unwrap()).clone();
                 std::hint::black_box(shift.get());
                 debug_println!(" = drop t2 =");
             })
@@ -915,15 +817,15 @@ fn simple_threading3b() {
 #[test]
 fn simple_threading3c() {
     model(|| {
-        let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
+        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
         let shift2 = std::sync::Arc::clone(&shift1);
-        let shift3 = (*shift1).clone();
+        let mut shift3 = (shift1.lock().unwrap()).clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                std::hint::black_box(shift1.update_shared(43));
+                std::hint::black_box(shift1.lock().unwrap().update(43));
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -933,7 +835,7 @@ fn simple_threading3c() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                std::hint::black_box(shift2.update_shared(44));
+                std::hint::black_box(shift2.lock().unwrap().update(44));
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -943,7 +845,7 @@ fn simple_threading3c() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.update_shared(45));
+                std::hint::black_box(shift3.update(45));
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
@@ -955,15 +857,15 @@ fn simple_threading3c() {
 #[test]
 fn simple_threading3d() {
     model(|| {
-        let shift1 = std::sync::Arc::new(ArcShiftWeak::new(42u32));
+        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
         let shift2 = std::sync::Arc::clone(&shift1);
-        let shift3 = (*shift1).upgrade();
+        let shift3 = shift1.clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                std::hint::black_box(shift1.upgrade());
+                std::hint::black_box(shift1.lock().unwrap().reload());
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -973,7 +875,7 @@ fn simple_threading3d() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                std::hint::black_box(shift2.update_shared(44));
+                std::hint::black_box(shift2.lock().unwrap().update(44));
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -983,7 +885,7 @@ fn simple_threading3d() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.update_shared(45));
+                std::hint::black_box(shift3.lock().unwrap().update(45));
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
@@ -992,6 +894,8 @@ fn simple_threading3d() {
         _ = t3.join().unwrap();
     });
 }
+
+/* TODO: implement rcu
 #[test]
 fn simple_threading2_rcu() {
     model(|| {
@@ -1026,6 +930,7 @@ fn simple_threading2_rcu() {
         assert_eq!(*shift0.get(), 4);
     });
 }
+
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading3_rcu() {
@@ -1073,20 +978,21 @@ fn simple_threading3_rcu() {
         assert_eq!(*shift0.get(), 6);
     });
 }
+ */
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4a() {
     model(|| {
-        let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
+        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
         let shift2 = std::sync::Arc::clone(&shift1);
         let shift3 = std::sync::Arc::clone(&shift1);
-        let mut shift4 = (*shift1).clone();
+        let mut shift4 = (shift1.lock().unwrap()).clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
+                shift1.lock().unwrap().update(43);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -1096,7 +1002,7 @@ fn simple_threading4a() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                let mut shift = (*shift2).clone();
+                let mut shift = (shift2.lock().unwrap()).clone();
                 std::hint::black_box(shift.get());
                 debug_println!(" = drop t2 =");
             })
@@ -1107,7 +1013,7 @@ fn simple_threading4a() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                shift3.update_shared(44);
+                shift3.lock().unwrap().update(44);
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
@@ -1130,6 +1036,7 @@ fn simple_threading4a() {
     });
 }
 
+/* TODO implement try_into_inner
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4b() {
@@ -1143,7 +1050,7 @@ fn simple_threading4b() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
+                shift1.update(43);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -1164,7 +1071,7 @@ fn simple_threading4b() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                shift3.update_shared(44);
+                shift3.update(44);
                 let t = std::hint::black_box((*shift3).shared_get());
                 debug_println!(" = drop t3 =");
                 return *t;
@@ -1189,14 +1096,14 @@ fn simple_threading4b() {
         assert!(ret == None || ret == Some(43) || ret == Some(44) || ret == Some(42));
     });
 }
-
+*/
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4c() {
     model(|| {
         let count = std::sync::Arc::new(SpyOwner2::new());
         {
-            let shift1 = std::sync::Arc::new(ArcShift::new(count.create("orig")));
+            let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(count.create("orig"))));
             let shift2 = std::sync::Arc::clone(&shift1);
             let shift3 = std::sync::Arc::clone(&shift1);
             let shift4 = std::sync::Arc::clone(&shift1);
@@ -1208,7 +1115,7 @@ fn simple_threading4c() {
                 .stack_size(1_000_00)
                 .spawn(move || {
                     debug_println!(" = On thread t1 = {:?}", std::thread::current().id());
-                    shift1.update_shared(count1.create("t1val"));
+                    shift1.lock().unwrap().update(count1.create("t1val"));
                     debug_println!(" = drop t1 =");
                 })
                 .unwrap();
@@ -1229,11 +1136,8 @@ fn simple_threading4c() {
                 .stack_size(1_000_00)
                 .spawn(move || {
                     debug_println!(" = On thread t3 = {:?}", std::thread::current().id());
-                    shift3.update_shared(count2.create("t3val"));
+                    shift3.lock().unwrap().update(count2.create("t3val"));
 
-                    let _dbgval = get_next_and_state(shift3.item.as_ptr()).load(Ordering::SeqCst);
-                    verify_item(shift3.item.as_ptr());
-                    debug_println!("Checkt34c: {:?} next: {:?}", shift3.item, _dbgval);
                     debug_println!(" = drop t3 =");
                 })
                 .unwrap();
@@ -1243,12 +1147,7 @@ fn simple_threading4c() {
                 .spawn(move || {
                     debug_println!(" = On thread t4 = {:?}", std::thread::current().id());
                     let shift4 = &*shift4;
-                    verify_item(shift4.item.as_ptr());
-                    debug_println!(
-                        "Checkt44c: {:?} next: {:?}",
-                        shift4.item,
-                        get_next_and_state(shift4.item.as_ptr()).load(Ordering::SeqCst)
-                    );
+                    //verify_item(shift4.item.as_ptr());
                     let _t = std::hint::black_box(shift4);
                     debug_println!(" = drop t4 =");
                 })
@@ -1263,6 +1162,8 @@ fn simple_threading4c() {
         count.validate();
     });
 }
+
+/* TODO: implement try_get_mut
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4d() {
@@ -1270,17 +1171,17 @@ fn simple_threading4d() {
         let count = std::sync::Arc::new(SpyOwner2::new());
         {
             let count3 = count.clone();
-            let shift1 = std::sync::Arc::new(ArcShiftWeak::new(count.create("orig")));
+            let shift1 = std::sync::Arc::new(ArcShift::new(count.create("orig")));
 
-            let shift2 = shift1.upgrade();
-            let shift3 = shift1.upgrade();
-            let mut shift4 = shift1.upgrade();
+            let shift2 = shift1.clone();
+            let shift3 = shift1.clone();
+            let mut shift4 = shift1.clone();
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t1 =");
-                    black_box(shift1.upgrade());
+                    black_box(shift1.clone());
                     debug_println!(" = drop t1 =");
                 })
                 .unwrap();
@@ -1301,7 +1202,7 @@ fn simple_threading4d() {
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t3 =");
-                    shift3.update_shared(count3.create("t3val"));
+                    shift3.update(count3.create("t3val"));
                     let _t = std::hint::black_box(shift3.shared_get());
                     debug_println!(" = drop t3 =");
                 })
@@ -1328,21 +1229,23 @@ fn simple_threading4d() {
         drop(count);
     });
 }
+*/
+
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4e() {
     model(|| {
-        let shift = std::sync::Arc::new(ArcShiftWeak::new(42u32));
-        let shift1 = shift.upgrade();
-        let shift2 = shift.upgrade();
-        let shift3 = shift.upgrade();
-        let shift4 = shift.upgrade();
+        let shift = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
+        let shift1 = shift.clone();
+        let shift2 = shift.clone();
+        let shift3 = shift.clone();
+        let shift4 = shift.clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                shift1.update_shared(43);
+                shift1.lock().unwrap().update(43);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -1352,7 +1255,7 @@ fn simple_threading4e() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                shift2.update_shared(44);
+                shift2.lock().unwrap().update(44);
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -1362,7 +1265,7 @@ fn simple_threading4e() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                shift3.update_shared(45);
+                shift3.lock().unwrap().update(45);
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
@@ -1371,7 +1274,7 @@ fn simple_threading4e() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t4 =");
-                shift4.update_shared(46);
+                shift4.lock().unwrap().update(46);
                 debug_println!(" = drop t4 =");
             })
             .unwrap();

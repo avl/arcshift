@@ -104,9 +104,10 @@ fn generic_3thread_ops_b<
             let f3 = f3.clone();
             let owner = std::sync::Arc::new(SpyOwner2::new());
             {
-                let shift1 = ArcShiftWeak::new(owner.create("orig"));
-                let shift2 = shift1.upgrade();
-                let shift3 = shift1.upgrade();
+                let shift = ArcShift::new(owner.create("orig"));
+                let shift1 = ArcShift::downgrade(&shift);
+                let shift2 = shift.clone();
+                let shift3 = shift.clone();
                 let owner_ref1 = owner.clone();
                 let owner_ref2 = owner.clone();
                 let owner_ref3 = owner.clone();
@@ -176,20 +177,24 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
         },
         |_, shift, _| Some(shift),
         |owner, shift, thread| {
-            shift.update_shared(owner.create(thread));
+            let upgraded = shift.upgrade();
+            if let Some(mut upgraded) = upgraded {
+                upgraded.update(owner.create(thread))
+            }
             Some(shift)
         },
-        |_, mut shift, _| {
+        /* TODO: Implement 'reload' for weak
+            |_, mut shift, _| {
             shift.reload();
             Some(shift)
-        },
+        },*/
         |_, _, _| None,
     ];
     let ops23: Vec<
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
     > = vec![
-        |owner, shift, thread| {
-            shift.update_shared(owner.create(thread));
+        |owner, mut shift, thread| {
+            shift.update(owner.create(thread));
             Some(shift)
         },
         |owner, mut shift, thread| {
@@ -208,10 +213,11 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
             shift.reload();
             Some(shift)
         },
-        |_owner, shift, _thread| {
+        /* TODO: Implement
+            |_owner, shift, _thread| {
             std::hint::black_box(shift.try_into_inner());
             None
-        },
+        },*/
         |_owner, _shift, _thread| None,
     ];
     for (_n1, op1) in ops1.iter().enumerate().skip(skip1) {
@@ -237,8 +243,8 @@ fn generic_3threading_a_all() {
     let ops: Vec<
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
     > = vec![
-        |owner, shift, thread| {
-            shift.update_shared(owner.create(thread));
+        |owner, mut shift, thread| {
+            shift.update(owner.create(thread));
             Some(shift)
         },
         |owner, mut shift, thread| {
@@ -257,10 +263,11 @@ fn generic_3threading_a_all() {
             shift.reload();
             Some(shift)
         },
+        /* TODO: implement
         |_owner, shift, _thread| {
             std::hint::black_box(shift.try_into_inner());
             None
-        },
+        },*/
         |_owner, _shift, _thread| None,
     ];
     for (n1, op1) in ops.iter().enumerate() {
@@ -278,16 +285,16 @@ fn generic_3threading_a_all() {
 #[test]
 fn generic_3threading1() {
     generic_3thread_ops_a(
-        |owner1, shift1, thread| {
-            shift1.update_shared(owner1.create(thread));
+        |owner1, mut shift1, thread| {
+            shift1.update(owner1.create(thread));
             Some(shift1)
         },
         |owner2, mut shift2, thread| {
             shift2.update(owner2.create(thread));
             Some(shift2)
         },
-        |owner3, shift3, thread| {
-            shift3.update_shared(owner3.create(thread));
+        |owner3, mut shift3, thread| {
+            shift3.update(owner3.create(thread));
             Some(shift3)
         },
     )
@@ -297,7 +304,10 @@ fn generic_3threading1() {
 fn generic_3threading2() {
     generic_3thread_ops_b(
         |owner1, shift1, thread| {
-            shift1.update_shared(owner1.create(thread));
+            let shift = shift1.upgrade();
+            if let Some(mut shift) = shift {
+                shift.update(owner1.create(thread));
+            }
             Some(shift1)
         },
         |owner2, mut shift2, thread| {
