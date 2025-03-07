@@ -2457,7 +2457,7 @@ mod tests2 {
             _ = t1.join().unwrap();
             _ = t2.join().unwrap();
             unsafe { ArcShift::debug_validate(&[&shift2],&[]) };
-            println!("--> Main dropping");
+            debug_println!("--> Main dropping");
             assert!(*shift2.get() > 42);
         });
     }
@@ -2500,7 +2500,7 @@ mod tests2 {
             _ = t2.join().unwrap();
             _ = t3.join().unwrap();
             unsafe { ArcShift::debug_validate(&[&shift3],&[]) };
-            println!("--> Main dropping");
+            debug_println!("--> Main dropping");
             assert!(*shift3.get() > 42);
         });
     }
