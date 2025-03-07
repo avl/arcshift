@@ -40,7 +40,7 @@ fn generic_3thread_ops_a<
 
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
-                .stack_size(1_000_000)
+                .stack_size(100_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t1 =");
                     f1(&*owner_ref1, shift1, "t1")
@@ -49,7 +49,7 @@ fn generic_3thread_ops_a<
 
             let t2 = atomic::thread::Builder::new()
                 .name("t2".to_string())
-                .stack_size(1_000_000)
+                .stack_size(100_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t2 =");
                     f2(&*owner_ref2, shift2, "t2")
@@ -58,7 +58,7 @@ fn generic_3thread_ops_a<
 
             let t3 = atomic::thread::Builder::new()
                 .name("t3".to_string())
-                .stack_size(1_000_000)
+                .stack_size(100_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t3 =");
                     f3(&*owner_ref3, shift3, "t3")
@@ -72,7 +72,6 @@ fn generic_3thread_ops_a<
     });
 }
 
-#[allow(unused)] //TODO: Remove
 fn generic_3thread_ops_b<
     F1: Fn(
             &SpyOwner2,
@@ -167,11 +166,7 @@ fn generic_3thread_ops_b<
     );
 }
 
-#[cfg(not(feature = "disable_slow_tests"))]
-#[test]
-fn generic_3threading_b_400() {
-    generic_3threading_b_all_impl(4, 0, 0, None);
-}
+
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_b_000() {
@@ -259,10 +254,20 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
         }
     }
 }
-
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_a_all() {
+    generic_3threading_a_all_impl(0)
+}
+
+#[cfg(not(feature = "disable_slow_tests"))]
+#[test]
+fn generic_3threading_a_3() {
+    generic_3threading_a_all_impl(3)
+}
+
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_3threading_a_all_impl(skip: usize) {
     let ops: Vec<
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
     > = vec![
@@ -295,7 +300,7 @@ fn generic_3threading_a_all() {
     ];
     for (n1, op1) in ops.iter().enumerate() {
         for (n2, op2) in ops.iter().enumerate() {
-            for (n3, op3) in ops.iter().enumerate() {
+            for (n3, op3) in ops.iter().enumerate().skip(skip) {
                 {
                     println!("========= {} {} {} ==========", n1, n2, n3);
                 }
@@ -310,14 +315,17 @@ fn generic_3threading1() {
     generic_3thread_ops_a(
         |owner1, mut shift1, thread| {
             shift1.update(owner1.create(thread));
+            debug_println!("thread1 update done");
             Some(shift1)
         },
         |owner2, mut shift2, thread| {
             shift2.update(owner2.create(thread));
+            debug_println!("thread2 update done");
             Some(shift2)
         },
         |owner3, mut shift3, thread| {
             shift3.update(owner3.create(thread));
+            debug_println!("thread3 update done");
             Some(shift3)
         },
     )

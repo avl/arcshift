@@ -1,6 +1,5 @@
 use arcshift::ArcShift;
 use std::thread;
-use std::time::Duration;
 
 fn main() {
     let mut arc = ArcShift::new("Hello".to_string());

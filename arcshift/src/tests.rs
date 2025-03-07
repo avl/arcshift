@@ -532,7 +532,7 @@ fn simple_upgrade3a1() {
         assert_eq!(count.load(Ordering::SeqCst), 1); // The 'ArcShiftLight' should *not* keep any version alive
         debug_println!("==== drop arc =");
         drop(shift2);
-        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
         debug_println!("==== drop shiftroot =");
         drop(shiftlight);
         assert_eq!(count.load(Ordering::SeqCst), 0);
@@ -570,10 +570,10 @@ fn simple_upgrade4b() {
 
             debug_println!("== Calling update_shared ==");
             shift.update(InstanceSpy::new(count.clone()));
-            assert_eq!(count.load(Ordering::Relaxed), 1);
+            assert_eq!(count.load(Ordering::SeqCst), 1);
             debug_println!("== Calling drop(shift) ==");
             drop(shift);
-            assert_eq!(count.load(Ordering::Relaxed), 1);
+            assert_eq!(count.load(Ordering::SeqCst), 0);
         }
         assert_eq!(count.load(Ordering::Relaxed), 0);
     });
@@ -1116,7 +1116,7 @@ fn simple_threading4c() {
     model(|| {
         let count = std::sync::Arc::new(SpyOwner2::new());
         {
-            let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(count.create("orig"))));
+            let shift1 = std::sync::Arc::new(atomic::Mutex::new(ArcShift::new(count.create("orig"))));
             let shift2 = std::sync::Arc::clone(&shift1);
             let shift3 = std::sync::Arc::clone(&shift1);
             let shift4 = std::sync::Arc::clone(&shift1);

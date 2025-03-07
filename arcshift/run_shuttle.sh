@@ -1,2 +1,2 @@
-cargo test --lib --tests --release --features=shuttle,validate $@
+cargo nextest run --lib --tests --release --features=shuttle,validate $@
 
