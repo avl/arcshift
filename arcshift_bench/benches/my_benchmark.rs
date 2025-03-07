@@ -46,7 +46,7 @@ fn rwlock_write_bench(c: &mut Criterion) {
 
 fn arcshift_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
-    c.bench_function("arcshift", |b| {
+    c.bench_function("arcshift_get", |b| {
         b.iter(|| {
             let value = ac.get();
             _ = black_box(value);

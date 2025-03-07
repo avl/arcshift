@@ -165,37 +165,8 @@ impl<T> FuzzerCommand<T> {
         }
     }
 }
-/* TODO: refcounts are now usize, we can't really test overflow
-#[test]
-#[cfg(not(any(loom, miri, feature = "shuttle")))] //Neither loom nor shuttle allows this many iterations
-#[should_panic(expected = "Max limit of ArcShiftLight clones (524288) was reached")]
-fn check_too_many_roots() {
-    model(|| {
-        let mut temp = vec![];
-        let light = ArcShiftWeak::new(1u8);
-        for _ in 0..MAX_ROOTS {
-            temp.push(light.clone());
-            atomic::spin_loop();
-        }
-    });
-}
-#[test]
-#[cfg(not(miri))] // We shouldn't run miri on this, since this test uses unsafe code to leak memory.
-#[should_panic(expected = "Max limit of ArcShiftLight clones (524288) was reached")]
-fn check_too_many_roots2() {
-    model(|| {
-        let mut temp = vec![];
-        let light = ArcShiftWeak::new(1u8);
-        // When running under 'shuttle', we can't do too many steps, so we can't
-        // exhaust all MAX_ROOTS-items naturally, we have to cheat like this.
-        get_refcount(light.item.as_ptr()).fetch_add(MAX_ROOTS - 2, atomic::Ordering::SeqCst);
-        for _ in 0..10 {
-            temp.push(light.clone());
-            atomic::spin_loop();
-        }
-    });
-}
-*/
+
+
 fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     rng: &mut StdRng,
     mut constructor: impl FnMut() -> T,
