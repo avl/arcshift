@@ -825,6 +825,7 @@ fn simple_threading3b() {
     });
 }
 #[test]
+#[cfg(not(loom))]
 fn simple_threading3c() {
     model(|| {
         let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
@@ -864,6 +865,8 @@ fn simple_threading3c() {
         _ = t3.join().unwrap();
     });
 }
+
+#[cfg(not(loom))]
 #[test]
 fn simple_threading3d() {
     model(|| {

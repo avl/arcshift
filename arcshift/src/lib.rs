@@ -348,7 +348,7 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ArcShift(todo!)")
+        write!(f, "ArcShift({:?})", *self)
     }
 }
 impl<T: ?Sized> Debug for ArcShiftWeak<T>
@@ -365,13 +365,14 @@ where
 /// However, it has the advantage of not preventing old versions of the payload type from being
 /// freed.
 ///
-/// TODO: Reenable this test
-/// ```ignore
-/// # #[cfg(not(any(loom,feature="shuttle")))]
+/// ```
+/// # use arcshift::ArcShift;
+/// ##[cfg(not(any(loom,feature="shuttle")))]
 /// # {
 /// # extern crate arcshift;
 /// # use arcshift::ArcShiftWeak;
-/// let light_instance = ArcShiftWeak::new("test");
+/// let original_instance = ArcShift::new("test");
+/// let light_instance = ArcShift::downgrade(&original_instance);
 /// let instance = light_instance.upgrade();
 /// println!("Value: {:?}", *instance);
 /// # }
@@ -870,7 +871,7 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     #[cfg(feature = "validate")]
     magic2: std::sync::atomic::AtomicU64,
 
-    payload: UnsafeCell<ManuallyDrop<T>>, //TODO: We should use ManuallyDrop<T> here. It would simplify the code (but not affect correctness)
+    payload: UnsafeCell<ManuallyDrop<T>>,
 }
 
 impl<'a,T:?Sized,M:IMetadata> PartialEq for ItemHolder<T,M> {
