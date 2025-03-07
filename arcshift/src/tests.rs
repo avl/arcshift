@@ -516,7 +516,7 @@ fn simple_update5() {
 
 #[test]
 fn simple_upgrade3a1() {
-    //model(|| {
+    model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let shift1 = ArcShift::new(InstanceSpy::new(count.clone()));
         let shiftlight = ArcShift::downgrade(&shift1);
@@ -536,7 +536,7 @@ fn simple_upgrade3a1() {
         debug_println!("==== drop shiftroot =");
         drop(shiftlight);
         assert_eq!(count.load(Ordering::SeqCst), 0);
-    //});
+    });
 }
 #[test]
 fn simple_upgrade3a0() {
@@ -635,6 +635,7 @@ fn simple_threading2d() {
         {
             let mut shift = ArcShift::new(owner.create("orig"));
             let shiftlight = ArcShift::downgrade(&shift);
+            unsafe {ArcShift::debug_validate(&[&shift],&[&shiftlight]) };
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)

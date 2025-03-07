@@ -263,14 +263,8 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 ) -> Vec<FuzzerCommand<T>> {
     let mut ret = Vec::new();
 
-    compile_error!("\
-
-    this provokes the error:
-    cargo test --release generic_thread_fuzzing_121 --features=debug
-
-    ")
     #[cfg(not(loom))]
-    const COUNT: usize = 2; //TODO: Increase to 50?
+    const COUNT: usize = 2; //TODO: Increase to 50!
     #[cfg(loom)]
     const COUNT: usize = 10;
 
