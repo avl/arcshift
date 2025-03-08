@@ -1,6 +1,6 @@
 //! Fuzz-test cases with focus on sending instances between threads
 
-use super::{atomic, model, InstanceSpy2};
+use super::{atomic, model, model2, InstanceSpy2};
 use crate::tests::leak_detection::SpyOwner2;
 use crate::{ArcShift, ArcShiftWeak};
 use crossbeam_channel::bounded;
@@ -16,7 +16,7 @@ enum PipeItem<T: 'static> {
     Root(ArcShiftWeak<T>),
 }
 
-fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
+fn  run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     rng: &mut StdRng,
     mut constructor: impl FnMut() -> T,
 ) {
@@ -29,7 +29,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
             all_possible.insert(val.clone());
         }
     }
-    println!("Cmds: {:?}", cmds);
+    debug_println!("Cmds: {:?}", cmds);
     let mut batches = Vec::new();
     let mut senders = vec![];
     let mut receivers = vec![];
@@ -57,7 +57,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
         let thread_all_possible: std::sync::Arc<HashSet<T>> = std::sync::Arc::clone(&all_possible);
         let start_arc0 = start_arc0.clone();
         let start_arc_light = ArcShift::downgrade(&start_arc0);
-        let jh = atomic::thread::Builder::new().name(format!("thread{}", threadnr)).spawn(move || {
+        let jh = atomic::thread::Builder::new().name(format!("thread{}", threadnr+1)).spawn(move || {
             let mut curval: Option<ArcShift<T>> = Some(start_arc0);
             let mut curvalweak: Option<ArcShiftWeak<T>> = Some(start_arc_light);
             for cmd in cmds {
@@ -135,6 +135,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
         jh.join().unwrap();
     }
     drop(senders);
+    debug_println!("Validating final arc0: {:x?}", start_arc0.item.as_ptr());
     unsafe { ArcShift::debug_validate(&[&start_arc0], &[]) };
 }
 
@@ -235,7 +236,7 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
     let mut ret = Vec::new();
 
     #[cfg(not(loom))]
-    const COUNT: usize = 3;
+    const COUNT: usize = 10;
     #[cfg(loom)]
     const COUNT: usize = 10;
 
@@ -328,21 +329,31 @@ fn generic_thread_fuzzing_57() {
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_all() {
+    generic_thread_fuzzing_all_impl(None, None)
+}
+#[test]
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_thread_fuzzing_repro1() {
+    generic_thread_fuzzing_all_impl(Some(249), None)
+}
+
+fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     #[cfg(miri)]
     const COUNT: u64 = 30;
     #[cfg(any(loom))]
     const COUNT: u64 = 100;
     #[cfg(all(feature = "shuttle", not(coverage)))]
-    const COUNT: u64 = 1000;
+    const COUNT: u64 = 10000;
     #[cfg(coverage)]
     const COUNT: u64 = 10;
 
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
     #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
     const COUNT: u64 = 100000;
-    for i in 0..COUNT {
-        println!("--- Seed {} ---", i);
-        model(move || {
+    let range = if let Some(seed) = seed { seed..seed+1} else {0..COUNT};
+    for i in range {
+        model2(move || {
+            println!("--- Seed {} ---", i);
             let mut rng = StdRng::seed_from_u64(i);
             let mut counter = 0usize;
             let owner = std::sync::Arc::new(SpyOwner2::new());
@@ -352,7 +363,7 @@ fn generic_thread_fuzzing_all() {
                 owner_ref.create(statics[counter % 10])
             });
             owner.validate();
-        });
+        }, repro);
     }
 }
 

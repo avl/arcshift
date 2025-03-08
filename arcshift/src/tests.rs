@@ -41,10 +41,11 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
     loom::model(x)
 }
 
+//TODO: Unify this with the same stuff in lib.rs
 #[cfg(all(feature = "shuttle", coverage))]
 const SHUTTLE_ITERATIONS: usize = 50;
 #[cfg(all(feature = "shuttle", not(coverage)))]
-const SHUTTLE_ITERATIONS: usize = 50;
+const SHUTTLE_ITERATIONS: usize = 5000;
 
 #[cfg(feature = "shuttle")]
 fn model(x: impl Fn() + 'static + Send + Sync) {
