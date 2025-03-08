@@ -41,7 +41,6 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
     loom::model(x)
 }
 
-//TODO: Unify this with the same stuff in lib.rs
 #[cfg(all(feature = "shuttle", coverage))]
 const SHUTTLE_ITERATIONS: usize = 50;
 #[cfg(all(feature = "shuttle", not(coverage)))]
@@ -1299,3 +1298,205 @@ fn simple_threading4e() {
         _ = t4.join().unwrap();
     });
 }
+
+
+#[test]
+fn simple_test_clones2() {
+    model(|| {
+        let shift = ArcShift::new("orig".to_string());
+        let shift1 = ArcShift::downgrade(&shift);
+        let shift2 = shift.clone();
+        let shift3 = shift.clone();
+        unsafe { ArcShift::debug_validate(&[&shift,&shift2,&shift3],&[&shift1]) };
+    });
+}
+#[test]
+fn simple_test_clonesp2() {
+    model(||{
+        let _shift = ArcShift::new("orig".to_string());
+    })
+}
+#[test]
+fn simple_threading_update_in_one() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let mut shift = ArcShift::new(42u32);
+        let mut shift1 = shift.clone();
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift.update(43);
+                debug_println!("t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                std::hint::black_box(shift1.get());
+                debug_println!("t2 dropping");
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+    });
+}
+#[test]
+fn simple_threading_repro1() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let root = ArcShift::new(42u32);
+        let mut curval = root.clone();
+        let light = ArcShift::downgrade(&curval);
+        unsafe { ArcShift::debug_validate(&[&root,&curval], &[&light]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                curval.update(42);
+                debug_println!("t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let _ = light.upgrade();
+                debug_println!("t2 dropping");
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+
+        unsafe { ArcShift::debug_validate(&[&root], &[]) };
+    });
+}
+#[test]
+fn simple_threading_repro3() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let root = ArcShift::new(42u32);
+        let arc1 = ArcShift::downgrade(&root);
+        let arc2 = ArcShift::downgrade(&root);
+        drop(root);
+        unsafe { ArcShift::debug_validate(&[], &[&arc1,&arc2]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let _x = arc1;
+                debug_println!("t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let _x = arc2;
+                debug_println!("t2 dropping");
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+
+    });
+}
+#[test]
+fn simple_threading_repro2() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let root = ArcShift::new(42u32);
+        let mut curval = root.clone();
+        let light = ArcShift::downgrade(&curval);
+        curval.update(42);
+        debug_println!("----> curval.dropping");
+        drop(curval);
+
+        println!("----> light.upgrade");
+        light.upgrade();
+        unsafe { ArcShift::debug_validate(&[&root], &[&light]) };
+        drop(light);
+
+    });
+}
+
+#[test]
+fn simple_threading_update_twice() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let mut shift = ArcShift::new(42u32);
+        let mut shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2],&[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift.update(43);
+                debug_println!("--> t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift1.update(44);
+                debug_println!("--> t2 dropping");
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+        unsafe { ArcShift::debug_validate(&[&shift2],&[]) };
+        debug_println!("--> Main dropping");
+        assert!(*shift2.get() > 42);
+    });
+}
+#[test]
+fn simple_threading_update_thrice() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let mut shift = ArcShift::new(42u32);
+        let mut shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        let mut shift3 = shift.clone();
+        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2,&shift3],&[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift.update(43);
+                debug_println!("--> t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift1.update(44);
+                debug_println!("--> t2 dropping");
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.update(45);
+                debug_println!("--> t3 dropping");
+            })
+            .unwrap();
+        _ = t1.join().unwrap();
+        _ = t2.join().unwrap();
+        _ = t3.join().unwrap();
+        unsafe { ArcShift::debug_validate(&[&shift3],&[]) };
+        debug_println!("--> Main dropping");
+        assert!(*shift3.get() > 42);
+    });
+}
+

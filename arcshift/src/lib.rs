@@ -291,6 +291,61 @@ mod atomic {
     }
 }
 
+mod deferred {
+    use crate::ItemHolderDummy;
+
+    const INLINE_COUNT:usize = 4;
+    #[derive(Clone,Copy)]
+    enum Job<T:?Sized> {
+        None,
+        DropItem(*mut ItemHolderDummy<T>),
+        Deallocate(*mut ItemHolderDummy<T>),
+    }
+    impl<T:?Sized> Default for Job<T> {
+        fn default() -> Self {
+            Job::None
+        }
+    }
+    enum DeferredJobQueue<T:?Sized> {
+        Inline(usize, [Job<T>;INLINE_COUNT]),
+        Spilled(Vec<Job<T>>)
+    }
+    impl<T> Default for DeferredJobQueue<T> {
+        fn default() -> Self {
+            DeferredJobQueue::Inline(0, Default::default())
+        }
+    }
+    impl<T:?Sized> DeferredJobQueue<T> {
+        fn push(&mut self, job: Job<T>) {
+            match self {
+                DeferredJobQueue::Inline(len, data) => {
+                    if *len == INLINE_COUNT {
+
+                        let mut as_vec = Vec::with_capacity(INLINE_COUNT+1);
+                        as_vec.extend(data.iter().copied());
+                        as_vec.push(job);
+                        *self = DeferredJobQueue::Spilled(as_vec);
+                    } else {
+                        data[*len] = job;
+                        *len+=1;
+                    }
+                }
+                DeferredJobQueue::Spilled(d) => {
+                    d.push(job);
+                }
+            }
+        }
+        fn get_all(&self) -> &[Job<T>] {
+            match self {
+                DeferredJobQueue::Inline(len, data) => {&data[0..*len]},
+                DeferredJobQueue::Spilled(data) => {data}
+            }
+        }
+        compile_error!("Finish this!")
+    }
+
+}
+
 /// Declarations for verifying Arcshift using 'shuttle'
 #[cfg(feature = "shuttle")]
 mod atomic {
@@ -881,6 +936,28 @@ struct ItemHolderDummy<T:?Sized> {
     phantom_data: PhantomData<T>
 }
 
+
+/*
+ Invariants (Draft): TODO: Formalize
+
+ * ItemHolder cannot be dropped if weak-count > 0
+ * ItemHolder cannot be dropped while strong-count > 0
+ * However, an ItemHolder can have its strong-count increased even if it is dropped,
+   so just because strong-count is > 0 doesn't mean the item isn't dropped.
+ * If strong-count > 0, weak-count is also > 0
+ * ItemHolder cannot be dropped if item.prev.advance_count > 0
+ * ItemHolder can only be dropped when holding a lock on item,
+   and the item.next, after having set 'next' to item.next (or further to the right).
+   See do_advance_impl for details regarding 'advance_count'
+ * ItemHolder cannot be dropped if 'next' is null, and it has a 'prev'.
+   (But it may be possible to apply the janitor operation and remove the 'prev')
+ * While dropping, the janitor task must be run. If a concurrent janitor task is detected,
+   it must be marked as 'disturbed', and the disturbed task must re-run from the beginning
+   after completing.
+
+
+ */
+
 /// Align 8 is needed, since we store flags in the lower 2 bits of the ItemHolder-pointers
 /// In practice, the alignment of ItemHolder is 8 anyway, but we specify it here for clarity.
 #[repr(align(8))]
@@ -1351,6 +1428,8 @@ fn do_upgrade_weak<T:?Sized, M: IMetadata>(item_ptr: *const ItemHolder<T, M>) ->
     // do_upgrade_weak must be called with a valid item_ptr
     let start_item = unsafe {&*(item_ptr)};
     {
+        // This is needed, since ostensibly, this method works on a weak clone of 'item_ptr'.
+        // It is this weak clone that is converted to a strong item.
         let weak_count = start_item.weak_count.fetch_add(1, Ordering::SeqCst);
         if get_weak_count(weak_count) > MAX_REF_COUNT {
             start_item.weak_count.fetch_sub(1, Ordering::SeqCst);
@@ -1365,33 +1444,55 @@ fn do_upgrade_weak<T:?Sized, M: IMetadata>(item_ptr: *const ItemHolder<T, M>) ->
         // SAFETY:
         // do_advance_weak always returns a valid non-null pointer
         let item = unsafe {&*from_dummy::<T,M>(item_ptr)};
-        let strong_count = item.strong_count.load(Ordering::SeqCst);
-        if strong_count > 0 {
-            if item.strong_count.compare_exchange(strong_count, strong_count + 1,Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        let prior_strong_count = item.strong_count.load(Ordering::SeqCst);
+        let item_next = item.next.load(Ordering::SeqCst);
+        if !get_decoration(item_next).is_dropped()
+        {
+            if prior_strong_count == 0 {
+                let _prior_weak_count = item.weak_count.fetch_add(1, Ordering::SeqCst);
+                debug_println!("pre-upgrade strong=0 {:x?}, increase weak to {}", item_ptr, get_weak_count(_prior_weak_count) + 1);
+            }
+
+            if item.strong_count.compare_exchange(prior_strong_count, prior_strong_count+1, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+            {
+                let item = unsafe {&*from_dummy::<T,M>(item_ptr)};
+                let item_next = item.next.load(Ordering::SeqCst);
+                if get_decoration(item_next).is_dropped() {
+                    let new_prior_strong = item.strong_count.fetch_sub(1, Ordering::SeqCst);
+                    if new_prior_strong == 1 {
+                        let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                    }
+                    //debug_println!("pre-upgrade strong=0 race {:x?}, decrease weak to {}", item_ptr, get_weak_count(_prior_weak_count) - 1);
+                    atomic::spin_loop();
+                    continue;
+                }
+
                 let _reduce_weak = item.weak_count.fetch_sub(1, Ordering::SeqCst);
-                debug_println!("upgrade success, new strong_count: {}, new weak: {}", strong_count + 1, format_weak(_reduce_weak - 1));
+                debug_println!("upgrade success, new strong_count: {}, new weak: {}", prior_strong_count + 1, format_weak(_reduce_weak - 1));
                 #[cfg(feature="validate")]
                 assert!(get_weak_count(_reduce_weak)>0);
-                return Some(item_ptr);
-            }
-            debug_println!("Race on strong_count _increase_ - loop.");
-            atomic::spin_loop();
-            continue; //Race on strong count, try again
-        }
 
-        //TODO: We should be able to upgrade even if strong count is 0, as long as the payload is not deallocated!
-        if undecorate(item.next.load(Ordering::SeqCst)).is_null() {
-            let _reduce_weak = item.weak_count.fetch_sub(1, Ordering::SeqCst); //TODO: Remove these varirables
+                return Some(item_ptr);
+            } else {
+                if prior_strong_count == 0 {
+                    let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                    debug_println!("pre-upgrade strong=0 race2 {:x?}, decrease weak to {}", item_ptr, get_weak_count(_prior_weak_count) - 1);
+                }
+                debug_println!("Race on strong_count _increase_ - loop.");
+                atomic::spin_loop();
+                continue; //Race on strong count, try again
+            }
+        } else {
+            let _reduce_weak = item.weak_count.fetch_sub(1, Ordering::SeqCst);
             debug_println!("upgrade {:x?} failure new weak: {}", item_ptr, format_weak(_reduce_weak - 1));
-            // next is still none, and the most recent item had a 0 strong count. We can't upgrade
-            // to strong.
+            // next is still null, and the most recent item was dropped. We can't upgrade.
+            // This only happens if no strong refs exist, because otherwise the most recent is
+            // kept alive.
             debug_println!("Upgrade to strong failed");
             #[cfg(feature="validate")]
             assert!(get_weak_count(_reduce_weak)>0);
             return None;
         }
-        // Right most strong count was 0, but there's a next-pointer, so let's advance
-        atomic::spin_loop();
     }
 }
 
@@ -1515,7 +1616,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(item_ptr: *const ItemHolderDummy<T
                 // That might not be us (because we might race with another invocation of this code),
                 // that might also increment the count.
                 // SAFETY:
-                // TODO
+                // b is a valid pointer (see above)
                 let _prior_weak = unsafe { (*b).weak_count.fetch_add(1, Ordering::SeqCst) };
                 debug_println!("Prior to strong_count imcrement {:x?} from 0, added weak count. Weak now: {}", b, _prior_weak+1);
             }
@@ -1763,11 +1864,13 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(start_ptr: *const ItemHolder<T, M>) 
             debug_println!("Deallocating node in janitor task: {:x?}, dec: {:?}, weak count: {}, strong count: {}", item_ptr, unsafe{ (*from_dummy::<T,M>(item_ptr)).decoration()}, format_weak(item_weak_count),
                 item.strong_count.load(Ordering::SeqCst)
             );
-            //TODO: Remove this decrement
-            let prior_item_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
-            if get_weak_count(prior_item_weak_count) != 1 {
-                #[cfg(feature="validate")]
-                assert_eq!(get_weak_count(prior_item_weak_count), 1, "{:x?} weak_count should still be 1, and we decrement it to 0", item_ptr);
+
+            #[cfg(feature = "validate")]
+            {
+                let prior_item_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                if get_weak_count(prior_item_weak_count) != 1 {
+                    assert_eq!(get_weak_count(prior_item_weak_count), 1, "{:x?} weak_count should still be 1, and we decrement it to 0", item_ptr);
+                }
             }
 
             let prev_item_ptr = item.prev.load(Ordering::SeqCst);
@@ -1962,10 +2065,6 @@ fn do_drop_weak<T:?Sized, M:IMetadata>(original_item_ptr: *const ItemHolderDummy
         if get_weak_count(prior_weak) == 1 {
             if !get_weak_prev(prior_weak) {
                 debug_println!("drop weak {:x?}, prior count = 1, raw deallocate", item_ptr);
-                // TODO: We maybe still leak here, in cases where a chain is being deallocated
-                // simultaneously at two points. Like if we have the chain[A, B], and a weak ref to each.
-                // The encoding of prev/next into weak_count, and the disturb-mechanism, should
-                // make this rock-solid. But consider if it really is!
                 raw_deallocate_node(from_dummy::<T,M>(item_ptr));
             } else {
                 debug_println!("drop weak {:x?}, couldn't drop node, because there are nodes to the left", item_ptr);
@@ -2248,8 +2347,6 @@ impl<T>  ArcShift<T> {
             // * do_update returns non-null values.
             // * 'holder' is in fact a thin pointer, just what we need for T, since T is Sized.
             let new_item = unsafe { NonNull::new_unchecked(do_update(item, holder as *const _ ) as *mut _ ) };
-            //TODO: Consider clearing 'self.item' while do_update is running, and assigning the result after.
-            //Otherwise, if there's a panic, 'self.item' might point to invalid memory.
             self.item = new_item;
         });
     }
@@ -2657,232 +2754,6 @@ mod new_tests {
     }
 
 }
-
-#[cfg(test)]
-mod tests2 {
-    use crate::{atomic, ArcShift};
-
-    #[cfg(all(not(loom), not(feature = "shuttle")))]
-    fn model(x: impl FnOnce()) {
-        x()
-    }
-    #[cfg(loom)]
-    fn model(x: impl Fn() + 'static + Send + Sync) {
-        loom::model(x)
-    }
-
-    #[cfg(all(feature = "shuttle", coverage))]
-    const SHUTTLE_ITERATIONS: usize = 50;
-    #[cfg(all(feature = "shuttle", not(coverage)))]
-    const SHUTTLE_ITERATIONS: usize = 50;
-
-    #[cfg(feature = "shuttle")]
-    fn model(x: impl Fn() + 'static + Send + Sync) {
-        shuttle::check_random(x, SHUTTLE_ITERATIONS);
-    }
-
-    #[test]
-    fn simple_test_clones2() {
-        model(|| {
-            let shift = ArcShift::new("orig".to_string());
-            let shift1 = ArcShift::downgrade(&shift);
-            let shift2 = shift.clone();
-            let shift3 = shift.clone();
-            unsafe { ArcShift::debug_validate(&[&shift,&shift2,&shift3],&[&shift1]) };
-        });
-    }
-    #[test]
-    fn simple_test_clonesp2() {
-        model(||{
-            let _shift = ArcShift::new("orig".to_string());
-        })
-    }
-    #[test]
-    fn simple_threading_update_in_one() {
-        model(|| {
-            debug_println!("-------- loom -------------");
-            let mut shift = ArcShift::new(42u32);
-            let mut shift1 = shift.clone();
-            let t1 = atomic::thread::Builder::new()
-                .name("t1".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    shift.update(43);
-                    debug_println!("t1 dropping");
-                })
-                .unwrap();
-
-            let t2 = atomic::thread::Builder::new()
-                .name("t2".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    std::hint::black_box(shift1.get());
-                    debug_println!("t2 dropping");
-                })
-                .unwrap();
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-        });
-    }
-    #[test]
-    fn simple_threading_repro1() {
-        model(|| {
-            debug_println!("-------- loom -------------");
-            let root = ArcShift::new(42u32);
-            let mut curval = root.clone();
-            let light = ArcShift::downgrade(&curval);
-            unsafe { ArcShift::debug_validate(&[&root,&curval], &[&light]) };
-            let t1 = atomic::thread::Builder::new()
-                .name("t1".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    curval.update(42);
-                    debug_println!("t1 dropping");
-                })
-                .unwrap();
-
-            let t2 = atomic::thread::Builder::new()
-                .name("t2".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    let _ = light.upgrade();
-                    debug_println!("t2 dropping");
-                })
-                .unwrap();
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-
-            unsafe { ArcShift::debug_validate(&[&root], &[]) };
-        });
-    }
-    #[test]
-    fn simple_threading_repro3() {
-        model(|| {
-            debug_println!("-------- loom -------------");
-            let root = ArcShift::new(42u32);
-            let arc1 = ArcShift::downgrade(&root);
-            let arc2 = ArcShift::downgrade(&root);
-            drop(root);
-            unsafe { ArcShift::debug_validate(&[], &[&arc1,&arc2]) };
-            let t1 = atomic::thread::Builder::new()
-                .name("t1".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    let _x = arc1;
-                    debug_println!("t1 dropping");
-                })
-                .unwrap();
-
-            let t2 = atomic::thread::Builder::new()
-                .name("t2".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    let _x = arc2;
-                    debug_println!("t2 dropping");
-                })
-                .unwrap();
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-
-        });
-    }
-    #[test]
-    fn simple_threading_repro2() {
-        model(|| {
-            debug_println!("-------- loom -------------");
-            let root = ArcShift::new(42u32);
-            let mut curval = root.clone();
-            let light = ArcShift::downgrade(&curval);
-            curval.update(42);
-            debug_println!("----> curval.dropping");
-            drop(curval);
-
-            println!("----> light.upgrade");
-            light.upgrade();
-            unsafe { ArcShift::debug_validate(&[&root], &[&light]) };
-            drop(light);
-
-        });
-    }
-
-    #[test]
-    fn simple_threading_update_twice() {
-        model(|| {
-            debug_println!("-------- loom -------------");
-            let mut shift = ArcShift::new(42u32);
-            let mut shift1 = shift.clone();
-            let mut shift2 = shift.clone();
-            unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2],&[]) };
-            let t1 = atomic::thread::Builder::new()
-                .name("t1".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    shift.update(43);
-                    debug_println!("--> t1 dropping");
-                })
-                .unwrap();
-
-            let t2 = atomic::thread::Builder::new()
-                .name("t2".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    shift1.update(44);
-                    debug_println!("--> t2 dropping");
-                })
-                .unwrap();
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-            unsafe { ArcShift::debug_validate(&[&shift2],&[]) };
-            debug_println!("--> Main dropping");
-            assert!(*shift2.get() > 42);
-        });
-    }
-    #[test]
-    fn simple_threading_update_thrice() {
-        model(|| {
-            debug_println!("-------- loom -------------");
-            let mut shift = ArcShift::new(42u32);
-            let mut shift1 = shift.clone();
-            let mut shift2 = shift.clone();
-            let mut shift3 = shift.clone();
-            unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2,&shift3],&[]) };
-            let t1 = atomic::thread::Builder::new()
-                .name("t1".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    shift.update(43);
-                    debug_println!("--> t1 dropping");
-                })
-                .unwrap();
-
-            let t2 = atomic::thread::Builder::new()
-                .name("t2".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    shift1.update(44);
-                    debug_println!("--> t2 dropping");
-                })
-                .unwrap();
-
-            let t3 = atomic::thread::Builder::new()
-                .name("t3".to_string())
-                .stack_size(1_000_000)
-                .spawn(move || {
-                    shift2.update(45);
-                    debug_println!("--> t3 dropping");
-                })
-                .unwrap();
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-            _ = t3.join().unwrap();
-            unsafe { ArcShift::debug_validate(&[&shift3],&[]) };
-            debug_println!("--> Main dropping");
-            assert!(*shift3.get() > 42);
-        });
-    }
-
-}
-
 
 // Module for tests
 #[cfg(test)]

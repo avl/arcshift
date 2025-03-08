@@ -201,11 +201,6 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
             }
             Some(shift)
         },
-        /* TODO: Implement 'reload' for weak
-            |_, mut shift, _| {
-            shift.reload();
-            Some(shift)
-        },*/
         |_, _, _| None,
     ];
     let ops23: Vec<
@@ -231,11 +226,6 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
             shift.reload();
             Some(shift)
         },
-        /* TODO: Implement
-            |_owner, shift, _thread| {
-            std::hint::black_box(shift.try_into_inner());
-            None
-        },*/
         |_owner, _shift, _thread| None,
     ];
     for (_n1, op1) in ops1.iter().enumerate().skip(skip1) {
@@ -291,11 +281,6 @@ fn generic_3threading_a_all_impl(skip: usize) {
             shift.reload();
             Some(shift)
         },
-        /* TODO: implement
-        |_owner, shift, _thread| {
-            std::hint::black_box(shift.try_into_inner());
-            None
-        },*/
         |_owner, _shift, _thread| None,
     ];
     for (n1, op1) in ops.iter().enumerate() {
