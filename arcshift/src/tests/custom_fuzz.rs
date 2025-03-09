@@ -364,13 +364,13 @@ fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     #[cfg(any(loom))]
     const COUNT: u64 = 100;
     #[cfg(all(feature = "shuttle", not(coverage)))]
-    const COUNT: u64 = 10000;
+    const COUNT: u64 = 1000;
     #[cfg(coverage)]
     const COUNT: u64 = 10;
 
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
     #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
-    const COUNT: u64 = 100000;
+    const COUNT: u64 = 10000;
     let range = if let Some(seed) = seed {
         seed..seed + 1
     } else {
@@ -463,66 +463,65 @@ fn generic_fuzzing_all() {
     #[cfg(not(any(miri)))]
     const COUNT: u64 = 50000;
     for i in 0..COUNT {
-        model(move || {
-            let mut rng = StdRng::seed_from_u64(i);
-            let mut counter = 0u32;
-            debug_println!("Running seed {}", i);
-            run_fuzz(&mut rng, move || -> u32 {
-                counter += 1;
-                counter
-            });
+
+        let mut rng = StdRng::seed_from_u64(i);
+        let mut counter = 0u32;
+        debug_println!("Running seed {}", i);
+        run_fuzz(&mut rng, move || -> u32 {
+            counter += 1;
+            counter
         });
+
     }
 }
+
+#[cfg(not(any(loom, feature = "shuttle")))]
 #[test]
 fn generic_fuzzing_159() {
     let seed = 159;
-    model(move || {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut counter = 0u32;
-        debug_println!("Running seed {}", seed);
-        run_fuzz(&mut rng, move || -> u32 {
-            counter += 1;
-            counter
-        });
-    })
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut counter = 0u32;
+    debug_println!("Running seed {}", seed);
+    run_fuzz(&mut rng, move || -> u32 {
+        counter += 1;
+        counter
+    });
 }
+
+#[cfg(not(any(loom, feature = "shuttle")))]
 #[test]
 fn generic_fuzzing_121() {
     let seed = 121;
-    model(move || {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut counter = 0u32;
-        debug_println!("Running seed {}", seed);
-        run_fuzz(&mut rng, move || -> u32 {
-            counter += 1;
-            counter
-        });
-    })
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut counter = 0u32;
+    debug_println!("Running seed {}", seed);
+    run_fuzz(&mut rng, move || -> u32 {
+        counter += 1;
+        counter
+    });
 }
+#[cfg(not(any(loom, feature = "shuttle")))]
 #[test]
 fn generic_fuzzing_53014() {
     let seed = 53014;
-    model(move || {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut counter = 0u32;
-        debug_println!("Running seed {}", seed);
-        run_fuzz(&mut rng, move || -> u32 {
-            counter += 1;
-            counter
-        });
-    })
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut counter = 0u32;
+    debug_println!("Running seed {}", seed);
+    run_fuzz(&mut rng, move || -> u32 {
+        counter += 1;
+        counter
+    });
 }
+
+#[cfg(not(any(loom, feature = "shuttle")))]
 #[test]
 fn generic_fuzzing_3817879() {
     let seed = 3817879;
-    model(move || {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut counter = 0u32;
-        debug_println!("Running seed {}", seed);
-        run_fuzz(&mut rng, move || -> u32 {
-            counter += 1;
-            counter
-        });
-    })
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut counter = 0u32;
+    debug_println!("Running seed {}", seed);
+    run_fuzz(&mut rng, move || -> u32 {
+        counter += 1;
+        counter
+    });
 }

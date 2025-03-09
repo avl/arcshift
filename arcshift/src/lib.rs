@@ -577,7 +577,6 @@ unsafe impl<T: Sync + ?Sized> Sync for ArcShiftWeak<T> {}
 /// If `T` is `Send`, `ArcShift<T>` can also be `Send`
 unsafe impl<T: Send + ?Sized> Send for ArcShiftWeak<T> {}
 
-
 #[repr(transparent)]
 struct UnsizedMetadata<T: ?Sized> {
     #[cfg(feature = "nightly")]
@@ -964,7 +963,6 @@ fn get_full_ptr_raw<T: ?Sized, M: IMetadata>(
         unsafe { std::mem::transmute_copy(&dummy) }
     } else {
         assert_eq!(size_of::<M>(), size_of::<usize>()); //<- Verify that *const ItemHolder<T> is a fat ptr
-
 
         let ptr_data = dummy as *mut _;
         debug_println!("Dummy data: {:?}", ptr_data);
@@ -1573,7 +1571,7 @@ fn do_clone_weak<T: ?Sized, M: IMetadata>(
 
 fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
     item_ptr: *const ItemHolder<T, M>,
-    jobq: &mut DropHandler
+    jobq: &mut DropHandler,
 ) -> Option<*const ItemHolderDummy<T>> {
     debug_println!("executing do_upgrade_weak");
     // SAFETY:
@@ -1648,7 +1646,11 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                     format_weak(_reduce_weak - 1)
                 );
                 #[cfg(feature = "validate")]
-                assert!(get_weak_count(_reduce_weak) > 1, "assertion failed: in do_upgrade_weak(1), reduced weak {:x?} to 0", item_ptr);
+                assert!(
+                    get_weak_count(_reduce_weak) > 1,
+                    "assertion failed: in do_upgrade_weak(1), reduced weak {:x?} to 0",
+                    item_ptr
+                );
 
                 return Some(item_ptr);
             } else {
@@ -1677,7 +1679,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 continue; //Race on strong count, try again
             }
         } else {
-            do_drop_weak::<T,M>(item_ptr, jobq);
+            do_drop_weak::<T, M>(item_ptr, jobq);
             return None;
         }
     }
@@ -2362,7 +2364,11 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         if have_next {
             // drop_weak raced with 'add'.
             atomic::spin_loop();
-            debug_println!("add race {:x?}, prior_weak: {}", item_ptr, format_weak(prior_weak));
+            debug_println!(
+                "add race {:x?}, prior_weak: {}",
+                item_ptr,
+                format_weak(prior_weak)
+            );
             continue;
         }
 
@@ -2456,7 +2462,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
     mut val_dummy_factory: impl FnMut(&ItemHolder<T, M>) -> Option<*const ItemHolderDummy<T>>,
     drop_job_queue: &mut impl IDropHandler<T, M>,
 ) -> *const ItemHolderDummy<T> {
-
     let mut item_ptr = to_dummy::<T, M>(initial_item_ptr);
     verify_item(item_ptr);
 
@@ -2551,7 +2556,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
                 format_weak(_weak_count.saturating_sub(1))
             );
             #[cfg(feature = "validate")]
-            assert!(get_weak_count(_weak_count) >1);
+            assert!(get_weak_count(_weak_count) > 1);
         }
 
         item_ptr = val_dummy;
@@ -3166,7 +3171,9 @@ impl<T: ?Sized> ArcShift<T> {
         // the loop above has yielded a valid last ptr
         let all_nodes = unsafe { (*last).debug_all_to_left() };
 
-        let strong_refs_exist = all_nodes.iter().any(|x|x.strong_count.load(Ordering::SeqCst)>0);
+        let strong_refs_exist = all_nodes
+            .iter()
+            .any(|x| x.strong_count.load(Ordering::SeqCst) > 0);
         if strong_refs_exist {
             debug_println!("Reading {:?}.next", to_dummy(last));
             // SAFETY:

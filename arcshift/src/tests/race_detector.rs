@@ -168,17 +168,17 @@ fn generic_3thread_ops_b<
 
 fn generic_2thread_ops_b<
     F1: Fn(
-        &SpyOwner2,
-        ArcShiftWeak<InstanceSpy2>,
-        &'static str,
-    ) -> Option<ArcShiftWeak<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+            &SpyOwner2,
+            ArcShiftWeak<InstanceSpy2>,
+            &'static str,
+        ) -> Option<ArcShiftWeak<InstanceSpy2>>
+        + Sync
+        + Send
+        + 'static,
     F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
 >(
     f1: F1,
     f2: F2,
@@ -226,7 +226,6 @@ fn generic_2thread_ops_b<
                     })
                     .unwrap();
 
-
                 debug_println!("Begin joining threads");
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
@@ -239,25 +238,32 @@ fn generic_2thread_ops_b<
     );
 }
 
-
 //TODO: Reduce code duplication here?
 fn generic_3thread_ops_c<
     F1: Fn(
-        &SpyOwner2,
-        ArcShiftWeak<InstanceSpy2>,
-        &'static str,
-    ) -> Option<ArcShiftWeak<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
-    F2: Fn(&SpyOwner2, ArcShiftWeak<InstanceSpy2>, &'static str) -> Option<ArcShiftWeak<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
-    F3: Fn(&SpyOwner2, ArcShiftWeak<InstanceSpy2>, &'static str) -> Option<ArcShiftWeak<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+            &SpyOwner2,
+            ArcShiftWeak<InstanceSpy2>,
+            &'static str,
+        ) -> Option<ArcShiftWeak<InstanceSpy2>>
+        + Sync
+        + Send
+        + 'static,
+    F2: Fn(
+            &SpyOwner2,
+            ArcShiftWeak<InstanceSpy2>,
+            &'static str,
+        ) -> Option<ArcShiftWeak<InstanceSpy2>>
+        + Sync
+        + Send
+        + 'static,
+    F3: Fn(
+            &SpyOwner2,
+            ArcShiftWeak<InstanceSpy2>,
+            &'static str,
+        ) -> Option<ArcShiftWeak<InstanceSpy2>>
+        + Sync
+        + Send
+        + 'static,
 >(
     f1: F1,
     f2: F2,
@@ -281,10 +287,10 @@ fn generic_3thread_ops_c<
                 shift.update(owner.create("orig3"));
                 let shift3 = ArcShift::downgrade(&shift);
                 debug_println!("Prior to debug_validate");
-                unsafe { ArcShift::debug_validate(&[&shift], &[&shift1,&shift2,&shift3]) };
+                unsafe { ArcShift::debug_validate(&[&shift], &[&shift1, &shift2, &shift3]) };
                 debug_println!("Post debug_validate");
                 drop(shift);
-                unsafe { ArcShift::debug_validate(&[], &[&shift1,&shift2,&shift3]) };
+                unsafe { ArcShift::debug_validate(&[], &[&shift1, &shift2, &shift3]) };
 
                 let owner_ref1 = owner.clone();
                 let owner_ref2 = owner.clone();
@@ -335,7 +341,6 @@ fn generic_3thread_ops_c<
     );
 }
 
-
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_b_000() {
@@ -351,7 +356,7 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
     let limit = if skip1 != 0 || skip2 != 0 || skip3 != 0 {
         1
     } else {
-        usize::MAX/10
+        usize::MAX / 10
     };
     let ops1: Vec<
         fn(
@@ -540,15 +545,9 @@ fn generic_3threading2b() {
 #[test]
 fn generic_3threading2c() {
     generic_3thread_ops_c(
-        |_owner1, _shift1, _thread| {
-            None
-        },
-        |_owner2, _shift2, _thread| {
-            None
-        },
-        |_owner3, _shift3, _thread| {
-            None
-        },
+        |_owner1, _shift1, _thread| None,
+        |_owner2, _shift2, _thread| None,
+        |_owner3, _shift3, _thread| None,
         None,
     );
 }
@@ -559,12 +558,8 @@ fn generic_3threading2e() {
             let _ = shift1.upgrade();
             Some(shift1)
         },
-        |_owner2, shift2, _thread| {
-            Some(shift2)
-        },
-        |_owner3, _shift3, _thread| {
-            None
-        },
+        |_owner2, shift2, _thread| Some(shift2),
+        |_owner3, _shift3, _thread| None,
         None,
     );
 }
