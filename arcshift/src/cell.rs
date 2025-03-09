@@ -1,7 +1,7 @@
+use crate::ArcShift;
 use std::cell::{Cell, UnsafeCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
-use crate::ArcShift;
 
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.
@@ -72,10 +72,7 @@ impl<T: 'static + ?Sized> Deref for ArcShiftCellHandle<'_, T> {
 ///
 /// Note that ArcShiftCell *cannot* be Sync, because then multiple threads
 /// could call 'get' simultaneously, corrupting the (non-atomic) refcount.
-unsafe impl<T: 'static> Send for ArcShiftCell<T>
-where
-    T: Send
-{}
+unsafe impl<T: 'static> Send for ArcShiftCell<T> where T: Send {}
 
 impl<T: 'static + ?Sized> Clone for ArcShiftCell<T> {
     fn clone(&self) -> Self {
@@ -209,4 +206,3 @@ where
         write!(f, "ArcShiftCell({:?})", &*self.borrow())
     }
 }
-

@@ -16,16 +16,14 @@ enum PipeItem<T: 'static> {
     Root(ArcShiftWeak<T>),
 }
 
-fn  run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
+fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     rng: &mut StdRng,
     mut constructor: impl FnMut() -> T,
 ) {
     let cmds = make_commands::<T>(rng, &mut constructor);
     let mut all_possible: HashSet<T> = HashSet::new();
     for cmd in cmds.iter() {
-        if let FuzzerCommand::CreateUpdateArc(_, val)
-         = cmd
-        {
+        if let FuzzerCommand::CreateUpdateArc(_, val) = cmd {
             all_possible.insert(val.clone());
         }
     }
@@ -175,12 +173,11 @@ impl<T> FuzzerCommand<T> {
             FuzzerCommand::UpgradeLight(chn) => *chn,
             FuzzerCommand::DowngradeLight(chn) => *chn,
             FuzzerCommand::DropLight(chn) => *chn,
-            FuzzerCommand::IntoInner(chn) => {*chn}
-            FuzzerCommand::GetMut(chn) => {*chn}
+            FuzzerCommand::IntoInner(chn) => *chn,
+            FuzzerCommand::GetMut(chn) => *chn,
         }
     }
 }
-
 
 fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     rng: &mut StdRng,
@@ -374,20 +371,27 @@ fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
     #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
     const COUNT: u64 = 100000;
-    let range = if let Some(seed) = seed { seed..seed+1} else {0..COUNT};
+    let range = if let Some(seed) = seed {
+        seed..seed + 1
+    } else {
+        0..COUNT
+    };
     for i in range {
-        model2(move || {
-            println!("--- Seed {} ---", i);
-            let mut rng = StdRng::seed_from_u64(i);
-            let mut counter = 0usize;
-            let owner = std::sync::Arc::new(SpyOwner2::new());
-            let owner_ref = owner.clone();
-            run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
-                counter += 1;
-                owner_ref.create(statics[counter % 10])
-            });
-            owner.validate();
-        }, repro);
+        model2(
+            move || {
+                println!("--- Seed {} ---", i);
+                let mut rng = StdRng::seed_from_u64(i);
+                let mut counter = 0usize;
+                let owner = std::sync::Arc::new(SpyOwner2::new());
+                let owner_ref = owner.clone();
+                run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
+                    counter += 1;
+                    owner_ref.create(statics[counter % 10])
+                });
+                owner.validate();
+            },
+            repro,
+        );
     }
 }
 

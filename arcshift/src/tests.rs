@@ -11,11 +11,11 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
+use std::mem::MaybeUninit;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use std::mem::MaybeUninit;
 
 mod custom_fuzz;
 pub(crate) mod leak_detection;
@@ -114,8 +114,8 @@ fn simple_unsized_str() {
         assert_eq!(shift.get(), "hello");
     })
 }
-use std::cell::{Cell, RefCell};
 use crate::cell::ArcShiftCell;
+use std::cell::{Cell, RefCell};
 
 thread_local! {
 
@@ -260,7 +260,7 @@ fn simple_cell_recursion() {
                 });
                 assert_eq!(val.str(), "root");
             });
-            cell.get(|val|{
+            cell.get(|val| {
                 assert_eq!(val.str(), "B");
             });
         }
@@ -418,7 +418,6 @@ fn simple_into_inner() {
     })
 }
 
-
 #[test]
 // There's no point in running this test under shuttle/loom,
 // and since it can take some time, let's just disable it.
@@ -518,7 +517,7 @@ fn simple_upgrade3a1() {
         debug_println!("==== running arc.update() = ");
         shift2.update(InstanceSpy::new(count.clone()));
 
-        unsafe { ArcShift::debug_validate(&[&shift1,&shift2], &[&shiftlight]) };
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[&shiftlight]) };
         debug_println!("==== Instance count: {}", count.load(Ordering::SeqCst));
         drop(shift1);
         assert_eq!(count.load(Ordering::SeqCst), 1); // The 'ArcShiftLight' should *not* keep any version alive
@@ -627,7 +626,7 @@ fn simple_threading2d() {
         {
             let mut shift = ArcShift::new(owner.create("orig"));
             let shiftlight = ArcShift::downgrade(&shift);
-            unsafe {ArcShift::debug_validate(&[&shift],&[&shiftlight]) };
+            unsafe { ArcShift::debug_validate(&[&shift], &[&shiftlight]) };
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)
@@ -1105,7 +1104,8 @@ fn simple_threading4c() {
     model(|| {
         let count = std::sync::Arc::new(SpyOwner2::new());
         {
-            let shift1 = std::sync::Arc::new(atomic::Mutex::new(ArcShift::new(count.create("orig"))));
+            let shift1 =
+                std::sync::Arc::new(atomic::Mutex::new(ArcShift::new(count.create("orig"))));
             let shift2 = std::sync::Arc::clone(&shift1);
             let shift3 = std::sync::Arc::clone(&shift1);
             let shift4 = std::sync::Arc::clone(&shift1);
@@ -1288,7 +1288,6 @@ fn simple_threading4e() {
     });
 }
 
-
 #[test]
 fn simple_test_clones2() {
     model(|| {
@@ -1296,12 +1295,12 @@ fn simple_test_clones2() {
         let shift1 = ArcShift::downgrade(&shift);
         let shift2 = shift.clone();
         let shift3 = shift.clone();
-        unsafe { ArcShift::debug_validate(&[&shift,&shift2,&shift3],&[&shift1]) };
+        unsafe { ArcShift::debug_validate(&[&shift, &shift2, &shift3], &[&shift1]) };
     });
 }
 #[test]
 fn simple_test_clonesp2() {
-    model(||{
+    model(|| {
         let _shift = ArcShift::new("orig".to_string());
     })
 }
@@ -1339,7 +1338,7 @@ fn simple_threading_repro1() {
         let root = ArcShift::new(42u32);
         let mut curval = root.clone();
         let light = ArcShift::downgrade(&curval);
-        unsafe { ArcShift::debug_validate(&[&root,&curval], &[&light]) };
+        unsafe { ArcShift::debug_validate(&[&root, &curval], &[&light]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -1371,7 +1370,7 @@ fn simple_threading_repro3() {
         let arc1 = ArcShift::downgrade(&root);
         let arc2 = ArcShift::downgrade(&root);
         drop(root);
-        unsafe { ArcShift::debug_validate(&[], &[&arc1,&arc2]) };
+        unsafe { ArcShift::debug_validate(&[], &[&arc1, &arc2]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -1391,7 +1390,6 @@ fn simple_threading_repro3() {
             .unwrap();
         _ = t1.join().unwrap();
         _ = t2.join().unwrap();
-
     });
 }
 #[test]
@@ -1409,7 +1407,6 @@ fn simple_threading_repro2() {
         light.upgrade();
         unsafe { ArcShift::debug_validate(&[&root], &[&light]) };
         drop(light);
-
     });
 }
 
@@ -1420,7 +1417,7 @@ fn simple_threading_update_twice() {
         let mut shift = ArcShift::new(42u32);
         let mut shift1 = shift.clone();
         let mut shift2 = shift.clone();
-        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2],&[]) };
+        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2], &[]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -1440,7 +1437,7 @@ fn simple_threading_update_twice() {
             .unwrap();
         _ = t1.join().unwrap();
         _ = t2.join().unwrap();
-        unsafe { ArcShift::debug_validate(&[&shift2],&[]) };
+        unsafe { ArcShift::debug_validate(&[&shift2], &[]) };
         debug_println!("--> Main dropping");
         assert!(*shift2.get() > 42);
     });
@@ -1453,7 +1450,7 @@ fn simple_threading_update_thrice() {
         let mut shift1 = shift.clone();
         let mut shift2 = shift.clone();
         let mut shift3 = shift.clone();
-        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2,&shift3],&[]) };
+        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2, &shift3], &[]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -1483,9 +1480,8 @@ fn simple_threading_update_thrice() {
         _ = t1.join().unwrap();
         _ = t2.join().unwrap();
         _ = t3.join().unwrap();
-        unsafe { ArcShift::debug_validate(&[&shift3],&[]) };
+        unsafe { ArcShift::debug_validate(&[&shift3], &[]) };
         debug_println!("--> Main dropping");
         assert!(*shift3.get() > 42);
     });
 }
-

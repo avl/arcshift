@@ -110,15 +110,13 @@ fn generic_3thread_ops_b<
                 let shift2 = shift.clone();
                 let shift3 = shift.clone();
 
-
                 debug_println!("Prior to debug_validate");
-                unsafe { ArcShift::debug_validate(&[&shift,&shift2,&shift3],&[&shift1]) };
+                unsafe { ArcShift::debug_validate(&[&shift, &shift2, &shift3], &[&shift1]) };
                 debug_println!("Post debug_validate");
 
                 let owner_ref1 = owner.clone();
                 let owner_ref2 = owner.clone();
                 let owner_ref3 = owner.clone();
-
 
                 let t1 = atomic::thread::Builder::new()
                     .name("t1".to_string())
@@ -157,7 +155,7 @@ fn generic_3thread_ops_b<
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
                 _ = t3.join().unwrap();
-                unsafe { ArcShift::debug_validate(&[&shift],&[]) };
+                unsafe { ArcShift::debug_validate(&[&shift], &[]) };
                 debug_println!("Joined all threads");
             }
             owner.validate();
@@ -165,7 +163,6 @@ fn generic_3thread_ops_b<
         repro,
     );
 }
-
 
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
