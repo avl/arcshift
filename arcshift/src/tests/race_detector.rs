@@ -40,7 +40,7 @@ fn generic_3thread_ops_a<
 
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
-                .stack_size(100_000_000)
+                .stack_size(10_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t1 =");
                     f1(&*owner_ref1, shift1, "t1")
@@ -49,7 +49,7 @@ fn generic_3thread_ops_a<
 
             let t2 = atomic::thread::Builder::new()
                 .name("t2".to_string())
-                .stack_size(100_000_000)
+                .stack_size(10_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t2 =");
                     f2(&*owner_ref2, shift2, "t2")
@@ -58,7 +58,7 @@ fn generic_3thread_ops_a<
 
             let t3 = atomic::thread::Builder::new()
                 .name("t3".to_string())
-                .stack_size(100_000_000)
+                .stack_size(10_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t3 =");
                     f3(&*owner_ref3, shift3, "t3")
