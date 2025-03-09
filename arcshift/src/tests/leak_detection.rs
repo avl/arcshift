@@ -89,6 +89,5 @@ impl Drop for InstanceSpy2 {
         let mut guard = self.x.lock().unwrap();
         guard.remove(self.name);
         debug_println!("-- InstanceSpy -- {:?} - removed {}", &*guard, self.name);
-        //debug_println!("Drop stacktrace: {:?}", Backtrace::capture());
     }
 }

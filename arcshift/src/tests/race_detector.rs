@@ -105,9 +105,11 @@ fn generic_3thread_ops_b<
             let f3 = f3.clone();
             let owner = std::sync::Arc::new(SpyOwner2::new());
             {
-                let shift = ArcShift::new(owner.create("orig"));
+                let mut shift = ArcShift::new(owner.create("orig1"));
                 let shift1 = ArcShift::downgrade(&shift);
+                shift.update(owner.create("orig2"));
                 let shift2 = shift.clone();
+                shift.update(owner.create("orig3"));
                 let shift3 = shift.clone();
 
                 debug_println!("Prior to debug_validate");
@@ -164,13 +166,193 @@ fn generic_3thread_ops_b<
     );
 }
 
+fn generic_2thread_ops_b<
+    F1: Fn(
+        &SpyOwner2,
+        ArcShiftWeak<InstanceSpy2>,
+        &'static str,
+    ) -> Option<ArcShiftWeak<InstanceSpy2>>
+    + Sync
+    + Send
+    + 'static,
+    F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+    + Sync
+    + Send
+    + 'static,
+>(
+    f1: F1,
+    f2: F2,
+    repro: Option<&str>,
+) {
+    let f1 = std::sync::Arc::new(f1);
+    let f2 = std::sync::Arc::new(f2);
+    model2(
+        move || {
+            let f1 = f1.clone();
+            let f2 = f2.clone();
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            {
+                let shift = ArcShift::new(owner.create("orig"));
+                let shift1 = ArcShift::downgrade(&shift);
+                let shift2 = shift.clone();
+
+                debug_println!("Prior to debug_validate");
+                unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shift1]) };
+                debug_println!("Post debug_validate");
+
+                let owner_ref1 = owner.clone();
+                let owner_ref2 = owner.clone();
+
+                let t1 = atomic::thread::Builder::new()
+                    .name("t1".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t1 =");
+                        let t = f1(&*owner_ref1, shift1, "t1");
+                        debug_println!(" = thread 1 dropping =");
+                        t
+                    })
+                    .unwrap();
+
+                let t2 = atomic::thread::Builder::new()
+                    .name("t2".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t2 =");
+                        let t = f2(&*owner_ref2, shift2, "t2");
+
+                        debug_println!(" = thread 2 dropping =");
+                        t
+                    })
+                    .unwrap();
+
+
+                debug_println!("Begin joining threads");
+                _ = t1.join().unwrap();
+                _ = t2.join().unwrap();
+                unsafe { ArcShift::debug_validate(&[&shift], &[]) };
+                debug_println!("Joined all threads");
+            }
+            owner.validate();
+        },
+        repro,
+    );
+}
+
+
+//TODO: Reduce code duplication here?
+fn generic_3thread_ops_c<
+    F1: Fn(
+        &SpyOwner2,
+        ArcShiftWeak<InstanceSpy2>,
+        &'static str,
+    ) -> Option<ArcShiftWeak<InstanceSpy2>>
+    + Sync
+    + Send
+    + 'static,
+    F2: Fn(&SpyOwner2, ArcShiftWeak<InstanceSpy2>, &'static str) -> Option<ArcShiftWeak<InstanceSpy2>>
+    + Sync
+    + Send
+    + 'static,
+    F3: Fn(&SpyOwner2, ArcShiftWeak<InstanceSpy2>, &'static str) -> Option<ArcShiftWeak<InstanceSpy2>>
+    + Sync
+    + Send
+    + 'static,
+>(
+    f1: F1,
+    f2: F2,
+    f3: F3,
+    repro: Option<&str>,
+) {
+    let f1 = std::sync::Arc::new(f1);
+    let f2 = std::sync::Arc::new(f2);
+    let f3 = std::sync::Arc::new(f3);
+    model2(
+        move || {
+            let f1 = f1.clone();
+            let f2 = f2.clone();
+            let f3 = f3.clone();
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            {
+                let mut shift = ArcShift::new(owner.create("orig1"));
+                let shift1 = ArcShift::downgrade(&shift);
+                shift.update(owner.create("orig2"));
+                let shift2 = ArcShift::downgrade(&shift);
+                shift.update(owner.create("orig3"));
+                let shift3 = ArcShift::downgrade(&shift);
+                debug_println!("Prior to debug_validate");
+                unsafe { ArcShift::debug_validate(&[&shift], &[&shift1,&shift2,&shift3]) };
+                debug_println!("Post debug_validate");
+                drop(shift);
+                unsafe { ArcShift::debug_validate(&[], &[&shift1,&shift2,&shift3]) };
+
+                let owner_ref1 = owner.clone();
+                let owner_ref2 = owner.clone();
+                let owner_ref3 = owner.clone();
+
+                let t1 = atomic::thread::Builder::new()
+                    .name("t1".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t1 =");
+                        let t = f1(&*owner_ref1, shift1, "t1");
+                        debug_println!(" = thread 1 dropping =");
+                        t
+                    })
+                    .unwrap();
+
+                let t2 = atomic::thread::Builder::new()
+                    .name("t2".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t2 =");
+                        let t = f2(&*owner_ref2, shift2, "t2");
+
+                        debug_println!(" = thread 2 dropping =");
+                        t
+                    })
+                    .unwrap();
+
+                let t3 = atomic::thread::Builder::new()
+                    .name("t3".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t3 =");
+                        let t = f3(&*owner_ref3, shift3, "t3");
+                        debug_println!(" = thread 3 dropping =");
+                        t
+                    })
+                    .unwrap();
+                debug_println!("Begin joining threads");
+                _ = t1.join().unwrap();
+                _ = t2.join().unwrap();
+                _ = t3.join().unwrap();
+                debug_println!("Joined all threads");
+            }
+            owner.validate();
+        },
+        repro,
+    );
+}
+
+
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_b_000() {
     generic_3threading_b_all_impl(0, 0, 0, None);
 }
+#[cfg(not(feature = "disable_slow_tests"))]
+#[test]
+fn generic_3threading_b_300() {
+    generic_3threading_b_all_impl(3, 0, 0, None);
+}
 
 fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro: Option<&str>) {
+    let limit = if skip1 != 0 || skip2 != 0 || skip3 != 0 {
+        1
+    } else {
+        usize::MAX/10
+    };
     let ops1: Vec<
         fn(
             &SpyOwner2,
@@ -225,9 +407,9 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
         },
         |_owner, _shift, _thread| None,
     ];
-    for (_n1, op1) in ops1.iter().enumerate().skip(skip1) {
-        for (_n2, op2) in ops23.iter().enumerate().skip(skip2) {
-            for (_n3, op3) in ops23.iter().enumerate().skip(skip3) {
+    for (_n1, op1) in ops1.iter().enumerate().skip(skip1).take(limit) {
+        for (_n2, op2) in ops23.iter().enumerate().skip(skip2).take(limit) {
+            for (_n3, op3) in ops23.iter().enumerate().skip(skip3).take(limit) {
                 {
                     println!("\n");
                     println!(
@@ -314,7 +496,7 @@ fn generic_3threading1() {
 }
 
 #[test]
-fn generic_3threading2() {
+fn generic_3threading2a() {
     generic_3thread_ops_b(
         |owner1, shift1, thread| {
             let shift = shift1.upgrade();
@@ -329,7 +511,91 @@ fn generic_3threading2() {
         },
         |owner3, mut shift3, thread| {
             shift3.update(owner3.create(thread));
-            Some(shift3)
+            None
+        },
+        None,
+    );
+}
+#[test]
+fn generic_3threading2b() {
+    generic_3thread_ops_b(
+        |owner1, shift1, thread| {
+            let shift = shift1.upgrade();
+            if let Some(mut shift) = shift {
+                shift.update(owner1.create(thread));
+            }
+            None
+        },
+        |owner2, mut shift2, thread| {
+            shift2.update(owner2.create(thread));
+            None
+        },
+        |owner3, mut shift3, thread| {
+            shift3.update(owner3.create(thread));
+            None
+        },
+        None,
+    );
+}
+#[test]
+fn generic_3threading2c() {
+    generic_3thread_ops_c(
+        |_owner1, _shift1, _thread| {
+            None
+        },
+        |_owner2, _shift2, _thread| {
+            None
+        },
+        |_owner3, _shift3, _thread| {
+            None
+        },
+        None,
+    );
+}
+#[test]
+fn generic_3threading2e() {
+    generic_3thread_ops_c(
+        |_owner1, shift1, _thread| {
+            let _ = shift1.upgrade();
+            Some(shift1)
+        },
+        |_owner2, shift2, _thread| {
+            Some(shift2)
+        },
+        |_owner3, _shift3, _thread| {
+            None
+        },
+        None,
+    );
+}
+
+#[test]
+fn generic_2threading2b() {
+    generic_2thread_ops_b(
+        |owner1, shift1, thread| {
+            let shift = shift1.upgrade();
+            if let Some(mut shift) = shift {
+                shift.update(owner1.create(thread));
+            }
+            Some(shift1)
+        },
+        |owner2, mut shift2, thread| {
+            shift2.update(owner2.create(thread));
+            Some(shift2)
+        },
+        None,
+    );
+}
+#[test]
+fn generic_2threading2c() {
+    generic_2thread_ops_b(
+        |_owner1, shift1, _thread| {
+            let _ = shift1.upgrade();
+            Some(shift1)
+        },
+        |owner2, mut shift2, thread| {
+            shift2.update(owner2.create(thread));
+            None
         },
         None,
     );

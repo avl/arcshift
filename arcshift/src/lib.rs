@@ -225,9 +225,6 @@
 //! ```
 //!
 
-// TODO: Verify if all functions really are lock free, according to the scientific definition?
-// Are all loopings actually due to progress of some other thread?
-
 /*
 TODO: Remove this section.
 
@@ -246,8 +243,13 @@ can get crashes.
 Talk about the 'helper' concept, how lock-free-ness can be achieved by delegating tasks to other
 concurrent threads.
 
+"memory reclamation" problem. Mention:
+Mention hazard-pointers (haphazard library) and epoch-based (crossbeam)
+
 The fundamental problem of not being able to look at item at all after decreasing refcount to
 something else than 0.
+
+Talk about using least significant bits to store flags.
 
 You may think that if two things happen on adjacent instructions, they'll happen mostly atomically
 "in practice". Not true, millions of lines of code can occur between any two instructions, because
@@ -951,7 +953,7 @@ fn get_full_ptr_raw<T: ?Sized, M: IMetadata>(
     dummy: *const ItemHolderDummy<T>,
 ) -> *const ItemHolder<T, M> {
     if is_sized::<T>() {
-        debug_assert_eq!(
+        assert_eq!(
             size_of::<*const ItemHolder<T, M>>(),
             size_of::<*const ItemHolderDummy<T>>()
         ); //<- Verify that *const T is not a fat ptr
@@ -961,7 +963,8 @@ fn get_full_ptr_raw<T: ?Sized, M: IMetadata>(
         // so transmuting from dummy to it is correct.
         unsafe { std::mem::transmute_copy(&dummy) }
     } else {
-        debug_assert_eq!(size_of::<M>(), size_of::<usize>()); //<- Verify that *const ItemHolder<T> is a fat ptr
+        assert_eq!(size_of::<M>(), size_of::<usize>()); //<- Verify that *const ItemHolder<T> is a fat ptr
+
 
         let ptr_data = dummy as *mut _;
         debug_println!("Dummy data: {:?}", ptr_data);
@@ -1044,6 +1047,8 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     /// The decoration determines:
     ///  * If janitor process is currently active for this node and those left of it
     ///  * If payload has been deallocated
+    ///  * The current lock-holder (janitor) has been disturbed (i.e, some other thread couldn't
+    ///    do its job because it encountered the lock, and set the disturbed flag).
     next: atomic::AtomicPtr<ItemHolderDummy<T>>,
     pub(crate) payload: UnsafeCell<ManuallyDrop<T>>,
 }
@@ -1056,10 +1061,14 @@ impl<T: ?Sized, M: IMetadata> PartialEq for ItemHolder<T, M> {
 
 impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     fn set_next(&self, undecorated_new_next: *const ItemHolderDummy<T>) {
-        debug_assert_eq!(
+        #[cfg(feature = "validate")]
+        assert_eq!(
             get_decoration(undecorated_new_next),
             ItemStateEnum::UndisturbedUndecorated
         );
+
+        // Lock-free because we only loop if 'next' changes, which means
+        // some other node has made progress.
         loop {
             let prior_next = self.next.load(atomic::Ordering::SeqCst);
             let new_next = decorate(undecorated_new_next, get_decoration(prior_next));
@@ -1089,6 +1098,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     fn debug_all_to_left<'a>(&self) -> Vec<&'a ItemHolder<T, M>> {
         let mut ret = vec![];
         let mut item_ptr = self as *const ItemHolder<T, M>;
+        // Lock-free because this loop is run in debug harness, and doesn't do any synchronization
         loop {
             // SAFETY:
             // item_ptr has just been created from the reference 'self', or was a non-null
@@ -1129,6 +1139,9 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     }
     /// Returns true if the node could be atomically locked
     fn lock_node_for_gc(&self) -> bool {
+        // Lock free, see comment for each 'continue' statement, which are the only statements
+        // that lead to looping.
+
         loop {
             let cur_next = self.next.load(atomic::Ordering::SeqCst);
             let decoration = get_decoration(cur_next);
@@ -1152,6 +1165,10 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 );
                 if !success {
                     atomic::spin_loop();
+                    // Lock free, because we only end up here if some other thread did one of:
+                    // 1) added a new node, which is considered progress
+                    // 2) has locked the node, which is not progress, but will only lead to us
+                    //    setting the 'disturbed' flag, which is only one step, and thus lock free.
                     continue;
                 }
                 return true;
@@ -1175,6 +1192,12 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                         Err(prior) => {
                             if !get_decoration(prior).is_disturbed() {
                                 atomic::spin_loop();
+                                // Lock free, because we can only end up here if some other thread did:
+                                // 1) Added a new node, which is considered progress
+                                // 2) Removed the lock, which will lead to the other node advancing
+                                //    to new things (which is progress), unless it was disturbed.
+                                //    However, if it was disturbed, it wasn't due to us, since we
+                                //    failed to set the disturbed flag.
                                 continue;
                             }
                         }
@@ -1191,6 +1214,12 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     #[must_use] //Not safe to leave a re-run request un-handled
     fn unlock_node(&self) -> bool {
         debug_println!("Unlocking node {:x?}", self as *const ItemHolder<T, M>);
+        // Lock free, because we only loop if some other node modified 'next',
+        // The only possible modifications are:
+        // 1) Adding a new node, which is considered progress.
+        // 2) Setting the disturbed flag, which means the other node has offloaded
+        //    work on us, and is now proceeding to is next task, which means there is
+        //    system progress, so algorithm remains lock free.
         loop {
             atomic::loom_fence();
             let cur_next = self.next.load(atomic::Ordering::SeqCst);
@@ -1544,6 +1573,7 @@ fn do_clone_weak<T: ?Sized, M: IMetadata>(
 
 fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
     item_ptr: *const ItemHolder<T, M>,
+    jobq: &mut DropHandler
 ) -> Option<*const ItemHolderDummy<T>> {
     debug_println!("executing do_upgrade_weak");
     // SAFETY:
@@ -1564,6 +1594,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
         );
     }
     let mut item_ptr = to_dummy(item_ptr);
+    // Lock free: See comment on each 'continue'
     loop {
         item_ptr = do_advance_weak::<T, M>(item_ptr);
 
@@ -1601,9 +1632,12 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                     let new_prior_strong = item.strong_count.fetch_sub(1, Ordering::SeqCst);
                     if new_prior_strong == 1 {
                         let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                        #[cfg(feature = "validate")]
+                        assert!(get_weak_count(_prior_weak_count) > 1);
                     }
-                    //debug_println!("pre-upgrade strong=0 race {:x?}, decrease weak to {}", item_ptr, get_weak_count(_prior_weak_count) - 1);
                     atomic::spin_loop();
+                    // Lock free. We only get here if some othe rnode has dropped 'item_next'
+                    // which is considered progress.
                     continue;
                 }
 
@@ -1614,7 +1648,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                     format_weak(_reduce_weak - 1)
                 );
                 #[cfg(feature = "validate")]
-                assert!(get_weak_count(_reduce_weak) > 0);
+                assert!(get_weak_count(_reduce_weak) > 1, "assertion failed: in do_upgrade_weak(1), reduced weak {:x?} to 0", item_ptr);
 
                 return Some(item_ptr);
             } else {
@@ -1625,24 +1659,25 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                         item_ptr,
                         get_weak_count(_prior_weak_count) - 1
                     );
+                    #[cfg(feature = "validate")]
+                    assert!(get_weak_count(_prior_weak_count) > 1);
                 }
                 debug_println!("Race on strong_count _increase_ - loop.");
                 atomic::spin_loop();
+                // Lcok free. We only get here if some other node has succeeded in increasing or
+                // decreasing strong count, which only happens if there is progress, unless
+                // the node undid a strong_count modification because of a detected race.
+                // The possible strong_count undo operations are:
+                // 1) If ArcShift::clone exceeds the maximum strong count limit. This is an
+                //    error case, but we'll also consider it progress.
+                // 2) If ArcShift::upgrade detects a race on 'next' (new node added), which
+                //    is considered system-wide progress.
+                // 3) In ArcShift::update, if it races with adding a new node, which is
+                //    considered progress.
                 continue; //Race on strong count, try again
             }
         } else {
-            let _reduce_weak = item.weak_count.fetch_sub(1, Ordering::SeqCst);
-            debug_println!(
-                "upgrade {:x?} failure new weak: {}",
-                item_ptr,
-                format_weak(_reduce_weak - 1)
-            );
-            // next is still null, and the most recent item was dropped. We can't upgrade.
-            // This only happens if no strong refs exist, because otherwise the most recent is
-            // kept alive.
-            debug_println!("Upgrade to strong failed");
-            #[cfg(feature = "validate")]
-            assert!(get_weak_count(_reduce_weak) > 0);
+            do_drop_weak::<T,M>(item_ptr, jobq);
             return None;
         }
     }
@@ -1672,6 +1707,10 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
     verify_item(item_ptr);
 
     debug_println!("advancing from {:x?}", item_ptr);
+    // Lock free, because we traverse the chain and eventually reach the end,
+    // except that we may fail 'update', in which case we loop.
+    // However, update only fails if there has been system-wide progress (see comment in
+    // do_advance_strong).
     loop {
         atomic::loom_fence();
         debug_println!("In advance-loop, item_ptr: {:x?}", item_ptr);
@@ -1692,9 +1731,6 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
                     debug_println!("upgrade failed, probably no payload");
                     continue;
                 }
-                //let start: &ItemHolder<T,M> = unsafe { &*from_dummy(start_ptr  as *mut _) };
-                //let res = start.weak_count.fetch_sub(1, Ordering::SeqCst);
-                //debug_println!("do_advance_impl: decrement weak of {:?}, was {}", start_ptr, res);
             }
             return item_ptr;
         }
@@ -1707,8 +1743,11 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
         );
         atomic::loom_fence();
 
+        // We must reload next, becuase it's only the next that is _now_ set that is actually
+        // protected by 'advance_count' above!
         let next_ptr = undecorate(item.next.load(Ordering::SeqCst));
-        debug_assert_ne!(next_ptr, item_ptr);
+        #[cfg(feature = "validate")]
+        assert_ne!(next_ptr, item_ptr);
         // SAFETY:
         // next_ptr is guarded by our advance_count ref that we grabbed above.
         let next: &ItemHolder<T, M> = unsafe { &*from_dummy(next_ptr) };
@@ -1739,6 +1778,8 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
                 item_ptr,
                 format_weak(_res - 1)
             );
+            #[cfg(feature = "validate")]
+            assert!(get_weak_next(_res));
             // This should never reach 0 here. We _know_ that 'item' has a 'next'. Thus, this 'next'
             // must hold a reference count on this.
             #[cfg(feature = "validate")]
@@ -1771,7 +1812,7 @@ fn do_advance_weak<T: ?Sized, M: IMetadata>(
                 format_weak(_a_weak.wrapping_sub(1))
             );
             #[cfg(feature = "validate")]
-            assert!(get_weak_count(_a_weak) > 0);
+            assert!(get_weak_count(_a_weak) > 1);
             true
         },
     )
@@ -1787,6 +1828,13 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
         // SAFETY:
         // b is a valid pointer. do_advance_impl supplies the closure with only valid pointers.
         let mut b_strong = unsafe { (*b).strong_count.load(Ordering::SeqCst) };
+        // Lock free, since we only loop when compare_exchange fails on 'strong_count', something
+        // which only occurs when 'strong_count' changes, which only occurs when there is
+        // system wide progress.
+        //
+        // Note, do_advance_strong_impl will loop if this returns false. See each
+        // such return for an argument why this only happens if there's been system side
+        // progress.
         loop {
             debug_println!(
                 "do_advance_strong {:x?} -> {:x?} (b-count = {})",
@@ -1798,6 +1846,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
             // b is a valid pointer. See above.
             if unsafe { !(*b).has_payload() } {
                 debug_println!("do_advance_strong:b has no payload");
+                // Lock free, we can only get here if another thread has added a new node.
                 return false;
             }
 
@@ -1870,6 +1919,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                             #[cfg(feature = "validate")]
                             assert!(get_weak_count(_b_weak_count) > 1);
                         }
+                        // Lock free, we can only get here if another thread has added a new node.
                         return false;
                     }
                     #[cfg(feature = "validate")]
@@ -1884,7 +1934,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         format_weak(_b_weak_count - 1)
                     );
                     #[cfg(feature = "validate")]
-                    assert!(get_weak_count(_b_weak_count) > 0);
+                    assert!(get_weak_count(_b_weak_count) > 1);
 
                     // SAFETY:
                     // a is a valid pointer. See above.
@@ -2019,6 +2069,8 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
 
     let mut rightmost_deletable = null();
 
+    // Lock free, since this just iterates through the chain of nodes,
+    // which has a bounded length.
     loop {
         debug_println!("Accessing {:x?} in first janitor loop", cur_ptr);
         // SAFETY:
@@ -2032,7 +2084,8 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             format_weak(cur.weak_count.load(Ordering::SeqCst)),
             format_weak(start.weak_count.load(Ordering::SeqCst))
         );
-        debug_assert_ne!(cur_ptr, start_ptr);
+        #[cfg(feature = "validate")]
+        assert_ne!(cur_ptr, start_ptr);
         cur.set_next(start_ptr);
         atomic::loom_fence();
 
@@ -2067,7 +2120,8 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         // means that ref must now be keeping 'prev' alive. This means 'prev' is known to be a
         // valid pointer. We never decorate prev-pointers, so no undecorate is needed.
         let prev: &ItemHolder<T, M> = unsafe { &*from_dummy(prev_ptr) };
-        debug_assert_ne!(prev_ptr, start_ptr);
+        #[cfg(feature = "validate")]
+        assert_ne!(prev_ptr, start_ptr);
         prev.set_next(start_ptr);
         atomic::loom_fence();
         let adv_count = prev.advance_count.load(Ordering::SeqCst);
@@ -2096,6 +2150,8 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         jobq: &mut impl IDropHandler<T, M>,
     ) -> Option<*const ItemHolderDummy<T>> {
         let mut deleted_count = 0;
+
+        // Lock free, since this loop at most iterates once per node in the chain.
         loop {
             if item_ptr == last_valid || item_ptr.is_null() {
                 debug_println!(
@@ -2130,6 +2186,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             {
                 let prior_item_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
                 if get_weak_count(prior_item_weak_count) != 1 {
+                    #[cfg(feature = "validate")]
                     assert_eq!(
                         get_weak_count(prior_item_weak_count),
                         1,
@@ -2162,6 +2219,8 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         }
         unlock_carry = node;
     };
+
+    // Lock free, since this loop just iterates through each node in the chain.
     while cur_ptr != end_ptr && !cur_ptr.is_null() {
         let new_predecessor = must_see_before_deletes_can_be_made
             .is_null()
@@ -2247,6 +2306,19 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
 ) {
     debug_println!("drop weak {:x?}", original_item_ptr);
     let mut item_ptr = original_item_ptr;
+    // Lock free, since we only loop in these cases:
+    // 1) If the janitor task was disturbed. If it was, some other thread has offloaded
+    //    work on us, which means the other thread could carry on and do other stuff, which
+    //    means there is system wide progress.
+    // 2) If a new 'next' pointer has been set, i.e, a new node has been added. This is
+    //    considered progress.
+    // 3) Some other node changed the weak_count. In that case, there are two cases:
+    //   3a) That other node was running 'do_drop_weak'. After changing the weak_count
+    //       there are no more loop conditions, so it has definitely made progress.
+    //   3b) That node was running some other work. It managed to change the weak count,
+    //       and is not running 'do_drop_weak', so the system is making progress as long as
+    //       that other thread is making progress, which it must be (see all other comments),
+    //       and it cannot have been obstructed by this thread.
     loop {
         debug_println!("drop weak loop {:?}", item_ptr);
         atomic::loom_fence();
@@ -2270,11 +2342,16 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         let item: &ItemHolder<T, M> = unsafe { &*from_dummy(item_ptr) };
         let prior_weak = item.weak_count.load(Ordering::SeqCst);
 
+        #[cfg(feature = "validate")]
+        assert!(get_weak_count(prior_weak) > 0);
         atomic::loom_fence();
 
         if get_weak_next(prior_weak) {
-            let _next_ptr = item.next.load(Ordering::SeqCst);
-            debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is {:?})", item_ptr, _next_ptr);
+            #[cfg(feature = "debug")]
+            {
+                let _next_ptr = item.next.load(Ordering::SeqCst);
+                debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is {:?})", item_ptr, _next_ptr);
+            }
             atomic::spin_loop();
             continue;
         }
@@ -2285,16 +2362,16 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         if have_next {
             // drop_weak raced with 'add'.
             atomic::spin_loop();
+            debug_println!("add race {:x?}, prior_weak: {}", item_ptr, format_weak(prior_weak));
             continue;
         }
 
         debug_println!("No add race, prior_weak: {}", format_weak(prior_weak));
 
-        // We now have enough information to drop payload, if desired
+        // We now have enough information to know if we can drop payload, if desired
         {
             // SAFETY:
             // item_ptr was returned by do_advance_weak, and is thus valid.
-
             let o_item = unsafe { &*from_dummy::<T, M>(item_ptr) };
             let o_strong = o_item.strong_count.load(Ordering::SeqCst);
             atomic::loom_fence();
@@ -2318,17 +2395,12 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             }
         }
 
-        let _have_prev = !item.prev.load(Ordering::SeqCst).is_null();
-
-        debug_println!("do_drop_weak: reducing weak count of {:x?}, to {} -> {} (have next/gc: {}, have prev: {}) ", item_ptr, format_weak(prior_weak), format_weak(prior_weak.wrapping_sub(1)), false,_have_prev);
-        #[cfg(feature = "validate")]
-        if get_weak_next(prior_weak) {
-            assert!(
-                get_weak_count(prior_weak) >= 1,
-                "{:x?} weak was 0 in drop",
-                item_ptr
-            );
+        #[cfg(feature = "debug")]
+        {
+            let _have_prev = !item.prev.load(Ordering::SeqCst).is_null();
+            debug_println!("do_drop_weak: reducing weak count of {:x?}, to {} -> {} (have next/gc: {}, have prev: {}) ", item_ptr, format_weak(prior_weak), format_weak(prior_weak.wrapping_sub(1)), false,_have_prev);
         }
+
         match item.weak_count.compare_exchange(
             prior_weak,
             prior_weak - 1,
@@ -2388,6 +2460,8 @@ fn do_update<T: ?Sized, M: IMetadata>(
     let mut item_ptr = to_dummy::<T, M>(initial_item_ptr);
     verify_item(item_ptr);
 
+    // Lock free. This loop only loops if another thread has changed 'next', which
+    // means there is system wide progress.
     loop {
         //let new_node = val_dummy;
 
@@ -2451,7 +2525,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
                     format_weak(_res - 1)
                 );
                 #[cfg(feature = "validate")]
-                assert!(get_weak_count(_res) > 0);
+                assert!(get_weak_count(_res) > 1);
                 atomic::spin_loop();
 
                 continue;
@@ -2477,10 +2551,13 @@ fn do_update<T: ?Sized, M: IMetadata>(
                 format_weak(_weak_count.saturating_sub(1))
             );
             #[cfg(feature = "validate")]
-            assert!(get_weak_count(_weak_count) > 0);
+            assert!(get_weak_count(_weak_count) >1);
         }
 
         item_ptr = val_dummy;
+        // Lock free
+        // Only loops if another thread has set the 'disturbed' flag, meaning it has offloaded
+        // work on us, and it has made progress, which means there is system wide progress.
         loop {
             atomic::loom_fence();
             let (need_rerun, _strong_refs) =
@@ -2508,6 +2585,8 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
     // SAFETY:
     // caller must supply valid pointer.
     let item = unsafe { &*(item_ptr) };
+    // Lock free. This only loops if another thread has changed next, which implies
+    // progress.
     loop {
         atomic::loom_fence();
         let next_ptr = item.next.load(Ordering::SeqCst);
@@ -2666,7 +2745,10 @@ impl<T: ?Sized> ArcShiftWeak<T> {
     /// had been deallocated), this method returns None.
     pub fn upgrade(&self) -> Option<ArcShift<T>> {
         let t = with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
-            do_upgrade_weak(item)
+            let mut drop_handler = DropHandler::default();
+            let temp = do_upgrade_weak(item, &mut drop_handler);
+            drop_handler.execute();
+            temp
         });
         Some(ArcShift {
             // SAFETY:
@@ -3003,6 +3085,8 @@ impl<T: ?Sized> ArcShift<T> {
             let mut jobq = DropHandler::default();
 
             let mut item_ptr = to_dummy(item_ptr);
+            // Lock free. Only loops if disturb-flag was set, meaning other thread
+            // has offloaded work on us, and it has made progress.
             loop {
                 item_ptr = do_advance_strong::<T, M>(item_ptr, &mut jobq);
                 atomic::loom_fence();
@@ -3059,6 +3143,7 @@ impl<T: ?Sized> ArcShift<T> {
         let mut last = prototype;
 
         debug_println!("Start traverse right at {:?}", last);
+        // Lock free - this is a debug method not used in production.
         loop {
             debug_println!("loop traverse right at {:?}", last);
             atomic::loom_fence();
@@ -3074,7 +3159,15 @@ impl<T: ?Sized> ArcShift<T> {
             last = from_dummy::<T, M>(next);
             atomic::spin_loop();
         }
-        {
+
+        let mut true_weak_refs = HashMap::<*const ItemHolderDummy<T>, usize>::new();
+        let mut true_strong_refs = HashMap::<*const ItemHolderDummy<T>, usize>::new();
+        // SAFETY:
+        // the loop above has yielded a valid last ptr
+        let all_nodes = unsafe { (*last).debug_all_to_left() };
+
+        let strong_refs_exist = all_nodes.iter().any(|x|x.strong_count.load(Ordering::SeqCst)>0);
+        if strong_refs_exist {
             debug_println!("Reading {:?}.next", to_dummy(last));
             // SAFETY:
             // the loop above has yielded a valid last ptr
@@ -3083,11 +3176,6 @@ impl<T: ?Sized> ArcShift<T> {
             assert!(!get_decoration(last_next).is_dropped(), "the rightmost node must never be dropped (at least at rest, but regardless of refcount)");
         }
 
-        let mut true_weak_refs = HashMap::<*const ItemHolderDummy<T>, usize>::new();
-        let mut true_strong_refs = HashMap::<*const ItemHolderDummy<T>, usize>::new();
-        // SAFETY:
-        // the loop above has yielded a valid last ptr
-        let all_nodes = unsafe { (*last).debug_all_to_left() };
         for _node in all_nodes.iter() {
             debug_println!("Node: {:?}", *_node as *const ItemHolder<T, _>);
         }

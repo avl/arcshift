@@ -257,7 +257,7 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
     let mut ret = Vec::new();
 
     #[cfg(not(loom))]
-    const COUNT: usize = 10;
+    const COUNT: usize = 15;
     #[cfg(loom)]
     const COUNT: usize = 10;
 

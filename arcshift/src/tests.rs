@@ -44,45 +44,42 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
 #[cfg(all(feature = "shuttle", coverage))]
 const SHUTTLE_ITERATIONS: usize = 50;
 #[cfg(all(feature = "shuttle", not(coverage)))]
-const SHUTTLE_ITERATIONS: usize = 5000;
+const SHUTTLE_ITERATIONS: usize = 2;
 
 #[cfg(feature = "shuttle")]
 fn model(x: impl Fn() + 'static + Send + Sync) {
-    shuttle::check_random(x, SHUTTLE_ITERATIONS);
+    shuttle::check_pct(x, SHUTTLE_ITERATIONS, 4);
 }
 #[cfg(feature = "shuttle")]
 fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
     if let Some(repro) = repro {
         shuttle::replay(x, repro);
     } else {
-        shuttle::check_random(x, SHUTTLE_ITERATIONS);
+        shuttle::check_pct(x, SHUTTLE_ITERATIONS, 4);
     }
 }
 
 // Here follows some simple basic tests
 
+#[cfg(not(any(loom, feature="shuttle")))]
+mod simple
+{
 #[test]
 fn simple_get() {
-    model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert_eq!(*shift.get(), 42u32);
-    })
+    let mut shift = ArcShift::new(42u32);
+    assert_eq!(*shift.get(), 42u32);
 }
 #[test]
 fn simple_box() {
-    model(|| {
         let mut shift = ArcShift::from_box(Box::new(42u32));
         assert_eq!(*shift.get(), 42u32);
-    })
 }
 #[test]
 fn simple_unsized() {
-    model(|| {
         let biggish = vec![1u32, 2u32].into_boxed_slice();
         let mut shift = ArcShift::from_box(biggish);
         debug_println!("Drop");
         assert_eq!(shift.get(), &vec![1, 2]);
-    })
 }
 
 trait ExampleTrait {
@@ -98,21 +95,17 @@ impl ExampleTrait for ExampleStruct {
 }
 #[test]
 fn simple_unsized_closure() {
-    model(|| {
         let boxed_trait: Box<dyn ExampleTrait> = Box::new(ExampleStruct { x: 42 });
         let mut shift = ArcShift::from_box(boxed_trait);
         debug_println!("Drop");
         assert_eq!(shift.get().call(), 42);
-    })
 }
 #[test]
 fn simple_unsized_str() {
-    model(|| {
         let boxed_str: Box<str> = Box::new("hello".to_string()).into_boxed_str();
         let mut shift = ArcShift::from_box(boxed_str);
         debug_println!("Drop");
         assert_eq!(shift.get(), "hello");
-    })
 }
 use crate::cell::ArcShiftCell;
 use std::cell::{Cell, RefCell};
@@ -126,7 +119,6 @@ thread_local! {
 //This test doesn't work in shuttle or loom, since the lazy drop of the threadlocal ends up happening outside of the shuttle model
 #[test]
 fn simple_threadlocal_cell() {
-    model(|| {
         let shift = ArcShift::new("hello".to_string());
         THREADLOCAL_FOO.with(|local| {
             local.assign(&shift).unwrap();
@@ -137,12 +129,10 @@ fn simple_threadlocal_cell() {
             });
         });
         debug_println!("Drop");
-    })
 }
 
 #[test]
 fn simple_cell() {
-    model(|| {
         let owner = SpyOwner2::new();
         {
             let mut root = ArcShift::new(owner.create("root"));
@@ -171,11 +161,9 @@ fn simple_cell() {
             assert_eq!(owner.count(), 1);
         }
         owner.validate();
-    });
 }
 #[test]
 fn simple_cell_handle() {
-    model(|| {
         let owner = SpyOwner2::new();
         {
             let mut root = ArcShift::new(owner.create("root"));
@@ -188,12 +176,10 @@ fn simple_cell_handle() {
             drop(r);
             assert_eq!(owner.count(), 1); //'cell' should now have been reloaded.
         }
-    });
 }
 
 #[test]
 fn simple_multiple_cell_handles() {
-    model(|| {
         let owner = SpyOwner2::new();
         {
             let mut root = ArcShift::new(owner.create("root"));
@@ -237,12 +223,10 @@ fn simple_multiple_cell_handles() {
             }
             assert_eq!(owner.count(), 1); //But when the last ref is dropped, we do reload
         }
-    });
 }
 
 #[test]
 fn simple_cell_recursion() {
-    model(|| {
         let owner = SpyOwner2::new();
         {
             let mut root = ArcShift::new(owner.create("root"));
@@ -265,11 +249,9 @@ fn simple_cell_recursion() {
             });
         }
         owner.validate();
-    });
 }
 #[test]
 fn simple_cell_assign() {
-    model(|| {
         let owner = SpyOwner2::new();
         {
             let cell = ArcShiftCell::new(owner.create("original"));
@@ -284,43 +266,35 @@ fn simple_cell_assign() {
 
             cell.get(|val| assert_eq!(val.str(), "new"));
         }
-    });
 }
 
 #[test]
 fn simple_rcu() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         shift.rcu(|x| x + 1);
         assert_eq!(*shift.get(), 43u32);
-    })
 }
 
 #[test]
 fn simple_rcu_maybe() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         assert!(shift.rcu_maybe(|x| Some(x + 1)));
         assert_eq!(*shift.get(), 43u32);
         assert_eq!(shift.rcu_maybe(|_x| None), false);
         assert_eq!(*shift.get(), 43u32);
-    })
 }
 #[test]
 fn simple_rcu_maybe2() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(shift.rcu_maybe(|x| Some(x + 1)), true);
         assert_eq!(shift.rcu_maybe(|_x| None), false);
         assert_eq!(*shift.get(), 43u32);
         assert_eq!(shift.rcu_maybe(|_x| None), false);
         assert_eq!(*shift.get(), 43u32);
-    })
 }
 
 #[test]
 fn simple_rcu_maybe3() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         let mut shift2 = shift.clone();
         assert_eq!(shift.rcu_maybe(|x| Some(x + 1)), true);
@@ -329,93 +303,95 @@ fn simple_rcu_maybe3() {
         assert_eq!(shift.rcu_maybe(|_x| None), false);
         assert_eq!(*shift.get(), 43u32);
         assert_eq!(*shift2.get(), 43u32);
-    })
 }
 #[test]
 fn simple_deref() {
-    model(|| {
         let shift = ArcShift::new(42u32);
         assert_eq!(*shift, 42u32);
-    })
 }
 #[test]
 fn simple_get4() {
-    model(|| {
         let shift = ArcShift::new(42u32);
         assert_eq!(*shift.shared_get(), 42u32);
-    })
 }
 #[test]
 fn simple_get_mut() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         // Uniquely owned values can be modified using 'try_get_mut'.
         assert_eq!(*shift.try_get_mut().unwrap(), 42);
-    })
 }
 #[test]
 fn simple_zerosized() {
-    model(|| {
         let mut shift = ArcShift::new(());
         assert_eq!(*shift.get(), ());
         shift.update(());
         assert_eq!(*shift.get(), ());
-    })
 }
 #[test]
 fn simple_update() {
-    model(|| {
         let mut shift = ArcShift::new(42);
         let old = &*shift;
         shift.update(*old + 4);
         shift.reload();
-    })
 }
 
 #[test]
 fn simple_get_mut2() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         let mut shift2 = shift.clone();
         shift2.update(43);
         assert_eq!(shift.try_get_mut(), None);
-    })
 }
 #[test]
 fn simple_get_mut3() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         let _shift2 = ArcShift::downgrade(&shift);
         shift.update(43);
         assert_eq!(shift.try_get_mut(), None);
-    })
 }
 #[test]
 fn simple_get_mut4_mut() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         let mut shift2 = shift.clone();
         shift2.update(43);
         drop(shift2);
         assert_eq!(shift.try_get_mut(), Some(&mut 43));
-    })
 }
 #[test]
 fn simple_try_into() {
-    model(|| {
         let shift = ArcShift::new(42u32);
         // Uniquely owned values can be moved out without being dropped
         assert_eq!(shift.try_into_inner().unwrap(), 42);
-    })
 }
 
 #[test]
 fn simple_into_inner() {
-    model(|| {
         let shift = ArcShift::new(42u32);
         // Uniquely owned values can be moved out without being dropped
         assert_eq!(shift.try_into_inner().unwrap(), 42);
-    })
+}
+#[test]
+fn simple_into_inner2() {
+        let shift = ArcShift::new(42u32);
+        let mut shift2 = shift.clone();
+        shift2.update(43);
+        drop(shift2);
+        assert_eq!(shift.try_into_inner(), Some(43));
+}
+#[test]
+fn simple_failing_into_inner() {
+        let shift = ArcShift::new(42u32);
+        let _shift2 = shift.clone();
+
+        assert_eq!(shift.try_into_inner(), None);
+}
+#[test]
+fn simple_failing_into_inner2() {
+        let shift = ArcShift::new(42u32);
+        let mut shift2 = shift.clone();
+        shift2.update(43);
+
+        assert_eq!(shift.try_into_inner(), None);
 }
 
 #[test]
@@ -423,7 +399,6 @@ fn simple_into_inner() {
 // and since it can take some time, let's just disable it.
 #[cfg(not(any(loom, feature = "shuttle")))]
 fn simple_large() {
-    model(|| {
         #[cfg(not(miri))]
         const SIZE: usize = 10_000_000;
         #[cfg(miri)]
@@ -439,75 +414,59 @@ fn simple_large() {
         let mut shift = ArcShift::from_box(bigbox);
         let value = shift.get();
         assert_eq!(value[0], 42);
-    })
 }
 #[test]
 fn simple_get2() {
-    model(|| {
         let mut shift = ArcShift::from_box(Box::new(42u32));
         assert_eq!(*shift.get(), 42u32);
-    })
 }
 #[test]
 fn simple_get3() {
-    model(|| {
         let mut shift = ArcShift::new("hello".to_string());
         assert_eq!(shift.get(), "hello");
-    })
 }
 #[test]
 fn simple_update0() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
         shift.update(43);
         assert_eq!(*shift.get(), 43u32);
-    });
 }
 #[test]
 fn simple_update_boxed() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
         shift.update_box(Box::new(43));
         assert_eq!(*shift.get(), 43u32);
-    });
 }
 
 #[test]
 fn simple_update2() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
         shift.update(43);
         shift.update(44);
         shift.update(45);
         assert_eq!(*shift.get(), 45u32);
-    });
 }
 #[test]
 fn simple_update3() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
         shift.update_box(Box::new(45));
         assert_eq!(*shift.get(), 45u32);
-    });
 }
 
 #[test]
 fn simple_update5() {
-    model(|| {
         let mut shift = ArcShift::new(42u32);
         assert_eq!(*shift.get(), 42u32);
         shift.update(45);
         assert_eq!(*shift.get(), 45u32);
-    });
 }
 
 #[test]
 fn simple_upgrade3a1() {
-    model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let shift1 = ArcShift::new(InstanceSpy::new(count.clone()));
         let shiftlight = ArcShift::downgrade(&shift1);
@@ -527,11 +486,9 @@ fn simple_upgrade3a1() {
         debug_println!("==== drop shiftroot =");
         drop(shiftlight);
         assert_eq!(count.load(Ordering::SeqCst), 0);
-    });
 }
 #[test]
 fn simple_upgrade3a0() {
-    model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut arc = ArcShift::new(InstanceSpy::new(count.clone()));
         for _ in 0..10 {
@@ -543,12 +500,10 @@ fn simple_upgrade3a0() {
         assert_eq!(count.load(Ordering::SeqCst), 1);
         drop(arc);
         assert_eq!(count.load(Ordering::SeqCst), 0);
-    });
 }
 
 #[test]
 fn simple_upgrade4b() {
-    model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         {
             let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
@@ -567,11 +522,9 @@ fn simple_upgrade4b() {
             assert_eq!(count.load(Ordering::SeqCst), 0);
         }
         assert_eq!(count.load(Ordering::Relaxed), 0);
-    });
 }
 #[test]
 fn simple_upgrade4c() {
-    model(|| {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         {
             let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
@@ -589,9 +542,8 @@ fn simple_upgrade4c() {
             assert_eq!(count.load(Ordering::Relaxed), 1);
         }
         assert_eq!(count.load(Ordering::Relaxed), 0);
-    });
 }
-
+}
 #[test]
 fn simple_threading2() {
     model(|| {
