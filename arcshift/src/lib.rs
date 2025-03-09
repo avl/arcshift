@@ -1033,25 +1033,23 @@ struct ItemHolderDummy<T:?Sized> {
 
 
 /*
- Invariants (Draft): TODO: Formalize
-
  * ItemHolder cannot be dropped if weak-count > 0
  * ItemHolder cannot be dropped while strong-count > 0
+ * The rightmost ItemHolder cannot be dropped if there are other items (to the left)
+   (But it may be possible to apply the janitor operation and remove the 'prev')
  * However, an ItemHolder can have its strong-count increased even if it is dropped,
    so just because strong-count is > 0 doesn't mean the item isn't dropped.
- * If strong-count > 0, weak-count is also > 0
+ * If strong-count > 0, weak-count is also > 0. Always.
+ * The first taken strong-count owns a weak ref on the item. When the last strong count is
+   released, the weak ref must be released.
  * ItemHolder cannot be dropped if item.prev.advance_count > 0
  * ItemHolder can only be dropped when holding a lock on item,
-   and the item.next, after having set 'next' to item.next (or further to the right).
-   See do_advance_impl for details regarding 'advance_count'
- * ItemHolder cannot be dropped if 'next' is null, and it has a 'prev'.
-   (But it may be possible to apply the janitor operation and remove the 'prev')
- * While dropping, the janitor task must be run. If a concurrent janitor task is detected,
+   and a lock on item 'item.next', after having set 'next' to 'item.next' (or further to the right).
+   See do_advance_impl for details regarding 'advance_count'.
+ * While dropping, the janitor process must be run. If a concurrent janitor task is detected,
    it must be marked as 'disturbed', and the disturbed task must re-run from the beginning
    after completing.
-
-
- */
+*/
 
 /// Align 8 is needed, since we store flags in the lower 2 bits of the ItemHolder-pointers
 /// In practice, the alignment of ItemHolder is 8 anyway, but we specify it here for clarity.
@@ -2210,12 +2208,12 @@ fn do_update<T:?Sized, M:IMetadata>(initial_item_ptr: *const ItemHolder<T,M>, mu
             return item_ptr;
         };
         let new_next = decorate(val_dummy, get_decoration(cur_next));
-        // SAFETY:
-        // val is the new value supplied by the caller. It is always valid, and it is not
-        // yet linked into the chain, so no other node could free it.
 
         debug_println!("Updating {:x?} to {:x?}", initial_item_ptr, val_dummy);
         let val = from_dummy::<T,M>(val_dummy) as *mut ItemHolder<T,M>;
+        // SAFETY:
+        // val is the new value supplied by the caller. It is always valid, and it is not
+        // yet linked into the chain, so no other node could free it.
         unsafe { (*val).prev = atomic::AtomicPtr::new(item_ptr as *mut _) };
 
         atomic::loom_fence();
@@ -2499,8 +2497,11 @@ impl<T> ArcShift<T> {
         // do_update returns a valid non-null pointer
         let new_item_ptr = do_update(from_dummy::<T,SizedMetadata>(self.item.as_ptr()),
                                  |prev:&ItemHolder<T,SizedMetadata>| ->Option<*const ItemHolderDummy<T>>{
+                                     // SAFETY:
+                                     // we hold a strong ref on prev, so it cannot be dropped. Shared
+                                     // access to 'payload' is thus sound.
                                      let prev_payload :&ManuallyDrop<T> = unsafe{&*prev.payload.get()};
-                                     let prev_payload: &T = &*prev_payload;
+                                     let prev_payload: &T = prev_payload;
                                      let new_candidate :Option<T>= update(prev_payload);
                                      let Some(new_candidate) = new_candidate else {
                                          // Ok, the closure decided to NOT do an update after all
@@ -2509,15 +2510,18 @@ impl<T> ArcShift<T> {
                                              let mut jobq = DropHandler::default();
                                              raw_do_unconditional_drop_payload_if_not_dropped(from_dummy::<T,SizedMetadata>(holder) as *mut ItemHolder<T,SizedMetadata>, &mut jobq);
                                              jobq.execute();
-                                             cancelled = true;
                                          }
+                                         cancelled = true;
                                          return None;
                                      };
                                      if let Some(holder) = holder {
+                                         // SAFETY:
                                          // If we get called when we already have a holder, then this is a retry
                                          // and that holder was never visible to any other thread. We still have
                                          // unique access to it.
                                          let holder_mut: &mut ItemHolder<T,SizedMetadata> = unsafe { &mut *(from_dummy::<T,SizedMetadata>(holder) as *mut _) };
+                                         // SAFETY:
+                                         // See above
                                          unsafe {
                                              ManuallyDrop::drop(&mut *holder_mut.payload.get());
                                          }
@@ -2529,6 +2533,8 @@ impl<T> ArcShift<T> {
                                          Some(new_holder)
                                      }
                                  }, &mut jobq);
+        // SAFETY:
+        // new_item_ptr returned by do_update is never null
         let new_unique_ptr = unsafe { NonNull::new_unchecked(new_item_ptr as *mut _)};
         jobq.execute();
         self.item = new_unique_ptr;
@@ -2595,14 +2601,43 @@ impl<T:?Sized> ArcShift<T> {
     pub fn try_get_mut(&mut self) -> Option<&mut T> {
         self.reload();
         with_holder!(self.item, T, |item_ptr: *const ItemHolder<T,_>| {
+            // SAFETY:
+            // self.item is always a valid pointer for shared access
             let item = unsafe { &*item_ptr};
             let weak_count = item.weak_count.load(Ordering::SeqCst);
             if get_weak_count(weak_count) == 1 &&
                 !get_weak_next(weak_count) &&
                 !get_weak_prev(weak_count) &&
                 item.strong_count.load(Ordering::SeqCst) == 1 {
-                let temp :&mut ManuallyDrop<T> = unsafe { &mut *item.payload.get()};
-                Some(&mut **temp)
+                let weak_count = item.weak_count.load(Ordering::SeqCst);
+                if get_weak_count(weak_count) == 1 &&
+                    !get_weak_next(weak_count) {
+                    // SAFETY:
+                    // The above constraints actually guarantee there can be no concurrent access.
+                    //
+                    // If we can prove that no such thread existed at time of 'weak_count.load' above,
+                    // no such thread can later appear, since we hold '&mut self' to the only
+                    // ArcShift referencing the chain. I.e, if we can prove this, we're done.
+                    // No other weak-ref can exist, since we've checked that weak count is 1.
+                    //
+                    // Since the weak ref flags say there's no next and no prev, the only possible other
+                    // ref that could exist at 'weak_count.load'-time would be a strong ref.
+                    //
+                    // We therefore check the strong count. If it is 1, there's only three possible cases:
+                    // 1: We truly are the only remaining ref
+                    // 2: There was one, and it has since gone away
+                    // 3: There was one, and it has updated the chain and added a new value.
+                    // 4: There was one, and it has downgraded to a weak ref.
+                    //
+                    // Cases 1 and 2 are benign. We guard against case 2 by loading 'weak_count'
+                    // again. If it still shows there's no 'next', then case 3 is off the table.
+                    // If the count is also still 1, option 4 is off the table. Meaning, we truly
+                    // are alone.
+                    let temp :&mut ManuallyDrop<T> = unsafe { &mut *item.payload.get()};
+                    Some(&mut **temp)
+                } else {
+                    None
+                }
             } else {
                 None
             }
