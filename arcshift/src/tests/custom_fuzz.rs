@@ -126,6 +126,16 @@ fn  run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                     FuzzerCommand::DropLight(_) => {
                         curvalweak = None;
                     }
+                    FuzzerCommand::IntoInner(_) => {
+                        if let Some(t) = curval.take() {
+                            let _ = t.try_into_inner();
+                        }
+                    }
+                    FuzzerCommand::GetMut(_) => {
+                        if let Some(t) = curval.as_mut() {
+                            let _ = t.try_get_mut();
+                        }
+                    }
                 }
             }
         }).unwrap();
@@ -149,6 +159,8 @@ enum FuzzerCommand<T> {
     DropArc(u8),
     UpgradeLight(u8),
     DowngradeLight(u8),
+    IntoInner(u8),
+    GetMut(u8),
     DropLight(u8),
 }
 impl<T> FuzzerCommand<T> {
@@ -163,6 +175,8 @@ impl<T> FuzzerCommand<T> {
             FuzzerCommand::UpgradeLight(chn) => *chn,
             FuzzerCommand::DowngradeLight(chn) => *chn,
             FuzzerCommand::DropLight(chn) => *chn,
+            FuzzerCommand::IntoInner(chn) => {*chn}
+            FuzzerCommand::GetMut(chn) => {*chn}
         }
     }
 }
@@ -223,6 +237,16 @@ fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
             }
             FuzzerCommand::DropLight(chn) => {
                 arcs[chn as usize] = None;
+            }
+            FuzzerCommand::IntoInner(chn) => {
+                if let Some(x) = arcs[chn as usize].take() {
+                    let _ = x.try_into_inner();
+                }
+            }
+            FuzzerCommand::GetMut(chn) => {
+                if let Some(x) = arcs[chn as usize].as_mut() {
+                    let _ = x.try_get_mut();
+                }
             }
         }
     }

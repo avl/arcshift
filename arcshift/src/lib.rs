@@ -233,12 +233,14 @@ Talking points:
 Arc<[u8]> is actually 2 words (16 bytes on 64-bit platforms).
 
 This works, because the length can't be changed. But for ArcShift<[u8]>, we'd expect to be able
-to change the length!
+to change the length! Describe the challenge of sized values!
 
 When decreasing a reference count, if it doesn't go to 0, you know _nothing_ about the count.
 
 Watch out for loom's LOOM_CHECKPOINT_FILE. If you change the code, but keep the file, you
 can get crashes.
+
+
 
 The fundamental problem of not being able to look at item at all after decreasing refcount to
 something else than 0.
@@ -270,7 +272,7 @@ use std::ptr::{addr_of_mut, null, null_mut, NonNull};
 use std::sync::atomic::Ordering;
 
 use crate::atomic::loom_fence;
-use crate::deferred::{DeferredJobQueue};
+use crate::deferred::{DropHandler, IDropHandler, StealingDropHandler};
 // About unsafe code in this crate:
 // Some private functions contain unsafe code, and place limitations on their
 // callers, without these private functions being marked unsafe.
@@ -301,15 +303,100 @@ mod atomic {
 
 mod deferred {
     use std::any::Any;
+    use std::mem::ManuallyDrop;
     use std::panic::{resume_unwind, AssertUnwindSafe};
+    use std::ptr::addr_of_mut;
+    use crate::{debug_println, get_holder_layout, IMetadata, ItemHolder, SizedMetadata};
 
+    pub(crate) trait IDropHandler<T:?Sized,M:IMetadata> {
+        fn do_drop(&mut self, ptr: *mut ItemHolder<T,M>);
+        fn do_dealloc(&mut self, item_ptr: *const ItemHolder<T, M>);
+        fn report_sole_user(&mut self);
+    }
 
     #[derive(Default)]
-    pub(crate) struct DeferredJobQueue {
+    pub(crate) struct DropHandler {
         panic: Option<Box<dyn Any + Send + 'static>>,
     }
 
-    impl DeferredJobQueue {
+    pub(crate) struct StealingDropHandler<T> {
+        regular: DropHandler,
+        stolen: Option<T>,
+        sole_user: bool,
+    }
+
+    impl<T> Default for StealingDropHandler<T> {
+        fn default() -> Self {
+            Self {
+                regular: Default::default(),
+                stolen: None,
+                sole_user: false,
+            }
+        }
+    }
+
+    impl<T> StealingDropHandler<T> {
+        pub(crate) fn take_stolen(self) -> Option<T> {
+            self.sole_user.then_some(self.stolen?)
+        }
+
+    }
+    impl<T> IDropHandler<T,SizedMetadata> for StealingDropHandler<T> {
+        fn do_drop(&mut self, item_ptr: *mut ItemHolder<T, SizedMetadata>) {
+            self.regular.run(||{
+                // SAFETY: item_ptr must be valid, guaranteed by caller.
+                let payload = unsafe { addr_of_mut!((*item_ptr).payload).read() };
+                debug_println!("payload ref created");
+                // SAFETY: item_ptr is now uniquely owned, and the flags of 'next' tell us it has not had
+                // its payload dropped yet. We can drop it.
+                let payload = ManuallyDrop::into_inner(payload.into_inner() );
+                self.stolen = Some(payload); //This may drop any previously stolen payload. This is the intended semantics.
+                debug_println!("payload stolen");
+            });
+        }
+
+        fn do_dealloc(&mut self, item_ptr: *const ItemHolder<T, SizedMetadata>) {
+            self.regular.do_dealloc(item_ptr);
+        }
+
+        fn report_sole_user(&mut self) {
+            self.sole_user = true;
+        }
+
+
+    }
+
+    impl<T:?Sized,M:IMetadata> IDropHandler<T,M> for DropHandler {
+        fn do_drop(&mut self, item_ptr: *mut ItemHolder<T, M>) {
+            self.run(||{
+                // SAFETY: item_ptr must be valid, guaranteed by caller.
+                let payload = unsafe { &(*item_ptr).payload };
+                debug_println!("payload ref created");
+
+                // SAFETY: item_ptr is now uniquely owned, and the flags of 'next' tell us it has not had
+                // its payload dropped yet. We can drop it.
+                unsafe { ManuallyDrop::drop(&mut *payload.get() ) };
+                debug_println!("payload dropped");
+            })
+        }
+
+        fn do_dealloc(&mut self, item_ptr: *const ItemHolder<T, M>) {
+            // SAFETY:
+            // item_ptr is still a valid, exclusively owned pointer
+            let layout = get_holder_layout(&unsafe { &*item_ptr }.payload);
+            // SAFETY:
+            // fullptr is a valid uniquely owned pointer that we must deallocate
+            debug_println!("Calling dealloc {:x?}", item_ptr);
+            // SAFETY:
+            // item_ptr is still a valid, exclusively owned pointer
+            unsafe { std::alloc::dealloc(item_ptr as *mut _, layout) }
+        }
+
+        fn report_sole_user(&mut self) {
+        }
+    }
+
+    impl DropHandler {
         pub(crate) fn run(&mut self, job: impl FnOnce()) {
             // We do use AssertUnwindSafe here.
             // Most of the time, this is perfectly fine, since this crate doesn't
@@ -1372,7 +1459,7 @@ fn undecorate<T: ?Sized>(cand: *const ItemHolderDummy<T>) -> *const ItemHolderDu
 impl<T:?Sized> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
         let t = with_holder!(self.item, T, |item: *const ItemHolder<T,_>| {
-            let mut drop_jobs = DeferredJobQueue::default();
+            let mut drop_jobs = DropHandler::default();
             let result = do_clone_strong(item, &mut drop_jobs);
             drop_jobs.execute();
             result
@@ -1397,7 +1484,7 @@ impl<T:?Sized> Clone for ArcShiftWeak<T> {
     }
 }
 
-fn do_clone_strong<T:?Sized, M: IMetadata>(item_ptr: *const ItemHolder<T, M>, drop_job_queue: &mut DeferredJobQueue) -> *const ItemHolderDummy<T> {
+fn do_clone_strong<T:?Sized, M: IMetadata>(item_ptr: *const ItemHolder<T, M>, drop_job_queue: &mut impl IDropHandler<T,M>) -> *const ItemHolderDummy<T> {
     atomic::loom_fence();
     // SAFETY:
     // do_clone_strong must be called with a valid item_ptr
@@ -1610,7 +1697,7 @@ fn do_advance_weak<T: ?Sized, M: IMetadata>(item_ptr: *const ItemHolderDummy<T>)
 
 // Always returns valid, non-null, pointers
 #[inline(never)]
-fn do_advance_strong<T: ?Sized, M: IMetadata>(item_ptr: *const ItemHolderDummy<T>, drop_job_queue: &mut DeferredJobQueue) -> *const ItemHolderDummy<T> {
+fn do_advance_strong<T: ?Sized, M: IMetadata>(item_ptr: *const ItemHolderDummy<T>, drop_job_queue: &mut impl IDropHandler<T,M>) -> *const ItemHolderDummy<T> {
     do_advance_impl::<_, M>(item_ptr,move |a, b|{
         // SAFETY:
         // b is a valid pointer. do_advance_impl supplies the closure with only valid pointers.
@@ -1718,10 +1805,10 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(item_ptr: *const ItemHolderDummy<T
     })
 }
 
-fn raw_deallocate_node<T:?Sized, M:IMetadata>(item_ptr: *const ItemHolder<T, M>, jobq: &mut DeferredJobQueue) {
+fn raw_deallocate_node<T:?Sized, M:IMetadata>(item_ptr: *const ItemHolder<T, M>, jobq: &mut impl IDropHandler<T,M>) {
 
     verify_item(to_dummy(item_ptr));
-    raw_do_unconditional_drop_payload_if_not_dropped(item_ptr as *mut ItemHolder<T, M>);
+    raw_do_unconditional_drop_payload_if_not_dropped(item_ptr as *mut ItemHolder<T, M>, jobq);
 
     // SAFETY:
     // item_ptr is going to be deallocated, and the caller must make sure
@@ -1736,17 +1823,7 @@ fn raw_deallocate_node<T:?Sized, M:IMetadata>(item_ptr: *const ItemHolder<T, M>,
         item_ref.magic2.store(0xdeaddea2, Ordering::SeqCst);
     }
 
-    jobq.run(move||{
-        // SAFETY:
-        // item_ptr is still a valid, exclusively owned pointer
-        let layout = get_holder_layout(&unsafe { &*item_ptr }.payload);
-        // SAFETY:
-        // fullptr is a valid uniquely owned pointer that we must deallocate
-        debug_println!("Calling dealloc {:x?}", item_ptr);
-        // SAFETY:
-        // item_ptr is still a valid, exclusively owned pointer
-        unsafe { std::alloc::dealloc(item_ptr as *mut _, layout) }
-    });
+    jobq.do_dealloc(item_ptr);
 }
 
 #[derive(PartialEq)]
@@ -1764,7 +1841,7 @@ enum NodeStrongStatus {
 }
 
 
-fn do_janitor_task<T: ?Sized, M: IMetadata>(start_ptr: *const ItemHolder<T, M>, jobq: &mut DeferredJobQueue) -> (bool /*need re-run*/ , NodeStrongStatus) {
+fn do_janitor_task<T: ?Sized, M: IMetadata>(start_ptr: *const ItemHolder<T, M>, jobq: &mut impl IDropHandler<T,M>) -> (bool /*need re-run*/, NodeStrongStatus) {
     verify_item(to_dummy(start_ptr));
 
     let mut have_seen_left_strong_refs = false;
@@ -1860,7 +1937,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(start_ptr: *const ItemHolder<T, M>, 
     // I.e, it's one-beyond-the-end.
     let end_ptr = cur_ptr;
 
-    fn find_non_deleted_predecessor<T:?Sized, M:IMetadata>(mut item_ptr: *const ItemHolderDummy<T>, last_valid: *const ItemHolderDummy<T>, jobq: &mut DeferredJobQueue) -> Option<*const ItemHolderDummy<T>> {
+    fn find_non_deleted_predecessor<T:?Sized, M:IMetadata>(mut item_ptr: *const ItemHolderDummy<T>, last_valid: *const ItemHolderDummy<T>, jobq: &mut impl IDropHandler<T,M>) -> Option<*const ItemHolderDummy<T>> {
         let mut deleted_count = 0;
         loop {
             if item_ptr == last_valid || item_ptr.is_null() {
@@ -1982,7 +2059,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(start_ptr: *const ItemHolder<T, M>, 
 
 /// drop_payload should be set to drop the payload of 'original_item_ptr' iff it is
 /// either not rightmost, or all refs to all nodes are just weak refs (i.e, no strong refs exist)
-fn do_drop_weak<T:?Sized, M:IMetadata>(original_item_ptr: *const ItemHolderDummy<T>, drop_job_queue: &mut DeferredJobQueue) {
+fn do_drop_weak<T:?Sized, M:IMetadata>(original_item_ptr: *const ItemHolderDummy<T>, drop_job_queue: &mut impl IDropHandler<T,M>) {
     debug_println!("drop weak {:x?}", original_item_ptr);
     let mut item_ptr = original_item_ptr;
     loop {
@@ -2079,8 +2156,10 @@ fn do_drop_weak<T:?Sized, M:IMetadata>(original_item_ptr: *const ItemHolderDummy
 
         debug_println!("Prior weak of {:x?} is {}", item_ptr, format_weak(prior_weak));
         if get_weak_count(prior_weak) == 1 {
+            // We know there's no next here either, since we checked 'get_weak_next' before the cmpxch, so we _KNOW_ we're the only user now.
             if !get_weak_prev(prior_weak) {
                 debug_println!("drop weak {:x?}, prior count = 1, raw deallocate", item_ptr);
+                drop_job_queue.report_sole_user();
                 raw_deallocate_node(from_dummy::<T,M>(item_ptr), drop_job_queue);
             } else {
                 debug_println!("drop weak {:x?}, couldn't drop node, because there are nodes to the left", item_ptr);
@@ -2092,7 +2171,8 @@ fn do_drop_weak<T:?Sized, M:IMetadata>(original_item_ptr: *const ItemHolderDummy
     }
 }
 
-fn do_update<T:?Sized, M:IMetadata>(initial_item_ptr: *const ItemHolder<T,M>, val_dummy: *const ItemHolderDummy<T>, drop_job_queue: &mut DeferredJobQueue) -> *const ItemHolderDummy<T> {
+
+fn do_update<T:?Sized, M:IMetadata>(initial_item_ptr: *const ItemHolder<T,M>, mut val_dummy_factory: impl FnMut(&ItemHolder<T,M>) -> Option<*const ItemHolderDummy<T>>, drop_job_queue: &mut impl IDropHandler<T,M>) -> *const ItemHolderDummy<T> {
 
     /*
     {
@@ -2109,27 +2189,33 @@ fn do_update<T:?Sized, M:IMetadata>(initial_item_ptr: *const ItemHolder<T,M>, va
 
     let mut item_ptr = to_dummy::<T,M>(initial_item_ptr);
     verify_item(item_ptr);
-    let new_node = val_dummy;
 
-    debug_println!("Updating {:x?} to {:x?}", initial_item_ptr, val_dummy);
-    let val = from_dummy::<T,M>(val_dummy) as *mut ItemHolder<T,M>;
     loop {
+        //let new_node = val_dummy;
+
+
         item_ptr = do_advance_strong::<T,M>(item_ptr, drop_job_queue);
+
         // SAFETY:
         // item_ptr was returned by do_advance_strong, and is thus valid.
         let item = unsafe {&*from_dummy::<T,M>(item_ptr) };
-        debug_println!("Updating {:x?} to {:x?}, loading next of {:x?}", initial_item_ptr, val_dummy, item_ptr);
+        debug_println!("Updating {:x?} , loading next of {:x?}", initial_item_ptr, item_ptr);
         atomic::loom_fence();
         let cur_next = item.next.load(Ordering::SeqCst);
         if !undecorate(cur_next).is_null() {
             atomic::spin_loop();
             continue;
         }
-        let new_next = decorate(new_node, get_decoration(cur_next));
+        let Some(val_dummy) = val_dummy_factory(item) else {
+            return item_ptr;
+        };
+        let new_next = decorate(val_dummy, get_decoration(cur_next));
         // SAFETY:
         // val is the new value supplied by the caller. It is always valid, and it is not
         // yet linked into the chain, so no other node could free it.
 
+        debug_println!("Updating {:x?} to {:x?}", initial_item_ptr, val_dummy);
+        let val = from_dummy::<T,M>(val_dummy) as *mut ItemHolder<T,M>;
         unsafe { (*val).prev = atomic::AtomicPtr::new(item_ptr as *mut _) };
 
         atomic::loom_fence();
@@ -2176,7 +2262,7 @@ fn do_update<T:?Sized, M:IMetadata>(initial_item_ptr: *const ItemHolder<T,M>, va
         }
 
 
-        item_ptr = new_node;
+        item_ptr = val_dummy;
         loop
         {
             atomic::loom_fence();
@@ -2197,7 +2283,7 @@ fn do_update<T:?Sized, M:IMetadata>(initial_item_ptr: *const ItemHolder<T,M>, va
 // * We're the rightmost node
 // * The payload is already dropped
 // the item_ptr must be valid.
-fn do_drop_payload_if_possible<T:?Sized, M:IMetadata>(item_ptr: *const ItemHolder<T,M>, override_rightmost_check: bool, drop_queue: &mut DeferredJobQueue) {
+fn do_drop_payload_if_possible<T:?Sized, M:IMetadata>(item_ptr: *const ItemHolder<T,M>, override_rightmost_check: bool, drop_queue: &mut impl IDropHandler<T,M>) {
 
     // SAFETY:
     // caller must supply valid pointer.
@@ -2230,23 +2316,11 @@ fn do_drop_payload_if_possible<T:?Sized, M:IMetadata>(item_ptr: *const ItemHolde
     debug_println!("Dropping payload {:x?} (dec: {:?})", item_ptr, unsafe { (*item_ptr).decoration()});
     // SAFETY: item_ptr must be valid, guaranteed by caller.
 
-    drop_queue.run(move||{
-        // SAFETY: item_ptr must be valid, guaranteed by caller.
-        let payload = unsafe { &(*item_ptr).payload };
-        debug_println!("payload ref created");
-        // TODO: Possibly 'take' this here instead, and actually drop it after all lock-free algorithms
-        // and loops have finished, out in the 'ArcShift' method, not in the lockfree machinery.
-
-        // SAFETY: item_ptr is now uniquely owned, and the flags of 'next' tell us it has not had
-        // its payload dropped yet. We can drop it.
-        unsafe { ManuallyDrop::drop(&mut *payload.get() ) };
-        debug_println!("payload dropped");
-    });
-
+    drop_queue.do_drop(item_ptr as *mut _);
 }
 
 // Caller must guarantee poiner is uniquely owned
-fn raw_do_unconditional_drop_payload_if_not_dropped<T:?Sized, M:IMetadata>(item_ptr: *mut ItemHolder<T,M>) {
+fn raw_do_unconditional_drop_payload_if_not_dropped<T:?Sized, M:IMetadata>(item_ptr: *mut ItemHolder<T,M>, drop_job_queue: &mut impl IDropHandler<T,M>) {
     debug_println!("Unconditional drop of payload {:x?}", item_ptr);
     // SAFETY: Caller must guarantee poiner is uniquely owned
     let item = unsafe {&*(item_ptr)};
@@ -2254,34 +2328,19 @@ fn raw_do_unconditional_drop_payload_if_not_dropped<T:?Sized, M:IMetadata>(item_
     let decoration = get_decoration(next_ptr);
     if !decoration.is_dropped() {
         debug_println!("Actual drop of payload {:x?}, it wasn't already dropped", item_ptr);
-        // SAFETY: Caller must guarantee poiner is uniquely owned, and since it
-        // has not had its payload dropped yet, it's safe to do so.
-        // We don't need to record this drop, since the object is uniquely, and will
-        // disappear soon anyway.
-        let payload = unsafe { &(*item_ptr).payload };
-        // SAFETY: See above
-        unsafe { ManuallyDrop::drop( &mut *payload.get() ) };
-        debug_println!("payload dropped");
+        drop_job_queue.do_drop(item_ptr);
         loom_fence();
         atomic::spin_loop();
     }
 }
 
-fn do_drop_strong<T: ?Sized, M: IMetadata>(full_item_ptr: *const ItemHolder<T,M>, drop_job_queue: &mut DeferredJobQueue) {
+fn do_drop_strong<T: ?Sized, M: IMetadata>(full_item_ptr: *const ItemHolder<T,M>, drop_job_queue: &mut impl IDropHandler<T,M>) {
     debug_println!("drop strong of {:x?} (strong count: {:?}, weak: {})", full_item_ptr, unsafe{(*full_item_ptr).strong_count.load(Ordering::SeqCst)}, get_weak_count(unsafe{(*full_item_ptr).weak_count.load(Ordering::SeqCst)}));
     let mut item_ptr = to_dummy(full_item_ptr);
 
     item_ptr = do_advance_strong::<T,M>(item_ptr, drop_job_queue);
-    // SAFETY: do_advance_strong always returns valid pointer
+    // SAFETY: do_advance_strong always returns a valid pointer
     let item:&ItemHolder<T,M> = unsafe { &*from_dummy(item_ptr) };
-
-    #[cfg(test)]
-    {
-        let strong_count = item.strong_count.load(Ordering::SeqCst);
-        assert!(strong_count > 0);
-        let weak_count = item.weak_count.load(Ordering::SeqCst);
-        assert!(weak_count > 0);
-    }
 
     let prior_strong = item.strong_count.fetch_sub(1, Ordering::SeqCst);
     debug_println!("drop strong of {:x?}, prev count: {}, now {} (weak is {})", item_ptr, prior_strong, prior_strong-1,
@@ -2289,10 +2348,8 @@ fn do_drop_strong<T: ?Sized, M: IMetadata>(full_item_ptr: *const ItemHolder<T,M>
     if prior_strong == 1 {
         // This is the only case where we actually might need to drop the rightmost node's payload
         // (if all nodes have only weak references)
-
         do_drop_weak::<T,M>(item_ptr, drop_job_queue);
     }
-
 }
 
 impl<T:?Sized> Drop for ArcShift<T> {
@@ -2301,7 +2358,7 @@ impl<T:?Sized> Drop for ArcShift<T> {
         verify_item(self.item.as_ptr());
         debug_println!("executing ArcShift::drop({:x?})", self.item.as_ptr());
         with_holder!(self.item, T, |item: *const ItemHolder<T,_>| {
-            let mut jobq = DeferredJobQueue::default();
+            let mut jobq = DropHandler::default();
             do_drop_strong(item,&mut jobq);
             jobq.execute();
         })
@@ -2314,7 +2371,7 @@ impl<T:?Sized> Drop for ArcShiftWeak<T> {
         verify_item(self.item.as_ptr());
 
         fn drop_weak_helper<T:?Sized, M:IMetadata>(item: *const ItemHolder<T,M>) {
-            let mut jobq = DeferredJobQueue::default();
+            let mut jobq = DropHandler::default();
             do_drop_weak::<T,M>(to_dummy(item), &mut jobq);
             jobq.execute();
         }
@@ -2324,6 +2381,16 @@ impl<T:?Sized> Drop for ArcShiftWeak<T> {
         })
 
     }
+}
+
+/// This is a marker for methods that have been removed in the
+/// most recent version of ArcShift.
+///
+/// Any methods that take this type as parameters, is completely
+/// impossible to call. This is by design. The methods have been
+/// kept, to hopefully make migration easier.
+pub struct NoLongerAvailableMarker {
+    _priv: ()
 }
 
 impl<T:?Sized> Deref for ArcShift<T> {
@@ -2356,7 +2423,19 @@ impl<T:?Sized> ArcShiftWeak<T> {
     }
 
 }
-impl<T>  ArcShift<T> {
+impl<T> ArcShift<T> {
+
+    /// Drops this ArcShift instance. If this was the last instance of the entire chain,
+    /// the payload value is returned.
+    pub fn try_into_inner(self) -> Option<T> {
+        let mut drop_handler = StealingDropHandler::default();
+        verify_item(self.item.as_ptr());
+        debug_println!("executing ArcShift::into_inner({:x?})", self.item.as_ptr());
+        do_drop_strong(from_dummy::<T,SizedMetadata>(self.item.as_ptr()), &mut drop_handler);
+        std::mem::forget(self);
+        drop_handler.take_stolen()
+    }
+
     /// Crate a new ArcShift instance with the given value.
     pub fn new(val: T) -> ArcShift<T> {
         let holder = make_sized_holder(val, null_mut());
@@ -2376,18 +2455,127 @@ impl<T>  ArcShift<T> {
         let holder = make_sized_holder(val, self.item.as_ptr() as *const ItemHolderDummy<T>);
 
         with_holder!(self.item, T, |item: *const ItemHolder<T,_>| {
-            let mut jobq = DeferredJobQueue::default();
+            let mut jobq = DropHandler::default();
             // SAFETY:
             // * do_update returns non-null values.
             // * 'holder' is in fact a thin pointer, just what we need for T, since T is Sized.
-            let new_item = unsafe { NonNull::new_unchecked(do_update(item, holder as *const _, &mut jobq) as *mut _ ) };
+            let new_item = unsafe { NonNull::new_unchecked(do_update(item, |_|Some(holder as *const _), &mut jobq) as *mut _ ) };
             jobq.execute();
             self.item = new_item;
         });
     }
+    /// Atomically update the value.
+    ///
+    /// The supplied closure 'update' is called with the previous value as an argument.
+    /// It then constructs a new, updated value. This value replaces the previous value
+    /// of the ArcShift instance. Note, if other threads are updating the arcshift chain
+    /// concurrently, it may take multiple retries for the update to succeed. The closure
+    /// will be called once for every attempt, until an attempt is successful. This means that
+    /// the final updated value will have always been calculated from the previous set value.
+    pub fn rcu(&mut self, mut update: impl FnMut(&T) -> T) -> &T
+    {
+        self.rcu_maybe(|x|Some(update(x)));
+        (*self).deref()
+    }
+
+    /// Atomically update the value.
+    ///
+    /// The supplied closure 'update' is called with the previous value as an argument.
+    /// It then constructs a new, updated value. This value replaces the previous value
+    /// of the ArcShift instance. Note, if other threads are updating the arcshift chain
+    /// concurrently, it may take multiple retries for the update to succeed. The closure
+    /// will be called once for every attempt, until an attempt is successful. This means that
+    /// the final updated value will have always been calculated from the previous set value.
+    ///
+    /// If the closure returns None, the update is cancelled, and this method returns false.
+    pub fn rcu_maybe(&mut self, mut update: impl FnMut(&T) -> Option<T>) -> bool
+    {
+        let mut holder:Option<*const ItemHolderDummy<T>> = None;
+
+        let mut cancelled = false;
+
+        let mut jobq = DropHandler::default();
+        // SAFETY:
+        // do_update returns a valid non-null pointer
+        let new_item_ptr = do_update(from_dummy::<T,SizedMetadata>(self.item.as_ptr()),
+                                 |prev:&ItemHolder<T,SizedMetadata>| ->Option<*const ItemHolderDummy<T>>{
+                                     let prev_payload :&ManuallyDrop<T> = unsafe{&*prev.payload.get()};
+                                     let prev_payload: &T = &*prev_payload;
+                                     let new_candidate :Option<T>= update(prev_payload);
+                                     let Some(new_candidate) = new_candidate else {
+                                         // Ok, the closure decided to NOT do an update after all
+                                         // We must now free any previous allocated candidate (both payload and holder).
+                                         if let Some(holder) = holder {
+                                             let mut jobq = DropHandler::default();
+                                             raw_do_unconditional_drop_payload_if_not_dropped(from_dummy::<T,SizedMetadata>(holder) as *mut ItemHolder<T,SizedMetadata>, &mut jobq);
+                                             jobq.execute();
+                                             cancelled = true;
+                                         }
+                                         return None;
+                                     };
+                                     if let Some(holder) = holder {
+                                         // If we get called when we already have a holder, then this is a retry
+                                         // and that holder was never visible to any other thread. We still have
+                                         // unique access to it.
+                                         let holder_mut: &mut ItemHolder<T,SizedMetadata> = unsafe { &mut *(from_dummy::<T,SizedMetadata>(holder) as *mut _) };
+                                         unsafe {
+                                             ManuallyDrop::drop(&mut *holder_mut.payload.get());
+                                         }
+                                         holder_mut.payload = UnsafeCell::new(ManuallyDrop::new(new_candidate));
+                                         Some(holder)
+                                     } else {
+                                         let new_holder = to_dummy(make_sized_holder(new_candidate, self.item.as_ptr() as *const ItemHolderDummy<T>));
+                                         holder = Some(new_holder);
+                                         Some(new_holder)
+                                     }
+                                 }, &mut jobq);
+        let new_unique_ptr = unsafe { NonNull::new_unchecked(new_item_ptr as *mut _)};
+        jobq.execute();
+        self.item = new_unique_ptr;
+        !cancelled
+    }
 
 }
+
+#[doc(hidden)]
+#[deprecated="ArcShiftLight has been removed. Please consider using ArcShiftWeak. It is similar, though not a direct replacement."]
+pub struct ArcShiftLight {}
+
 impl<T:?Sized> ArcShift<T> {
+
+
+    #[doc(hidden)]
+    #[deprecated = "rcu_project was completely removed in ArcShift 0.2. Please use method 'rcu' instead, and just manually access the desired field."]
+    pub fn rcu_project(&mut self, _marker: NoLongerAvailableMarker) {
+        unreachable!("method cannot be called")
+    }
+    #[doc(hidden)]
+    #[deprecated = "rcu_maybe2 was completely removed in ArcShift 0.2. Please use 'rcu_maybe' instead. It has the same features."]
+    pub fn rcu_maybe2(&mut self, _marker: NoLongerAvailableMarker) {
+        unreachable!("method cannot be called")
+    }
+
+    #[doc(hidden)]
+    #[deprecated = "update_shared_box was completely removed in ArcShift 0.2. Shared references can no longer be updated. Please file an issue if this is a blocker!"]
+    pub fn update_shared_box(&mut self, _marker: NoLongerAvailableMarker) {
+        unreachable!("method cannot be called")
+    }
+    #[doc(hidden)]
+    #[deprecated = "update_shared was completely removed in ArcShift 0.2. Shared references can no longer be updated. Please file an issue if this is a blocker!"]
+    pub fn update_shared(&mut self, _marker: NoLongerAvailableMarker) {
+        unreachable!("method cannot be called")
+    }
+    #[doc(hidden)]
+    #[deprecated = "make_light was completely removed in ArcShift 0.2. Please use ArcShift::downgrade(&item) instead."]
+    pub fn make_light(&mut self, _marker: NoLongerAvailableMarker) {
+        unreachable!("method cannot be called")
+    }
+    #[doc(hidden)]
+    #[deprecated = "shared_non_reloading_get now does the same thing as 'shared_get', please use the latter instead."]
+    pub fn shared_non_reloading_get(&self) -> &T {
+        self.shared_get()
+    }
+
     /// Basically the same as doing [`ArcShift::new`], but avoids copying the contents of 'input'
     /// to the stack, even as a temporary variable. This can be useful, if the type is too large
     /// to fit on the stack.
@@ -2400,6 +2588,27 @@ impl<T:?Sized> ArcShift<T> {
         }
     }
 
+    /// Returns a mutable reference to the inner value.
+    ///
+    /// This method returns None if there are any other ArcShift or ArcShiftWeak instances
+    /// pointing to the same object chain.
+    pub fn try_get_mut(&mut self) -> Option<&mut T> {
+        self.reload();
+        with_holder!(self.item, T, |item_ptr: *const ItemHolder<T,_>| {
+            let item = unsafe { &*item_ptr};
+            let weak_count = item.weak_count.load(Ordering::SeqCst);
+            if get_weak_count(weak_count) == 1 &&
+                !get_weak_next(weak_count) &&
+                !get_weak_prev(weak_count) &&
+                item.strong_count.load(Ordering::SeqCst) == 1 {
+                let temp :&mut ManuallyDrop<T> = unsafe { &mut *item.payload.get()};
+                Some(&mut **temp)
+            } else {
+                None
+            }
+        })
+    }
+
     /// See [`ArcShift::update`] .
     ///
     /// This method allows converting from [`Box<T>`]. This can be useful since it means it's
@@ -2408,10 +2617,10 @@ impl<T:?Sized> ArcShift<T> {
         let holder = make_sized_or_unsized_holder_from_box(new_payload, self.item.as_ptr());
 
         with_holder!(self.item, T, |item: *const ItemHolder<T,_>| {
-            let mut jobq = DeferredJobQueue::default();
+            let mut jobq = DropHandler::default();
             // SAFETY:
             // do_update returns a valid non-null pointer
-            let new_item = unsafe { NonNull::new_unchecked(do_update(item, holder, &mut jobq) as *mut _) };
+            let new_item = unsafe { NonNull::new_unchecked(do_update(item, |_|Some(holder), &mut jobq) as *mut _) };
             jobq.execute();
             self.item = new_item;
         });
@@ -2476,21 +2685,33 @@ impl<T:?Sized> ArcShift<T> {
     #[inline(always)]
     pub fn reload(&mut self) {
         #[inline(always)]
-        fn advance_strong_helper<T:?Sized,M:IMetadata>(ptr: *const ItemHolder<T,M>) -> *const ItemHolderDummy<T> {
+        fn advance_strong_helper<T:?Sized,M:IMetadata>(item_ptr: *const ItemHolder<T,M>) -> *const ItemHolderDummy<T> {
             // SAFETY:
             // self.item (ptr) is a valid non-null pointer.
             // Doing a relaxed load here is safe. It doesn't establish a happens-after relationship
             // with any prior stores, but we deem this acceptable for the performance benefit.
             // See crate documentation.
-            if unsafe { undecorate((*ptr).next.load(Ordering::Relaxed)).is_null() } {
+            if unsafe { undecorate((*item_ptr).next.load(Ordering::Relaxed)).is_null() } {
                 // Nothing to upgrade to
                 // This is a fast-path optimization
                 return std::ptr::null();
             }
-            let mut jobq =DeferredJobQueue::default();
-            let t = do_advance_strong::<T,M>(to_dummy(ptr), &mut jobq);
-            jobq.execute();
-            t
+            let mut jobq = DropHandler::default();
+
+            let mut item_ptr = to_dummy(item_ptr);
+            loop
+            {
+                item_ptr = do_advance_strong::<T,M>(item_ptr,&mut jobq);
+                atomic::loom_fence();
+                let (need_rerun,_strong_refs) = do_janitor_task(from_dummy::<T,M>(item_ptr), &mut jobq);
+                if need_rerun {
+                    debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
+                    atomic::spin_loop();
+                    continue;
+                }
+                jobq.execute();
+                return item_ptr;
+            }
         }
         let advanced = with_holder!(self.item, T, |item: *const ItemHolder<T,_>| {
             advance_strong_helper(item)

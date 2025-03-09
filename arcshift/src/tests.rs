@@ -287,49 +287,13 @@ fn simple_cell_assign() {
     });
 }
 
-//TODO: Implement and test rcu
-/*
 #[test]
 fn simple_rcu() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
-        assert!(shift.rcu(|x| x + 1));
+        shift.rcu(|x| x + 1);
         assert_eq!(*shift.get(), 43u32);
     })
-}
-#[test]
-fn simple_rcu_project() {
-    model(|| {
-        let mut shift = ArcShift::new((1u32, 10u32));
-        assert_eq!(
-            shift.rcu_project(|(a, b)| Some((*a + 1, *b + 1)), |(a, _b)| a),
-            (true, &2u32)
-        );
-    })
-}
-#[test]
-fn simple_rcu_project2() {
-    model(|| {
-        let mut shift = ArcShift::new((1u32, 10u32));
-        assert_eq!(
-            shift.rcu_project(|(_a, _b)| None, |(a, _b)| a),
-            (false, &1u32)
-        );
-    })
-}
-#[cfg(not(any(feature = "shuttle", loom)))]
-#[test]
-fn simple_rcu_project3() {
-    let outerstuff = "hej".to_string();
-    let outer = outerstuff.as_str();
-    let mut escape = None;
-    model(|| {
-        let mut shift = ArcShift::new((1u32, 10u32));
-        escape = Some(shift.rcu_project(|(_a, _b)| None, |(_a, _b)| outer).1);
-        debug_println!("Escaped: {:?}", escape);
-        debug_println!("Shift get: {:?}", shift.get());
-    });
-    debug_println!("Escaped: {:?}", escape);
 }
 
 #[test]
@@ -343,25 +307,17 @@ fn simple_rcu_maybe() {
     })
 }
 #[test]
-fn simple_rcu_safe() {
-    model(|| {
-        let mut shift = ArcShift::new(42u32);
-        shift.rcu_safe(|x| x + 1);
-        assert_eq!(*shift.get(), 43u32);
-    })
-}
-#[test]
 fn simple_rcu_maybe2() {
     model(|| {
         let mut shift = ArcShift::new(42u32);
-        assert_eq!(shift.rcu_maybe2(|x| Some(x + 1)), RcuResult::Update);
-        assert_eq!(shift.rcu_maybe2(|_x| None), RcuResult::NoUpdate);
+        assert_eq!(shift.rcu_maybe(|x| Some(x + 1)), true);
+        assert_eq!(shift.rcu_maybe(|_x| None), false);
         assert_eq!(*shift.get(), 43u32);
         assert_eq!(shift.rcu_maybe(|_x| None), false);
         assert_eq!(*shift.get(), 43u32);
     })
 }
- */
+
 
 #[test]
 fn simple_deref() {
@@ -377,7 +333,6 @@ fn simple_get4() {
         assert_eq!(*shift.shared_get(), 42u32);
     })
 }
-/* TODO: Implement get_mut
 #[test]
 fn simple_get_mut() {
     model(|| {
@@ -385,7 +340,7 @@ fn simple_get_mut() {
         // Uniquely owned values can be modified using 'try_get_mut'.
         assert_eq!(*shift.try_get_mut().unwrap(), 42);
     })
-}*/
+}
 #[test]
 fn simple_zerosized() {
     model(|| {
@@ -404,8 +359,7 @@ fn simple_update() {
         shift.reload();
     })
 }
-/*
-TODO: implement get_mut and try_into_inner
+
 #[test]
 fn simple_get_mut2() {
     model(|| {
@@ -415,7 +369,25 @@ fn simple_get_mut2() {
         assert_eq!(shift.try_get_mut(), None);
     })
 }
-
+#[test]
+fn simple_get_mut3() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        let _shift2 = ArcShift::downgrade(&shift);
+        shift.update(43);
+        assert_eq!(shift.try_get_mut(), None);
+    })
+}
+#[test]
+fn simple_get_mut4_mut() {
+    model(|| {
+        let mut shift = ArcShift::new(42u32);
+        let mut shift2 = shift.clone();
+        shift2.update(43);
+        drop(shift2);
+        assert_eq!(shift.try_get_mut(), Some(&mut 43));
+    })
+}
 #[test]
 fn simple_try_into() {
     model(|| {
@@ -424,7 +396,15 @@ fn simple_try_into() {
         assert_eq!(shift.try_into_inner().unwrap(), 42);
     })
 }
-*/
+
+#[test]
+fn simple_into_inner() {
+    model(|| {
+        let shift = ArcShift::new(42u32);
+        // Uniquely owned values can be moved out without being dropped
+        assert_eq!(shift.try_into_inner().unwrap(), 42);
+    })
+}
 
 
 #[test]
@@ -661,7 +641,6 @@ fn simple_threading2d() {
         owner.validate();
     });
 }
-/* TODO: impl rcu
 #[test]
 fn simple_threading_rcu() {
     model(|| {
@@ -672,7 +651,7 @@ fn simple_threading_rcu() {
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
-                shift1.rcu_safe(|prev| *prev + 1);
+                shift1.rcu(|prev| *prev + 1);
             })
             .unwrap();
 
@@ -680,7 +659,7 @@ fn simple_threading_rcu() {
             .name("t2".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
-                shift2.rcu_safe(|prev| *prev + 1);
+                shift2.rcu(|prev| *prev + 1);
             })
             .unwrap();
         _ = t1.join().unwrap();
@@ -688,7 +667,6 @@ fn simple_threading_rcu() {
         assert_eq!(*shift3.get(), 44);
     });
 }
-*/
 #[test]
 fn simple_threading2b() {
     model(|| {
@@ -908,7 +886,6 @@ fn simple_threading3d() {
     });
 }
 
-/* TODO: implement rcu
 #[test]
 fn simple_threading2_rcu() {
     model(|| {
@@ -921,8 +898,8 @@ fn simple_threading2_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                while !shift1.rcu(|old| *old + 1) {}
-                while !shift1.rcu(|old| *old + 1) {}
+                shift1.rcu(|old| *old + 1);
+                shift1.rcu(|old| *old + 1);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -932,8 +909,8 @@ fn simple_threading2_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                while !shift2.rcu(|old| *old + 1) {}
-                while !shift2.rcu(|old| *old + 1) {}
+                shift2.rcu(|old| *old + 1);
+                shift2.rcu(|old| *old + 1);
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -958,8 +935,8 @@ fn simple_threading3_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                while !shift1.rcu(|old| *old + 1) {}
-                while !shift1.rcu(|old| *old + 1) {}
+                shift1.rcu(|old| *old + 1);
+                shift1.rcu(|old| *old + 1);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -969,8 +946,8 @@ fn simple_threading3_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                while !shift2.rcu(|old| *old + 1) {}
-                while !shift2.rcu(|old| *old + 1) {}
+                shift2.rcu(|old| *old + 1);
+                shift2.rcu(|old| *old + 1);
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -980,8 +957,8 @@ fn simple_threading3_rcu() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                while !shift3.rcu(|old| *old + 1) {}
-                while !shift3.rcu(|old| *old + 1) {}
+                shift3.rcu(|old| *old + 1);
+                shift3.rcu(|old| *old + 1);
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
@@ -991,7 +968,7 @@ fn simple_threading3_rcu() {
         assert_eq!(*shift0.get(), 6);
     });
 }
- */
+
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4a() {
@@ -1049,7 +1026,6 @@ fn simple_threading4a() {
     });
 }
 
-/* TODO implement try_into_inner
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4b() {
@@ -1063,7 +1039,8 @@ fn simple_threading4b() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                shift1.update(43);
+                let mut temp = (*shift1).clone();
+                temp.update(43);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -1084,8 +1061,9 @@ fn simple_threading4b() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                shift3.update(44);
-                let t = std::hint::black_box((*shift3).shared_get());
+                let mut temp = (*shift3).clone();
+                temp.update(44);
+                let t = std::hint::black_box(temp.get());
                 debug_println!(" = drop t3 =");
                 return *t;
             })
@@ -1109,7 +1087,6 @@ fn simple_threading4b() {
         assert!(ret == None || ret == Some(43) || ret == Some(44) || ret == Some(42));
     });
 }
-*/
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4c() {
@@ -1176,7 +1153,6 @@ fn simple_threading4c() {
     });
 }
 
-/* TODO: implement try_get_mut
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading4d() {
@@ -1188,7 +1164,7 @@ fn simple_threading4d() {
 
             let shift2 = shift1.clone();
             let shift3 = shift1.clone();
-            let mut shift4 = shift1.clone();
+            let shift4 = shift1.clone();
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
                 .stack_size(1_000_000)
@@ -1204,7 +1180,7 @@ fn simple_threading4d() {
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t2 =");
-                    let mut shift = shift2.clone();
+                    let mut shift = (*shift2).clone();
                     std::hint::black_box(shift.get());
                     debug_println!(" = drop t2 =");
                 })
@@ -1215,7 +1191,8 @@ fn simple_threading4d() {
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t3 =");
-                    shift3.update(count3.create("t3val"));
+                    let mut temp = (*shift3).clone();
+                    temp.update(count3.create("t3val"));
                     let _t = std::hint::black_box(shift3.shared_get());
                     debug_println!(" = drop t3 =");
                 })
@@ -1225,7 +1202,8 @@ fn simple_threading4d() {
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t4 =");
-                    let _t = std::hint::black_box(shift4.try_get_mut());
+                    let mut temp = (*shift4).clone();
+                    let _t = std::hint::black_box(temp.try_get_mut());
                     debug_println!(" = drop t4 =");
                 })
                 .unwrap();
@@ -1235,14 +1213,13 @@ fn simple_threading4d() {
             _ = t3.join().unwrap();
             _ = t4.join().unwrap();
             debug_println!("JOined all threads");
-            atomic::fence(Ordering::SeqCst);
+            atomic::loom_fence();
         }
 
         count.validate();
         drop(count);
     });
 }
-*/
 
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
