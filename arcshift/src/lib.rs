@@ -43,7 +43,7 @@
 //! an arcshift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
 //! that instance advances along the linked list to the last
 //! node in the list. When no instance exists pointing at a node in the list, it is dropped.
-//! It is thus important to periodically call reload or get to avoid retaining unneeded values.
+//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to avoid retaining unneeded values.
 //!
 //! # Strong points
 //! * Easy to use (similar to Arc)
@@ -225,6 +225,9 @@
 //! ```
 //!
 
+// TODO: Verify if all functions really are lock free, according to the scientific definition?
+// Are all loopings actually due to progress of some other thread?
+
 /*
 TODO: Remove this section.
 
@@ -240,7 +243,8 @@ When decreasing a reference count, if it doesn't go to 0, you know _nothing_ abo
 Watch out for loom's LOOM_CHECKPOINT_FILE. If you change the code, but keep the file, you
 can get crashes.
 
-
+Talk about the 'helper' concept, how lock-free-ness can be achieved by delegating tasks to other
+concurrent threads.
 
 The fundamental problem of not being able to look at item at all after decreasing refcount to
 something else than 0.
