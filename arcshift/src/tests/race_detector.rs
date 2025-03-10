@@ -188,6 +188,7 @@ fn generic_2thread_ops_b<
     let f2 = std::sync::Arc::new(f2);
     model2(
         move || {
+            debug_println!("-- Seed --");
             let f1 = f1.clone();
             let f2 = f2.clone();
             let owner = std::sync::Arc::new(SpyOwner2::new());

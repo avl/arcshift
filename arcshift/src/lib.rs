@@ -312,6 +312,8 @@ mod deferred {
     use std::mem::ManuallyDrop;
     use std::panic::{resume_unwind, AssertUnwindSafe};
     use std::ptr::addr_of_mut;
+    #[allow(unused)]
+    use std::sync::atomic::Ordering;
 
     pub(crate) trait IDropHandler<T: ?Sized, M: IMetadata> {
         fn do_drop(&mut self, ptr: *mut ItemHolder<T, M>);
@@ -389,6 +391,14 @@ mod deferred {
             // SAFETY:
             // fullptr is a valid uniquely owned pointer that we must deallocate
             debug_println!("Calling dealloc {:x?}", item_ptr);
+
+            #[cfg(feature = "validate")]
+            {
+                let item_ref = unsafe { &*(item_ptr as *mut ItemHolder<T, M>) };
+                item_ref.magic1.store(0xdeaddead, Ordering::SeqCst);
+                item_ref.magic2.store(0xdeaddea2, Ordering::SeqCst);
+            }
+
             // SAFETY:
             // item_ptr is still a valid, exclusively owned pointer
             unsafe { std::alloc::dealloc(item_ptr as *mut _, layout) }
@@ -1863,7 +1873,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                 debug_println!(
                     "Prior to strong_count imcrement {:x?} from 0, added weak count. Weak now: {}",
                     b,
-                    _prior_weak + 1
+                    format_weak(_prior_weak + 1)
                 );
             }
 
@@ -2071,6 +2081,98 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
 
     let mut rightmost_deletable = null();
 
+
+
+    /// Stops search and returns true if 'f' returns true
+    fn for_any_in_chain<T:?Sized, M:IMetadata>(start: *const ItemHolderDummy<T>, mut f: impl FnMut(&ItemHolder<T,M>) -> bool) -> bool {
+        let mut cur_ptr = start;
+        loop {
+            if cur_ptr.is_null(){
+                break;
+            }
+            let cur: &ItemHolder<T, M> = unsafe { &*from_dummy::<T,M>(cur_ptr) };
+            if f(cur) {
+                return true;
+            }
+            let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
+            debug_println!("Janitor loop helper considering {:x?} -> {:x?}", cur_ptr, prev_ptr);
+            cur_ptr = prev_ptr;
+            atomic::spin_loop();
+        }
+        false
+    }
+
+
+    {
+        let mut any_failed_locks = false;
+        let cur_lock_start = cur_ptr;
+        let mut cur_ptr = cur_lock_start;
+        debug_println!("Lock sweep start at {:x?}", cur_lock_start);
+        let mut failed_lock = null();
+        loop {
+            let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
+            if !cur.lock_node_for_gc() {
+                failed_lock = cur_ptr;
+                any_failed_locks = true;
+                debug_println!(
+                    "Janitor task for {:x?} - found node already being gced: {:x?}",
+                    start_ptr,
+                    cur_ptr
+                );
+                break;
+            }
+
+            let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
+            debug_println!("Janitor loop considering {:x?} -> {:x?}", cur_ptr, prev_ptr);
+            if prev_ptr.is_null() {
+                debug_println!(
+                    "Janitor task for {:x?} - found leftmost node: {:x?}",
+                    start_ptr,
+                    cur_ptr
+                );
+                have_visited_leftmost = true;
+                break;
+            }
+            cur_ptr = prev_ptr;
+            atomic::spin_loop();
+        }
+        if any_failed_locks {
+            let mut cur_ptr = cur_lock_start;
+            debug_println!("Cleanup sweep start at {:x?}", cur_lock_start);
+            let mut anyrerun = false;
+            loop {
+                debug_println!("Cleanup sweep at {:x?}", cur_ptr);
+                if cur_ptr.is_null() {
+                    anyrerun = true;
+                    break;
+                }
+                if cur_ptr == failed_lock {
+                    debug_println!("Cleanup sweep is at end {:x?}", cur_ptr);
+                    break;
+                }
+                let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
+                anyrerun |= cur.unlock_node();
+
+                let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
+                debug_println!("Cleanup sweep going to {:x?}", prev_ptr);
+                cur_ptr = prev_ptr;
+                atomic::spin_loop();
+            }
+            anyrerun |= start.unlock_node();
+            debug_println!("Janitor failed to grab locks. Rerun: {:?}", anyrerun);
+            return (anyrerun,
+                    get_strong_status(have_seen_left_strong_refs, have_visited_leftmost)
+            );
+        }
+    }
+
+    {
+        //TODO: It is possible for the janitor-task to actually reset 'next'-pointers to an earlier
+        //state.
+        //let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
+        //assert_eq!(undecorate(cur.next.load(Ordering::SeqCst) as *const _), start_ptr, "assert failed: when janitoring, {:x?} has unexpected next", cur_ptr);
+    }
+
     // Lock free, since this just iterates through the chain of nodes,
     // which has a bounded length.
     loop {
@@ -2088,17 +2190,12 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         );
         #[cfg(feature = "validate")]
         assert_ne!(cur_ptr, start_ptr);
+        /*
         cur.set_next(start_ptr);
         atomic::loom_fence();
+        */
 
-        if !cur.lock_node_for_gc() {
-            debug_println!(
-                "Janitor task for {:x?} - found node already being gced: {:x?}",
-                start_ptr,
-                cur_ptr
-            );
-            break;
-        }
+
 
         if cur.strong_count.load(Ordering::SeqCst) > 0 {
             have_seen_left_strong_refs = true;
@@ -2124,7 +2221,17 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         let prev: &ItemHolder<T, M> = unsafe { &*from_dummy(prev_ptr) };
         #[cfg(feature = "validate")]
         assert_ne!(prev_ptr, start_ptr);
-        prev.set_next(start_ptr);
+
+        let prior_prev_next = prev.next.load(Ordering::SeqCst);
+        // Check if chain contains the previous next-value. If it didn't changing next will
+        // move next _back_.
+        if for_any_in_chain::<T,M>(start_ptr, |x|to_dummy(x) == undecorate(prior_prev_next)) {
+            //TODO: IS this optimization even worth? 
+            prev.set_next(start_ptr);
+        } else {
+            debug_println!("for {:x?}, {:x?} did not exist in chain", prev_ptr, prior_prev_next);
+        }
+
         atomic::loom_fence();
         let adv_count = prev.advance_count.load(Ordering::SeqCst);
         debug_println!("advance_count of {:x?} is {}", prev_ptr, adv_count);
@@ -2224,6 +2331,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
 
     // Lock free, since this loop just iterates through each node in the chain.
     while cur_ptr != end_ptr && !cur_ptr.is_null() {
+
         let new_predecessor = must_see_before_deletes_can_be_made
             .is_null()
             .then(|| find_non_deleted_predecessor::<T, M>(cur_ptr, end_ptr, jobq))
@@ -2491,7 +2599,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
         };
         let new_next = decorate(val_dummy, get_decoration(cur_next));
 
-        debug_println!("Updating {:x?} to {:x?}", initial_item_ptr, val_dummy);
+        debug_println!("Updating {:x?} to {:x?}", item_ptr, val_dummy);
         let val = from_dummy::<T, M>(val_dummy) as *mut ItemHolder<T, M>;
         // SAFETY:
         // val is the new value supplied by the caller. It is always valid, and it is not

@@ -357,6 +357,11 @@ fn generic_thread_fuzzing_all() {
 fn generic_thread_fuzzing_repro1() {
     generic_thread_fuzzing_all_impl(Some(249), None)
 }
+#[test]
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_thread_fuzzing_repro2() {
+    generic_thread_fuzzing_all_impl(Some(72), None)
+}
 
 fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     #[cfg(miri)]
@@ -379,7 +384,7 @@ fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     for i in range {
         model2(
             move || {
-                println!("--- Seed {} ---", i);
+                //println!("--- Seed {} ---", i);
                 let mut rng = StdRng::seed_from_u64(i);
                 let mut counter = 0usize;
                 let owner = std::sync::Arc::new(SpyOwner2::new());
