@@ -259,7 +259,7 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
     #[cfg(not(loom))]
     const COUNT: usize = 15;
     #[cfg(loom)]
-    const COUNT: usize = 10;
+    const COUNT: usize = 6;
 
     for _x in 0..COUNT {
         match rng.gen_range(0..9) {

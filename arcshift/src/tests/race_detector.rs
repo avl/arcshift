@@ -347,11 +347,14 @@ fn generic_3thread_ops_c<
 fn generic_3threading_b_000() {
     generic_3threading_b_all_impl(0, 0, 0, None);
 }
+
+/* This is covered by the test above.
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_b_300() {
     generic_3threading_b_all_impl(3, 0, 0, None);
 }
+*/
 
 fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro: Option<&str>) {
     let limit = if skip1 != 0 || skip2 != 0 || skip3 != 0 {

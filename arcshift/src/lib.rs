@@ -296,10 +296,10 @@ use crate::deferred::{DropHandler, IDropHandler, StealingDropHandler};
 /// Declarations of atomic ops for using Arcshift in production
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 mod atomic {
-    pub use std::hint::spin_loop;
+    //pub use std::hint::spin_loop;
     pub use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     #[cfg(test)]
-    pub use std::sync::Mutex;
+    pub use std::sync::{Arc,Mutex};
     #[allow(unused)]
     pub use std::thread;
     #[inline(always)]
@@ -447,10 +447,12 @@ mod deferred {
 /// Declarations for verifying Arcshift using 'shuttle'
 #[cfg(feature = "shuttle")]
 mod atomic {
-    pub use shuttle::hint::spin_loop;
+    //pub use shuttle::hint::spin_loop;
     #[allow(unused)]
     pub use shuttle::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
-    pub use shuttle::sync::Mutex;
+
+
+    pub use shuttle::sync::{Arc,Mutex};
     #[allow(unused)]
     pub use shuttle::thread;
 
@@ -468,10 +470,10 @@ mod atomic {
 /// Declarations for verifying Arcshift using 'loom'
 #[cfg(loom)]
 mod atomic {
-    pub use loom::hint::spin_loop;
+    //pub use loom::hint::spin_loop;
     pub use loom::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
     #[allow(unused)]
-    pub use loom::sync::Mutex;
+    pub use loom::sync::{Mutex,Arc};
     #[allow(unused)]
     pub use loom::thread;
     pub(crate) fn loom_fence() {
@@ -1097,7 +1099,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 );
                 return;
             }
-            atomic::spin_loop();
         }
     }
 
@@ -1122,7 +1123,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 break;
             }
             item_ptr = prev;
-            atomic::spin_loop();
         }
 
         ret
@@ -1151,6 +1151,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         // that lead to looping.
 
         loop {
+
             let cur_next = self.next.load(atomic::Ordering::SeqCst);
             let decoration = get_decoration(cur_next);
             if decoration.is_unlocked() {
@@ -1172,7 +1173,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                     get_decoration(decorated)
                 );
                 if !success {
-                    atomic::spin_loop();
                     // Lock free, because we only end up here if some other thread did one of:
                     // 1) added a new node, which is considered progress
                     // 2) has locked the node, which is not progress, but will only lead to us
@@ -1199,7 +1199,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                         }
                         Err(prior) => {
                             if !get_decoration(prior).is_disturbed() {
-                                atomic::spin_loop();
                                 // Lock free, because we can only end up here if some other thread did:
                                 // 1) Added a new node, which is considered progress
                                 // 2) Removed the lock, which will lead to the other node advancing
@@ -1229,6 +1228,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         //    work on us, and is now proceeding to is next task, which means there is
         //    system progress, so algorithm remains lock free.
         loop {
+
             atomic::loom_fence();
             let cur_next = self.next.load(atomic::Ordering::SeqCst);
             let decoration = get_decoration(cur_next);
@@ -1255,7 +1255,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 atomic::loom_fence();
                 return decoration.is_disturbed();
             }
-            atomic::spin_loop();
         }
     }
 }
@@ -1604,6 +1603,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
     let mut item_ptr = to_dummy(item_ptr);
     // Lock free: See comment on each 'continue'
     loop {
+
         item_ptr = do_advance_weak::<T, M>(item_ptr);
 
         // SAFETY:
@@ -1643,7 +1643,6 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                         #[cfg(feature = "validate")]
                         assert!(get_weak_count(_prior_weak_count) > 1);
                     }
-                    atomic::spin_loop();
                     // Lock free. We only get here if some othe rnode has dropped 'item_next'
                     // which is considered progress.
                     continue;
@@ -1675,7 +1674,6 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                     assert!(get_weak_count(_prior_weak_count) > 1);
                 }
                 debug_println!("Race on strong_count _increase_ - loop.");
-                atomic::spin_loop();
                 // Lcok free. We only get here if some other node has succeeded in increasing or
                 // decreasing strong count, which only happens if there is progress, unless
                 // the node undid a strong_count modification because of a detected race.
@@ -1724,6 +1722,7 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
     // However, update only fails if there has been system-wide progress (see comment in
     // do_advance_strong).
     loop {
+
         atomic::loom_fence();
         debug_println!("In advance-loop, item_ptr: {:x?}", item_ptr);
         // SAFETY:
@@ -1803,7 +1802,6 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
             );
         }
         item_ptr = next_ptr;
-        atomic::spin_loop();
     }
 }
 
@@ -1848,6 +1846,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
         // such return for an argument why this only happens if there's been system side
         // progress.
         loop {
+
             debug_println!(
                 "do_advance_strong {:x?} -> {:x?} (b-count = {})",
                 a,
@@ -1901,7 +1900,6 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         // Race - even though _did_ have payload prior to us grabbing the strong count, it now doesn't.
                         // This can only happen if there's another node to the right, that _does_ have a payload.
 
-                        atomic::spin_loop();
                         // SAFETY:
                         // b is a valid pointer. See above.
                         let prior_strong =
@@ -1982,7 +1980,6 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         assert!(get_weak_count(_prior_weak) > 1);
                     }
                     b_strong = err_value;
-                    atomic::spin_loop();
                 }
             }
         }
@@ -2087,6 +2084,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
     fn for_any_in_chain<T:?Sized, M:IMetadata>(start: *const ItemHolderDummy<T>, mut f: impl FnMut(&ItemHolder<T,M>) -> bool) -> bool {
         let mut cur_ptr = start;
         loop {
+
             if cur_ptr.is_null(){
                 break;
             }
@@ -2097,7 +2095,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
             debug_println!("Janitor loop helper considering {:x?} -> {:x?}", cur_ptr, prev_ptr);
             cur_ptr = prev_ptr;
-            atomic::spin_loop();
         }
         false
     }
@@ -2110,6 +2107,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         debug_println!("Lock sweep start at {:x?}", cur_lock_start);
         let mut failed_lock = null();
         loop {
+
             let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
             if !cur.lock_node_for_gc() {
                 failed_lock = cur_ptr;
@@ -2134,13 +2132,13 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 break;
             }
             cur_ptr = prev_ptr;
-            atomic::spin_loop();
         }
         if any_failed_locks {
             let mut cur_ptr = cur_lock_start;
             debug_println!("Cleanup sweep start at {:x?}", cur_lock_start);
             let mut anyrerun = false;
             loop {
+
                 debug_println!("Cleanup sweep at {:x?}", cur_ptr);
                 if cur_ptr.is_null() {
                     anyrerun = true;
@@ -2156,7 +2154,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
                 debug_println!("Cleanup sweep going to {:x?}", prev_ptr);
                 cur_ptr = prev_ptr;
-                atomic::spin_loop();
             }
             anyrerun |= start.unlock_node();
             debug_println!("Janitor failed to grab locks. Rerun: {:?}", anyrerun);
@@ -2176,6 +2173,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
     // Lock free, since this just iterates through the chain of nodes,
     // which has a bounded length.
     loop {
+
         debug_println!("Accessing {:x?} in first janitor loop", cur_ptr);
         // SAFETY:
         // cur_ptr remains a valid pointer. Our lock on the nodes, as we traverse them backward,
@@ -2226,7 +2224,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         // Check if chain contains the previous next-value. If it didn't changing next will
         // move next _back_.
         if for_any_in_chain::<T,M>(start_ptr, |x|to_dummy(x) == undecorate(prior_prev_next)) {
-            //TODO: IS this optimization even worth? 
+            //TODO: IS this optimization even worth?
             prev.set_next(start_ptr);
         } else {
             debug_println!("for {:x?}, {:x?} did not exist in chain", prev_ptr, prior_prev_next);
@@ -2247,7 +2245,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             rightmost_deletable = cur_ptr;
         }
         cur_ptr = prev_ptr;
-        atomic::spin_loop();
     }
     // The leftmost stop to this janitor cycle. This node must not be operated on.
     // I.e, it's one-beyond-the-end.
@@ -2262,6 +2259,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
 
         // Lock free, since this loop at most iterates once per node in the chain.
         loop {
+
             if item_ptr == last_valid || item_ptr.is_null() {
                 debug_println!(
                     "Find non-deleted {:x?}, count = {}, item_ptr = {:x?}, last_valid = {:x?}",
@@ -2309,7 +2307,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             raw_deallocate_node(from_dummy::<T, M>(item_ptr as *mut _), jobq);
             deleted_count += 1;
             item_ptr = prev_item_ptr;
-            atomic::spin_loop();
         }
     }
 
@@ -2362,7 +2359,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 .prev
                 .store(new_predecessor_ptr as *mut _, Ordering::SeqCst);
             atomic::loom_fence();
-            atomic::spin_loop();
 
             if new_predecessor_ptr.is_null() {
                 debug_println!("new_predecessor is null");
@@ -2430,6 +2426,7 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
     //       that other thread is making progress, which it must be (see all other comments),
     //       and it cannot have been obstructed by this thread.
     loop {
+
         debug_println!("drop weak loop {:?}", item_ptr);
         atomic::loom_fence();
         item_ptr = do_advance_weak::<T, M>(item_ptr);
@@ -2438,7 +2435,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         atomic::loom_fence();
         if need_rerun {
             debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
-            atomic::spin_loop();
             continue;
         }
 
@@ -2462,7 +2458,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
                 let _next_ptr = item.next.load(Ordering::SeqCst);
                 debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is {:?})", item_ptr, _next_ptr);
             }
-            atomic::spin_loop();
             continue;
         }
 
@@ -2471,7 +2466,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         let have_next = !undecorate(next_ptr).is_null();
         if have_next {
             // drop_weak raced with 'add'.
-            atomic::spin_loop();
             debug_println!(
                 "add race {:x?}, prior_weak: {}",
                 item_ptr,
@@ -2535,7 +2529,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
                     format_weak(_err_weak),
                     format_weak(prior_weak)
                 );
-                atomic::spin_loop();
 
                 continue;
             }
@@ -2576,6 +2569,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
     // Lock free. This loop only loops if another thread has changed 'next', which
     // means there is system wide progress.
     loop {
+
         //let new_node = val_dummy;
 
         item_ptr = do_advance_strong::<T, M>(item_ptr, drop_job_queue);
@@ -2591,7 +2585,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
         atomic::loom_fence();
         let cur_next = item.next.load(Ordering::SeqCst);
         if !undecorate(cur_next).is_null() {
-            atomic::spin_loop();
             continue;
         }
         let Some(val_dummy) = val_dummy_factory(item) else {
@@ -2639,7 +2632,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
                 );
                 #[cfg(feature = "validate")]
                 assert!(get_weak_count(_res) > 1);
-                atomic::spin_loop();
 
                 continue;
             }
@@ -2672,13 +2664,13 @@ fn do_update<T: ?Sized, M: IMetadata>(
         // Only loops if another thread has set the 'disturbed' flag, meaning it has offloaded
         // work on us, and it has made progress, which means there is system wide progress.
         loop {
+
             atomic::loom_fence();
             let (need_rerun, _strong_refs) =
                 do_janitor_task(from_dummy::<T, M>(item_ptr), drop_job_queue);
             if need_rerun {
                 item_ptr = do_advance_strong::<T, M>(item_ptr, drop_job_queue);
                 debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
-                atomic::spin_loop();
                 continue;
             }
             return item_ptr;
@@ -2701,6 +2693,7 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
     // Lock free. This only loops if another thread has changed next, which implies
     // progress.
     loop {
+
         atomic::loom_fence();
         let next_ptr = item.next.load(Ordering::SeqCst);
         let decoration = get_decoration(next_ptr);
@@ -2731,7 +2724,6 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
             Err(err_ptr) => {
                 if !get_decoration(err_ptr).is_dropped() {
                     debug_println!("Raced, new attempt to drop {:x?} payload", item_ptr);
-                    atomic::spin_loop();
                     continue;
                 }
                 debug_println!("Raced, {:x?} now already dropped", item_ptr);
@@ -2764,7 +2756,6 @@ fn raw_do_unconditional_drop_payload_if_not_dropped<T: ?Sized, M: IMetadata>(
         );
         drop_job_queue.do_drop(item_ptr);
         loom_fence();
-        atomic::spin_loop();
     }
 }
 
@@ -3201,13 +3192,13 @@ impl<T: ?Sized> ArcShift<T> {
             // Lock free. Only loops if disturb-flag was set, meaning other thread
             // has offloaded work on us, and it has made progress.
             loop {
+
                 item_ptr = do_advance_strong::<T, M>(item_ptr, &mut jobq);
                 atomic::loom_fence();
                 let (need_rerun, _strong_refs) =
                     do_janitor_task(from_dummy::<T, M>(item_ptr), &mut jobq);
                 if need_rerun {
                     debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
-                    atomic::spin_loop();
                     continue;
                 }
                 jobq.execute();
@@ -3258,6 +3249,7 @@ impl<T: ?Sized> ArcShift<T> {
         debug_println!("Start traverse right at {:?}", last);
         // Lock free - this is a debug method not used in production.
         loop {
+
             debug_println!("loop traverse right at {:?}", last);
             atomic::loom_fence();
             // SAFETY:
@@ -3270,7 +3262,6 @@ impl<T: ?Sized> ArcShift<T> {
                 break;
             }
             last = from_dummy::<T, M>(next);
-            atomic::spin_loop();
         }
 
         let mut true_weak_refs = HashMap::<*const ItemHolderDummy<T>, usize>::new();

@@ -13,7 +13,6 @@ use std::hash::{Hash, Hasher};
 use std::hint::black_box;
 use std::mem::MaybeUninit;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -44,7 +43,7 @@ fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
 #[cfg(all(feature = "shuttle", coverage))]
 const SHUTTLE_ITERATIONS: usize = 50;
 #[cfg(all(feature = "shuttle", not(coverage)))]
-const SHUTTLE_ITERATIONS: usize = 50000;
+const SHUTTLE_ITERATIONS: usize = 500000;
 
 #[cfg(feature = "shuttle")]
 fn model(x: impl Fn() + 'static + Send + Sync) {
@@ -772,8 +771,8 @@ fn simple_threading3b() {
 #[cfg(not(loom))]
 fn simple_threading3c() {
     model(|| {
-        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
-        let shift2 = std::sync::Arc::clone(&shift1);
+        let shift1 = atomic::Arc::new(atomic::Mutex::new(ArcShift::new(42u32)));
+        let shift2 = atomic::Arc::clone(&shift1);
         let mut shift3 = (shift1.lock().unwrap()).clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -814,8 +813,8 @@ fn simple_threading3c() {
 #[test]
 fn simple_threading3d() {
     model(|| {
-        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
-        let shift2 = std::sync::Arc::clone(&shift1);
+        let shift1 = atomic::Arc::new(atomic::Mutex::new(ArcShift::new(42u32)));
+        let shift2 = atomic::Arc::clone(&shift1);
         let shift3 = shift1.clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -939,9 +938,9 @@ fn simple_threading3_rcu() {
 #[test]
 fn simple_threading4a() {
     model(|| {
-        let shift1 = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
-        let shift2 = std::sync::Arc::clone(&shift1);
-        let shift3 = std::sync::Arc::clone(&shift1);
+        let shift1 = atomic::Arc::new(atomic::Mutex::new(ArcShift::new(42u32)));
+        let shift2 = atomic::Arc::clone(&shift1);
+        let shift3 = atomic::Arc::clone(&shift1);
         let mut shift4 = (shift1.lock().unwrap()).clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -996,9 +995,9 @@ fn simple_threading4a() {
 #[test]
 fn simple_threading4b() {
     model(|| {
-        let shift1 = std::sync::Arc::new(ArcShift::new(42u32));
-        let shift2 = std::sync::Arc::clone(&shift1);
-        let shift3 = std::sync::Arc::clone(&shift1);
+        let shift1 = atomic::Arc::new(ArcShift::new(42u32));
+        let shift2 = atomic::Arc::clone(&shift1);
+        let shift3 = atomic::Arc::clone(&shift1);
         let shift4 = (*shift1).clone();
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -1057,14 +1056,14 @@ fn simple_threading4b() {
 #[test]
 fn simple_threading4c() {
     model(|| {
-        let count = std::sync::Arc::new(SpyOwner2::new());
+        let count = atomic::Arc::new(SpyOwner2::new());
         {
             let shift1 =
-                std::sync::Arc::new(atomic::Mutex::new(ArcShift::new(count.create("orig"))));
-            let shift2 = std::sync::Arc::clone(&shift1);
-            let shift3 = std::sync::Arc::clone(&shift1);
-            let shift4 = std::sync::Arc::clone(&shift1);
-            let _t = std::sync::Arc::clone(&shift1);
+                atomic::Arc::new(atomic::Mutex::new(ArcShift::new(count.create("orig"))));
+            let shift2 = atomic::Arc::clone(&shift1);
+            let shift3 = atomic::Arc::clone(&shift1);
+            let shift4 = atomic::Arc::clone(&shift1);
+            let _t = atomic::Arc::clone(&shift1);
             let count1 = count.clone();
             let count2 = count.clone();
             let t1 = atomic::thread::Builder::new()
@@ -1124,10 +1123,10 @@ fn simple_threading4c() {
 #[test]
 fn simple_threading4d() {
     model(|| {
-        let count = std::sync::Arc::new(SpyOwner2::new());
+        let count = atomic::Arc::new(SpyOwner2::new());
         {
             let count3 = count.clone();
-            let shift1 = std::sync::Arc::new(ArcShift::new(count.create("orig")));
+            let shift1 = atomic::Arc::new(ArcShift::new(count.create("orig")));
 
             let shift2 = shift1.clone();
             let shift3 = shift1.clone();
@@ -1192,7 +1191,7 @@ fn simple_threading4d() {
 #[test]
 fn simple_threading4e() {
     model(|| {
-        let shift = std::sync::Arc::new(Mutex::new(ArcShift::new(42u32)));
+        let shift = atomic::Arc::new(atomic::Mutex::new(ArcShift::new(42u32)));
         let shift1 = shift.clone();
         let shift2 = shift.clone();
         let shift3 = shift.clone();
