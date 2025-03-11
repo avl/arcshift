@@ -251,7 +251,8 @@ fn generic_2thread_ops_b<
     );
 }
 
-//TODO: Reduce code duplication here?
+// Hackpology: There's some code duplication and DRY-violations here
+// we should clean this up at some point.
 fn generic_3thread_ops_c<
     F1: Fn(
             &SpyOwner2,

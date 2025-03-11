@@ -1202,7 +1202,7 @@ fn simple_threading4d() {
             t3.join().unwrap();
             t4.join().unwrap();
             debug_println!("JOined all threads");
-            atomic::loom_fence();
+            crate::atomic::fence(Ordering::SeqCst);
         }
 
         count.validate();

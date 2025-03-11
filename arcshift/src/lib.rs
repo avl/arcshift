@@ -235,8 +235,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 
-
-//TODO: try and extract patterns into helper-methods.
+//TODO: Figure out which fences aren't needed.
 
 /*
 TODO: Remove this section.
@@ -288,7 +287,6 @@ use core::panic::UnwindSafe;
 use core::ptr::{addr_of_mut, null, null_mut, NonNull};
 use core::sync::atomic::Ordering;
 
-use crate::atomic::loom_fence;
 use crate::deferred::{DropHandler, IDropHandler, StealingDropHandler};
 // About unsafe code in this crate:
 // Some private functions contain unsafe code, and place limitations on their
@@ -307,13 +305,11 @@ use crate::deferred::{DropHandler, IDropHandler, StealingDropHandler};
 /// Declarations of atomic ops for using Arcshift in production
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 mod atomic {
-    pub use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+    pub use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering, fence};
     #[cfg(test)]
     pub use std::sync::{Arc,Mutex};
     #[cfg(test)]
     pub use std::thread;
-    #[inline(always)]
-    pub(crate) fn loom_fence() {}
 }
 
 
@@ -409,8 +405,8 @@ mod deferred {
             #[cfg(feature = "validate")]
             {
                 let item_ref = unsafe { &*(item_ptr as *mut ItemHolder<T, M>) };
-                item_ref.magic1.store(0xdeaddead, Ordering::SeqCst);
-                item_ref.magic2.store(0xdeaddea2, Ordering::SeqCst);
+                item_ref.magic1.store(0xdeaddead, Ordering::Relaxed);
+                item_ref.magic2.store(0xdeaddea2, Ordering::Relaxed);
             }
 
             // SAFETY:
@@ -477,15 +473,6 @@ mod atomic {
     #[allow(unused)]
     pub use shuttle::thread;
 
-    /// Loom doesn't actually support atomic operations with Ordering::SeqCst.
-    /// However, since arcshift relies heavily on multiple atomic variables, and
-    /// relies on happens-before orderings being established between these,
-    /// we actually _need_ SeqCst for almost all accesses. This can be emulated
-    /// in loom by using fences. We dont' _actually_ need those fences, they're
-    /// just an artefact in loom, so use empty #[inline(always)] functions when
-    /// not compiling for loom!
-    #[inline(always)]
-    pub(crate) fn loom_fence() {}
 }
 
 /// Declarations for verifying Arcshift using 'loom'
@@ -496,9 +483,6 @@ mod atomic {
     pub use loom::sync::{Mutex,Arc};
     #[allow(unused)]
     pub use loom::thread;
-    pub(crate) fn loom_fence() {
-        fence(Ordering::SeqCst);
-    }
 }
 
 #[doc(hidden)]
@@ -572,8 +556,8 @@ where
 /// # use arcshift::ArcShiftWeak;
 /// let original_instance = ArcShift::new("test");
 /// let light_instance = ArcShift::downgrade(&original_instance);
-/// let instance = light_instance.upgrade();
-/// println!("Value: {:?}", *instance);
+/// let mut instance = light_instance.upgrade().unwrap();
+/// println!("Value: {:?}", instance.get());
 /// # }
 /// ```
 ///
@@ -1102,15 +1086,16 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         // Lock-free because we only loop if 'next' changes, which means
         // some other node has made progress.
         loop {
-            let prior_next = self.next.load(atomic::Ordering::SeqCst);
+            atomic::fence(Ordering::SeqCst);
+            let prior_next = self.next.load(atomic::Ordering::Relaxed);
             let new_next = decorate(undecorated_new_next, get_decoration(prior_next));
             if self
                 .next
                 .compare_exchange(
                     prior_next,
                     new_next as *mut _,
-                    atomic::Ordering::SeqCst,
-                    atomic::Ordering::SeqCst,
+                    atomic::Ordering::AcqRel,
+                    atomic::Ordering::Acquire,
                 )
                 .is_ok()
             {
@@ -1141,7 +1126,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
             ret.push(unsafe { &*item_ptr });
             // SAFETY:
             // See above. item_ptr is a valid pointer.
-            let prev = from_dummy::<T, M>(unsafe { (*item_ptr).prev.load(Ordering::SeqCst) });
+            let prev = from_dummy::<T, M>(unsafe { (*item_ptr).prev.load(Ordering::Relaxed) });
             if prev.is_null() {
                 break;
             }
@@ -1151,13 +1136,13 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         ret
     }
 
-    #[allow(unused)]
+    #[cfg(feature="debug")]
     fn decoration(&self) -> ItemStateEnum {
         get_decoration(self.next.load(Ordering::SeqCst))
     }
 
     fn has_payload(&self) -> bool {
-        !get_decoration(self.next.load(atomic::Ordering::SeqCst)).is_dropped()
+        !get_decoration(self.next.load(atomic::Ordering::Acquire)).is_dropped()
     }
 
     #[inline(always)]
@@ -1172,10 +1157,9 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     fn lock_node_for_gc(&self) -> bool {
         // Lock free, see comment for each 'continue' statement, which are the only statements
         // that lead to looping.
-
         loop {
-
-            let cur_next = self.next.load(atomic::Ordering::SeqCst);
+            atomic::fence(atomic::Ordering::SeqCst);
+            let cur_next = self.next.load(atomic::Ordering::Relaxed);
             let decoration = get_decoration(cur_next);
             if decoration.is_unlocked() {
                 let decorated = decorate(undecorate(cur_next), decoration.with_gc());
@@ -1184,8 +1168,8 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                     .compare_exchange(
                         cur_next,
                         decorated as *mut _,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
+                        Ordering::AcqRel,
+                        atomic::Ordering::Acquire,
                     )
                     .is_ok();
                 debug_println!(
@@ -1213,11 +1197,11 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                     match self.next.compare_exchange(
                         cur_next,
                         decorated as *mut _,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
+                        Ordering::AcqRel,
+                        atomic::Ordering::Acquire
                     ) {
                         Ok(_) => {
-                            atomic::loom_fence();
+                            atomic::fence(Ordering::SeqCst);
                             debug_println!("Locking node {:x?} failed, set disturbed flag, new value: {:x?} (={:?})", self as * const ItemHolder<T, M>, decorated, get_decoration(decorated));
                         }
                         Err(prior) => {
@@ -1252,8 +1236,8 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         //    system progress, so algorithm remains lock free.
         loop {
 
-            atomic::loom_fence();
-            let cur_next = self.next.load(atomic::Ordering::SeqCst);
+            atomic::fence(Ordering::SeqCst);
+            let cur_next = self.next.load(atomic::Ordering::Relaxed);
             let decoration = get_decoration(cur_next);
             let undecorated = decorate(undecorate(cur_next), decoration.without_gc_and_disturbed());
 
@@ -1270,12 +1254,12 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 .compare_exchange(
                     cur_next,
                     undecorated as *mut _,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
+                    Ordering::AcqRel,
+                    atomic::Ordering::Acquire
                 )
                 .is_ok()
             {
-                atomic::loom_fence();
+                atomic::fence(Ordering::SeqCst);
                 return decoration.is_disturbed();
             }
         }
@@ -1301,8 +1285,8 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
             // just used for testing.
             let atomic_magic2 = unsafe { &*std::ptr::addr_of!((*ptr).magic2) };
 
-            let magic1 = atomic_magic1.load(Ordering::SeqCst);
-            let magic2 = atomic_magic2.load(Ordering::SeqCst);
+            let magic1 = atomic_magic1.load(Ordering::Relaxed);
+            let magic2 = atomic_magic2.load(Ordering::Relaxed);
             if magic1 >> 16 != 0xbeefbeefbeef {
                 debug_println!(
                     "Internal error - bad magic1 in {:?}: {} ({:x})",
@@ -1328,7 +1312,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 let m1 = magic1 & 0xffff;
                 let m2 = magic2 & 0xffff;
                 if m1 != 0x8111 || m2 != 0x8111 {
-                    eprintln!("Internal error - bad magic in {:?} {:x} {:x}", ptr, m1, m2);
+                    debug_println!("Internal error - bad magic in {:?} {:x} {:x}", ptr, m1, m2);
                 }
             }
 
@@ -1347,12 +1331,12 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                     debug_println!("Backtrace: {}", std::backtrace::Backtrace::capture());
                     panic!();
                 }
-                let magic = MAGIC.fetch_add(1, Ordering::SeqCst);
+                let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
                 let magic = magic as i64 as u64;
-                atomic_magic1.fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-                atomic_magic2.fetch_and(0xffff_ffff_ffff_0000, Ordering::SeqCst);
-                atomic_magic1.fetch_or(magic, Ordering::SeqCst);
-                atomic_magic2.fetch_or(magic, Ordering::SeqCst);
+                atomic_magic1.fetch_and(0xffff_ffff_ffff_0000, Ordering::Relaxed);
+                atomic_magic2.fetch_and(0xffff_ffff_ffff_0000, Ordering::Relaxed);
+                atomic_magic1.fetch_or(magic, Ordering::Relaxed);
+                atomic_magic2.fetch_or(magic, Ordering::Relaxed);
             }
         }
     }
@@ -1540,19 +1524,19 @@ fn do_clone_strong<T: ?Sized, M: IMetadata>(
     item_ptr: *const ItemHolder<T, M>,
     drop_job_queue: &mut impl IDropHandler<T, M>,
 ) -> *const ItemHolderDummy<T> {
-    atomic::loom_fence();
+    atomic::fence(Ordering::SeqCst);
     // SAFETY:
     // do_clone_strong must be called with a valid item_ptr
     let item = unsafe { &*item_ptr };
     debug_println!(
         "Strong clone, about to access strong count of {:x?} (weak: {})",
         item_ptr,
-        format_weak(item.weak_count.load(Ordering::SeqCst))
+        format_weak(item.weak_count.load(Ordering::Relaxed))
     );
-    let strong_count = item.strong_count.fetch_add(1, Ordering::SeqCst);
+    let strong_count = item.strong_count.fetch_add(1, Ordering::Relaxed);
 
     if strong_count > MAX_REF_COUNT {
-        item.strong_count.fetch_sub(1, Ordering::SeqCst);
+        item.strong_count.fetch_sub(1, Ordering::Relaxed);
         panic!("strong ref count max limit exceeded")
     }
 
@@ -1570,13 +1554,13 @@ fn do_clone_strong<T: ?Sized, M: IMetadata>(
 fn do_clone_weak<T: ?Sized, M: IMetadata>(
     item_ptr: *const ItemHolder<T, M>,
 ) -> *const ItemHolderDummy<T> {
-    atomic::loom_fence();
+    atomic::fence(Ordering::SeqCst);
     // SAFETY:
     // do_clone_weak must be called with a valid item_ptr
     let item = unsafe { &*item_ptr };
-    let weak_count = item.weak_count.fetch_add(1, Ordering::SeqCst);
+    let weak_count = item.weak_count.fetch_add(1, Ordering::Relaxed);
     if get_weak_count(weak_count) > MAX_REF_COUNT {
-        item.weak_count.fetch_sub(1, Ordering::SeqCst);
+        item.weak_count.fetch_sub(1, Ordering::Relaxed);
         panic!("weak ref count max limit exceeded")
     }
     debug_println!(
@@ -1600,9 +1584,9 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
     {
         // This is needed, since ostensibly, this method works on a weak clone of 'item_ptr'.
         // It is this weak clone that is converted to a strong item.
-        let weak_count = start_item.weak_count.fetch_add(1, Ordering::SeqCst);
+        let weak_count = start_item.weak_count.fetch_add(1, Ordering::Relaxed);
         if get_weak_count(weak_count) > MAX_REF_COUNT {
-            start_item.weak_count.fetch_sub(1, Ordering::SeqCst);
+            start_item.weak_count.fetch_sub(1, Ordering::AcqRel);
             panic!("weak ref count max limit exceeded")
         }
         debug_println!(
@@ -1620,11 +1604,11 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
         // SAFETY:
         // do_advance_weak always returns a valid non-null pointer
         let item = unsafe { &*from_dummy::<T, M>(item_ptr) };
-        let prior_strong_count = item.strong_count.load(Ordering::SeqCst);
-        let item_next = item.next.load(Ordering::SeqCst);
+        let prior_strong_count = item.strong_count.load(Ordering::Acquire);
+        let item_next = item.next.load(Ordering::Acquire);
         if !get_decoration(item_next).is_dropped() {
             if prior_strong_count == 0 {
-                let _prior_weak_count = item.weak_count.fetch_add(1, Ordering::SeqCst);
+                let _prior_weak_count = item.weak_count.fetch_add(1, Ordering::AcqRel);
                 debug_println!(
                     "pre-upgrade strong=0 {:x?}, increase weak to {}",
                     item_ptr,
@@ -1646,11 +1630,11 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 // item_ptr has been advanced to, and we thus hold a weak ref.
                 // it is a valid pointer.
                 let item = unsafe { &*from_dummy::<T, M>(item_ptr) };
-                let item_next = item.next.load(Ordering::SeqCst);
+                let item_next = item.next.load(Ordering::Acquire);
                 if get_decoration(item_next).is_dropped() {
-                    let new_prior_strong = item.strong_count.fetch_sub(1, Ordering::SeqCst);
+                    let new_prior_strong = item.strong_count.fetch_sub(1, Ordering::AcqRel);
                     if new_prior_strong == 1 {
-                        let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                        let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::AcqRel);
                         #[cfg(feature = "validate")]
                         assert!(get_weak_count(_prior_weak_count) > 1);
                     }
@@ -1659,7 +1643,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                     continue;
                 }
 
-                let _reduce_weak = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                let _reduce_weak = item.weak_count.fetch_sub(1, Ordering::AcqRel);
                 debug_println!(
                     "upgrade success, new strong_count: {}, new weak: {}",
                     prior_strong_count + 1,
@@ -1675,7 +1659,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 return Some(item_ptr);
             } else {
                 if prior_strong_count == 0 {
-                    let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                    let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::AcqRel);
                     debug_println!(
                         "pre-upgrade strong=0 race2 {:x?}, decrease weak to {}",
                         item_ptr,
@@ -1734,7 +1718,7 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
     // do_advance_strong).
     loop {
 
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         debug_println!("In advance-loop, item_ptr: {:x?}", item_ptr);
         // SAFETY:
         // item_ptr is a pointer we have advanced to. Forward advance always visits only
@@ -1744,7 +1728,7 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
         // collected.
         let item: &ItemHolder<T, M> = unsafe { &*from_dummy(item_ptr as *mut _) };
 
-        let next_ptr = undecorate(item.next.load(Ordering::SeqCst));
+        let next_ptr = undecorate(item.next.load(Ordering::Acquire));
         debug_println!("advancing from {:x?}, next_ptr = {:x?}", item_ptr, next_ptr);
         if next_ptr.is_null() {
             #[allow(clippy::collapsible_if)]
@@ -1756,26 +1740,26 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
             }
             return item_ptr;
         }
-        atomic::loom_fence();
-        let _advanced = item.advance_count.fetch_add(1, Ordering::SeqCst);
+        atomic::fence(Ordering::SeqCst);
+        let _advanced = item.advance_count.fetch_add(1, Ordering::AcqRel);
         debug_println!(
             "advance: Increasing {:x?}.advance_count to {}",
             item_ptr,
             _advanced + 1
         );
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
 
         // We must reload next, becuase it's only the next that is _now_ set that is actually
         // protected by 'advance_count' above!
-        let next_ptr = undecorate(item.next.load(Ordering::SeqCst));
+        let next_ptr = undecorate(item.next.load(Ordering::Acquire));
         #[cfg(feature = "validate")]
         assert_ne!(next_ptr, item_ptr);
         // SAFETY:
         // next_ptr is guarded by our advance_count ref that we grabbed above.
         let next: &ItemHolder<T, M> = unsafe { &*from_dummy(next_ptr) };
         debug_println!("advance: Increasing next(={:x?}).weak_count", next_ptr);
-        let _res = next.weak_count.fetch_add(1, Ordering::SeqCst);
-        atomic::loom_fence();
+        let _res = next.weak_count.fetch_add(1, Ordering::AcqRel);
+        atomic::fence(Ordering::SeqCst);
         debug_println!(
             "do_advance_impl: increment weak of {:?}, was {}, now {}, now accessing: {:x?}",
             next_ptr,
@@ -1784,8 +1768,8 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
             item_ptr
         );
 
-        let _advanced = item.advance_count.fetch_sub(1, Ordering::SeqCst);
-        atomic::loom_fence();
+        let _advanced = item.advance_count.fetch_sub(1, Ordering::AcqRel);
+        atomic::fence(Ordering::SeqCst);
         debug_println!(
             "advance: Decreasing {:x?}.advance_count to {}",
             item_ptr,
@@ -1794,7 +1778,7 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
 
         if item_ptr != start_ptr {
             debug_println!("do_advance_impl: decrease weak from {:x?}", item_ptr);
-            let _res = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+            let _res = item.weak_count.fetch_sub(1, Ordering::AcqRel);
             debug_println!(
                 "do_advance_impl: decrease weak from {:x?} - decreased to {}",
                 item_ptr,
@@ -1825,7 +1809,7 @@ fn do_advance_weak<T: ?Sized, M: IMetadata>(
         |a: *const ItemHolder<T, M>, _b: *const ItemHolder<T, M>| {
             // SAFETY:
             // a is a valid pointer. do_advance_impl only supplies usable pointers to the callback.
-            let _a_weak = unsafe { (*a).weak_count.fetch_sub(1, Ordering::SeqCst) };
+            let _a_weak = unsafe { (*a).weak_count.fetch_sub(1, Ordering::AcqRel) };
             // We have a weak ref count on 'b' given to use by `do_advance_impl`, which we're fine with
             debug_println!(
                 "weak advance {:x?}, decremented weak count to {}",
@@ -1848,7 +1832,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
     do_advance_impl::<_, M>(item_ptr, move |a, b| {
         // SAFETY:
         // b is a valid pointer. do_advance_impl supplies the closure with only valid pointers.
-        let mut b_strong = unsafe { (*b).strong_count.load(Ordering::SeqCst) };
+        let mut b_strong = unsafe { (*b).strong_count.load(Ordering::Acquire) };
         // Lock free, since we only loop when compare_exchange fails on 'strong_count', something
         // which only occurs when 'strong_count' changes, which only occurs when there is
         // system wide progress.
@@ -1879,7 +1863,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                 // that might also increment the count.
                 // SAFETY:
                 // b is a valid pointer (see above)
-                let _prior_weak = unsafe { (*b).weak_count.fetch_add(1, Ordering::SeqCst) };
+                let _prior_weak = unsafe { (*b).weak_count.fetch_add(1, Ordering::AcqRel) };
                 debug_println!(
                     "Prior to strong_count imcrement {:x?} from 0, added weak count. Weak now: {}",
                     b,
@@ -1893,8 +1877,8 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                 (*b).strong_count.compare_exchange(
                     b_strong,
                     b_strong + 1,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
+                    Ordering::AcqRel,
+                    atomic::Ordering::Acquire
                 )
             } {
                 Ok(_) => {
@@ -1906,7 +1890,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                     );
                     // SAFETY:
                     // b is a valid pointer. See above.
-                    let next_ptr = unsafe { (*b).next.load(Ordering::SeqCst) };
+                    let next_ptr = unsafe { (*b).next.load(Ordering::Acquire) };
                     if !undecorate(next_ptr).is_null() {
                         // Race - even though _did_ have payload prior to us grabbing the strong count, it now doesn't.
                         // This can only happen if there's another node to the right, that _does_ have a payload.
@@ -1914,7 +1898,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         // SAFETY:
                         // b is a valid pointer. See above.
                         let prior_strong =
-                            unsafe { (*b).strong_count.fetch_sub(1, Ordering::SeqCst) };
+                            unsafe { (*b).strong_count.fetch_sub(1, Ordering::AcqRel) };
                         debug_println!("do_advance_strong:rare race, new _next_ appeared when increasing strong count: {:?} (decr strong back to {}) <|||||||||||||||||||||||||||||||||||||||||||||||||||||||>", b, prior_strong -1);
                         #[cfg(feature = "validate")]
                         assert!(
@@ -1935,7 +1919,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                             // SAFETY:
                             // b is a valid pointer. See above.
                             let _b_weak_count =
-                                unsafe { (*b).weak_count.fetch_sub(1, Ordering::SeqCst) };
+                                unsafe { (*b).weak_count.fetch_sub(1, Ordering::AcqRel) };
                             debug_println!("do_advance_strong:rare2 {:x?} reduced strong count back to 0, reduced weak to: {}", b, get_weak_count(_b_weak_count-1));
                             #[cfg(feature = "validate")]
                             assert!(get_weak_count(_b_weak_count) > 1);
@@ -1948,7 +1932,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
 
                     // SAFETY:
                     // b is a valid pointer. See above.
-                    let _b_weak_count = unsafe { (*b).weak_count.fetch_sub(1, Ordering::SeqCst) };
+                    let _b_weak_count = unsafe { (*b).weak_count.fetch_sub(1, Ordering::AcqRel) };
                     debug_println!(
                         "strong advance {:x?}, reducing free b-count to {:?}",
                         b,
@@ -1959,7 +1943,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
 
                     // SAFETY:
                     // a is a valid pointer. See above.
-                    let a_strong = unsafe { (*a).strong_count.fetch_sub(1, Ordering::SeqCst) };
+                    let a_strong = unsafe { (*a).strong_count.fetch_sub(1, Ordering::AcqRel) };
                     #[cfg(feature = "validate")]
                     assert_ne!(a_strong, 0);
                     debug_println!(
@@ -1967,14 +1951,14 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         a,
                         a_strong,
                         a_strong - 1,
-                        format_weak(unsafe { (*a).weak_count.load(Ordering::SeqCst) })
+                        format_weak(unsafe { (*a).weak_count.load(Ordering::Acquire) })
                     );
                     if a_strong == 1 {
                         do_drop_payload_if_possible(a, false, drop_job_queue);
                         // Remove the implicit weak granted by the strong
                         // SAFETY:
                         // a is a valid pointer. See above.
-                        let _a_weak = unsafe { (*a).weak_count.fetch_sub(1, Ordering::SeqCst) };
+                        let _a_weak = unsafe { (*a).weak_count.fetch_sub(1, Ordering::AcqRel) };
                         debug_println!("do_advance_strong:maybe dropping payload of a {:x?} (because strong-count is now 0). Adjusted weak to {}", a, format_weak(_a_weak.wrapping_sub(1)));
                         #[cfg(feature = "validate")]
                         assert!(get_weak_count(_a_weak) > 0);
@@ -1985,7 +1969,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                     if b_strong == 0 {
                         // SAFETY:
                         // b is a valid pointer. See above.
-                        let _prior_weak = unsafe { (*b).weak_count.fetch_sub(1, Ordering::SeqCst) };
+                        let _prior_weak = unsafe { (*b).weak_count.fetch_sub(1, Ordering::AcqRel) };
                         debug_println!("do_advance_strong: race on strong_count for {:x?} (restore-decr weak to {})", b, get_weak_count(_prior_weak - 1));
                         #[cfg(feature = "validate")]
                         assert!(get_weak_count(_prior_weak) > 1);
@@ -2009,7 +1993,7 @@ fn raw_deallocate_node<T: ?Sized, M: IMetadata>(
     // that it has exclusive access.
     #[cfg(feature = "validate")]
     assert_eq!(
-        unsafe { (*item_ptr).strong_count.load(Ordering::SeqCst) },
+        unsafe { (*item_ptr).strong_count.load(Ordering::Acquire) },
         0,
         "{:x?} strong count must be 0 when deallocating",
         item_ptr
@@ -2018,8 +2002,8 @@ fn raw_deallocate_node<T: ?Sized, M: IMetadata>(
     #[cfg(feature = "validate")]
     {
         let item_ref = unsafe { &*(item_ptr as *mut ItemHolder<T, M>) };
-        item_ref.magic1.store(0xdeaddead, Ordering::SeqCst);
-        item_ref.magic2.store(0xdeaddea2, Ordering::SeqCst);
+        item_ref.magic1.store(0xdeaddead, Ordering::Relaxed);
+        item_ref.magic2.store(0xdeaddea2, Ordering::Relaxed);
     }
 
     jobq.do_dealloc(item_ptr);
@@ -2046,7 +2030,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
     verify_item(to_dummy(start_ptr));
 
     let mut have_seen_left_strong_refs = false;
-    let mut have_visited_leftmost = false;
     fn get_strong_status(strong: bool, leftmost: bool) -> NodeStrongStatus {
         if strong {
             NodeStrongStatus::StrongRefsFound
@@ -2067,11 +2050,11 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         debug_println!("Janitor task for {:x?} - gc already active!", start_ptr);
         return (
             false,
-            get_strong_status(have_seen_left_strong_refs, have_visited_leftmost),
+            get_strong_status(have_seen_left_strong_refs, false),
         );
     }
 
-    atomic::loom_fence();
+    atomic::fence(Ordering::SeqCst);
 
     debug_println!("Loading prev of {:x?}", start_ptr);
     let mut cur_ptr: *const _ = start.prev.load(Ordering::SeqCst);
@@ -2083,36 +2066,19 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         let need_rerun = start.unlock_node();
         return (
             need_rerun,
-            get_strong_status(have_seen_left_strong_refs, have_visited_leftmost),
+            get_strong_status(have_seen_left_strong_refs, true),
         );
     }
 
     let mut rightmost_deletable = null();
 
 
+    // It may seems that we iterate through the chain in many different ways
+    // in this method, and that it should be possible to abstract this.
+    // However, it turns out to be slightly tricky, since the iteration is always
+    // done in a very careful way to maintain correctness, and exchanging the order
+    // of two innocent looking statements can cause it to fail.
 
-    /// Stops search and returns true if 'f' returns true
-    /// Entire chain must be locked and contain valid pointers.
-    fn for_any_in_chain<T:?Sized, M:IMetadata>(start: *const ItemHolderDummy<T>, mut f: impl FnMut(&ItemHolder<T,M>) -> bool) -> bool {
-        let mut cur_ptr = start;
-        loop {
-
-            if cur_ptr.is_null(){
-                break;
-            }
-            // SAFETY:
-            // the start pointer must be a valid pointer, and then we follow prev-links.
-            // The caller must ensure the entire chain is locked
-            let cur: &ItemHolder<T, M> = unsafe { &*from_dummy::<T,M>(cur_ptr) };
-            if f(cur) {
-                return true;
-            }
-            let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
-            debug_println!("Janitor loop helper considering {:x?} -> {:x?}", cur_ptr, prev_ptr);
-            cur_ptr = prev_ptr;
-        }
-        false
-    }
 
 
     {
@@ -2147,7 +2113,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                     start_ptr,
                     cur_ptr
                 );
-                have_visited_leftmost = true;
                 break;
             }
             cur_ptr = prev_ptr;
@@ -2180,12 +2145,10 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             anyrerun |= start.unlock_node();
             debug_println!("Janitor failed to grab locks. Rerun: {:?}", anyrerun);
             return (anyrerun,
-                    get_strong_status(have_seen_left_strong_refs, have_visited_leftmost)
+                    get_strong_status(have_seen_left_strong_refs, false)
             );
         }
     }
-
-    //TODO: Can we break the iterating machinery into a helper method?
 
     // Lock free, since this just iterates through the chain of nodes,
     // which has a bounded length.
@@ -2205,12 +2168,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         );
         #[cfg(feature = "validate")]
         assert_ne!(cur_ptr, start_ptr);
-        /*
-        cur.set_next(start_ptr);
-        atomic::loom_fence();
-        */
-
-
 
         if cur.strong_count.load(Ordering::SeqCst) > 0 {
             have_seen_left_strong_refs = true;
@@ -2225,7 +2182,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 cur_ptr
             );
             cur_ptr = null_mut();
-            have_visited_leftmost = true;
             break;
         }
 
@@ -2237,16 +2193,9 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         #[cfg(feature = "validate")]
         assert_ne!(prev_ptr, start_ptr);
 
-        let prior_prev_next = prev.next.load(Ordering::SeqCst);
-        // Check if chain contains the previous next-value. If it didn't changing next will
-        // move next _back_.
-        if for_any_in_chain::<T,M>(start_ptr, |x|to_dummy(x) == undecorate(prior_prev_next)) { //TODO: IS this optimization even worth? (Does it impact correctness?)
-            prev.set_next(start_ptr);
-        } else {
-            debug_println!("for {:x?}, {:x?} did not exist in chain", prev_ptr, prior_prev_next);
-        }
+        prev.set_next(start_ptr);
 
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         let adv_count = prev.advance_count.load(Ordering::SeqCst);
         debug_println!("advance_count of {:x?} is {}", prev_ptr, adv_count);
         if adv_count > 0 {
@@ -2374,7 +2323,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             right
                 .prev
                 .store(new_predecessor_ptr as *mut _, Ordering::SeqCst);
-            atomic::loom_fence();
+            atomic::fence(Ordering::SeqCst);
 
             if new_predecessor_ptr.is_null() {
                 debug_println!("new_predecessor is null");
@@ -2416,7 +2365,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
     debug_println!("start-node unlocked: {:x?}", start_ptr);
     (
         need_rerun,
-        get_strong_status(have_seen_left_strong_refs, have_visited_leftmost),
+        get_strong_status(have_seen_left_strong_refs, true),
     )
 }
 
@@ -2444,11 +2393,11 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
     loop {
 
         debug_println!("drop weak loop {:?}", item_ptr);
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         item_ptr = do_advance_weak::<T, M>(item_ptr);
         let (need_rerun, strong_refs) =
             do_janitor_task(from_dummy::<T, M>(item_ptr), drop_job_queue);
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         if need_rerun {
             debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
             continue;
@@ -2466,10 +2415,9 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
 
         #[cfg(feature = "validate")]
         assert!(get_weak_count(prior_weak) > 0);
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
 
 
-        atomic::loom_fence();
         let next_ptr = item.next.load(Ordering::SeqCst);
         let have_next = !undecorate(next_ptr).is_null();
         if have_next {
@@ -2497,7 +2445,7 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             // item_ptr was returned by do_advance_weak, and is thus valid.
             let o_item = unsafe { &*from_dummy::<T, M>(item_ptr) };
             let o_strong = o_item.strong_count.load(Ordering::SeqCst);
-            atomic::loom_fence();
+            atomic::fence(Ordering::SeqCst);
             let original_next = o_item.next.load(Ordering::SeqCst);
             if o_strong == 0 && !get_decoration(original_next).is_dropped() {
                 let can_drop_now;
@@ -2604,7 +2552,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
             initial_item_ptr,
             item_ptr
         );
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         let cur_next = item.next.load(Ordering::SeqCst);
         if !undecorate(cur_next).is_null() {
             continue;
@@ -2621,9 +2569,9 @@ fn do_update<T: ?Sized, M: IMetadata>(
         // yet linked into the chain, so no other node could free it.
         unsafe { (*val).prev = atomic::AtomicPtr::new(item_ptr as *mut _) };
 
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         let _weak_was = loop {
-            let weak_count = item.weak_count.load(Ordering::SeqCst); //TODO: Relaxed?
+            let weak_count = item.weak_count.load(Ordering::SeqCst);
             let new_weak_count = (weak_count|WEAK_HAVE_NEXT) + 1;
             if item.weak_count.compare_exchange(weak_count, new_weak_count, Ordering::SeqCst, Ordering::SeqCst).is_err() {
                 debug_println!("update weak race. {:?} (to {})", item_ptr, format_weak(new_weak_count));
@@ -2648,7 +2596,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
             Ordering::SeqCst,
         ) {
             Ok(_) => {
-                atomic::loom_fence();
+                atomic::fence(Ordering::SeqCst);
                 debug_println!("aft1 item.next.compare_exchange");
             }
             Err(_) => {
@@ -2694,7 +2642,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
         // work on us, and it has made progress, which means there is system wide progress.
         loop {
 
-            atomic::loom_fence();
+            atomic::fence(Ordering::SeqCst);
             let (need_rerun, _strong_refs) =
                 do_janitor_task(from_dummy::<T, M>(item_ptr), drop_job_queue);
             if need_rerun {
@@ -2723,7 +2671,7 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
     // progress.
     loop {
 
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         let next_ptr = item.next.load(Ordering::SeqCst);
         let decoration = get_decoration(next_ptr);
         if decoration.is_dropped() || (undecorate(next_ptr).is_null() && !override_rightmost_check)
@@ -2740,7 +2688,7 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
             decoration,
             decoration.dropped()
         );
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         match item.next.compare_exchange(
             next_ptr,
             decorate(undecorate(next_ptr), decoration.dropped()) as *mut _,
@@ -2784,7 +2732,7 @@ fn raw_do_unconditional_drop_payload_if_not_dropped<T: ?Sized, M: IMetadata>(
             item_ptr
         );
         drop_job_queue.do_drop(item_ptr);
-        loom_fence();
+        atomic::fence(Ordering::SeqCst);
     }
 }
 
@@ -2821,7 +2769,7 @@ fn do_drop_strong<T: ?Sized, M: IMetadata>(
 
 impl<T: ?Sized> Drop for ArcShift<T> {
     fn drop(&mut self) {
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         verify_item(self.item.as_ptr());
         debug_println!("executing ArcShift::drop({:x?})", self.item.as_ptr());
         with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
@@ -2833,7 +2781,7 @@ impl<T: ?Sized> Drop for ArcShift<T> {
 }
 impl<T: ?Sized> Drop for ArcShiftWeak<T> {
     fn drop(&mut self) {
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         verify_item(self.item.as_ptr());
 
         fn drop_weak_helper<T: ?Sized, M: IMetadata>(item: *const ItemHolder<T, M>) {
@@ -2908,7 +2856,7 @@ impl<T> ArcShift<T> {
     /// Crate a new ArcShift instance with the given value.
     pub fn new(val: T) -> ArcShift<T> {
         let holder = make_sized_holder(val, null_mut());
-        atomic::loom_fence();
+        atomic::fence(Ordering::SeqCst);
         ArcShift {
             // SAFETY:
             // The newly created holder-pointer is valid and non-null
@@ -3223,7 +3171,7 @@ impl<T: ?Sized> ArcShift<T> {
             loop {
 
                 item_ptr = do_advance_strong::<T, M>(item_ptr, &mut jobq);
-                atomic::loom_fence();
+                atomic::fence(Ordering::SeqCst);
                 let (need_rerun, _strong_refs) =
                     do_janitor_task(from_dummy::<T, M>(item_ptr), &mut jobq);
                 if need_rerun {
@@ -3282,7 +3230,7 @@ impl<T: ?Sized> ArcShift<T> {
         loop {
 
             debug_println!("loop traverse right at {:?}", last);
-            atomic::loom_fence();
+            atomic::fence(Ordering::SeqCst);
             // SAFETY:
             // Caller guarantees that initial 'last' prototype is a valid pointer.
             // Other pointers are found by walking right from that.
@@ -3317,7 +3265,7 @@ impl<T: ?Sized> ArcShift<T> {
             debug_println!("Node: {:?}", *_node as *const ItemHolder<T, _>);
         }
         for node in all_nodes.iter().copied() {
-            atomic::loom_fence();
+            atomic::fence(Ordering::SeqCst);
             let next = undecorate(node.next.load(Ordering::SeqCst));
             if !next.is_null() {
                 // SAFETY:
