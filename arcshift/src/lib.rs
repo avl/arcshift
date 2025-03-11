@@ -225,6 +225,8 @@
 //! ```
 //!
 
+//TODO: try and extract patterns into helper-methods.
+
 /*
 TODO: Remove this section.
 
@@ -296,7 +298,6 @@ use crate::deferred::{DropHandler, IDropHandler, StealingDropHandler};
 /// Declarations of atomic ops for using Arcshift in production
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 mod atomic {
-    //pub use std::hint::spin_loop;
     pub use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     #[cfg(test)]
     pub use std::sync::{Arc,Mutex};
@@ -447,7 +448,6 @@ mod deferred {
 /// Declarations for verifying Arcshift using 'shuttle'
 #[cfg(feature = "shuttle")]
 mod atomic {
-    //pub use shuttle::hint::spin_loop;
     #[allow(unused)]
     pub use shuttle::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 
@@ -470,7 +470,6 @@ mod atomic {
 /// Declarations for verifying Arcshift using 'loom'
 #[cfg(loom)]
 mod atomic {
-    //pub use loom::hint::spin_loop;
     pub use loom::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
     #[allow(unused)]
     pub use loom::sync::{Mutex,Arc};
@@ -2149,9 +2148,9 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                     break;
                 }
                 let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
-                anyrerun |= cur.unlock_node();
 
                 let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
+                anyrerun |= cur.unlock_node();
                 debug_println!("Cleanup sweep going to {:x?}", prev_ptr);
                 cur_ptr = prev_ptr;
             }
@@ -2163,13 +2162,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         }
     }
 
-    {
-        //TODO: It is possible for the janitor-task to actually reset 'next'-pointers to an earlier
-        //state.
-        //let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
-        //assert_eq!(undecorate(cur.next.load(Ordering::SeqCst) as *const _), start_ptr, "assert failed: when janitoring, {:x?} has unexpected next", cur_ptr);
-    }
-
+    //TODO: Can we break the iterating machinery into a helper method?
     // Lock free, since this just iterates through the chain of nodes,
     // which has a bounded length.
     loop {
@@ -2223,8 +2216,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         let prior_prev_next = prev.next.load(Ordering::SeqCst);
         // Check if chain contains the previous next-value. If it didn't changing next will
         // move next _back_.
-        if for_any_in_chain::<T,M>(start_ptr, |x|to_dummy(x) == undecorate(prior_prev_next)) {
-            //TODO: IS this optimization even worth?
+        if for_any_in_chain::<T,M>(start_ptr, |x|to_dummy(x) == undecorate(prior_prev_next)) { //TODO: IS this optimization even worth?
             prev.set_next(start_ptr);
         } else {
             debug_println!("for {:x?}, {:x?} did not exist in chain", prev_ptr, prior_prev_next);
@@ -2452,14 +2444,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         assert!(get_weak_count(prior_weak) > 0);
         atomic::loom_fence();
 
-        if get_weak_next(prior_weak) {
-            #[cfg(feature = "debug")]
-            {
-                let _next_ptr = item.next.load(Ordering::SeqCst);
-                debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is {:?})", item_ptr, _next_ptr);
-            }
-            continue;
-        }
 
         atomic::loom_fence();
         let next_ptr = item.next.load(Ordering::SeqCst);
@@ -2473,6 +2457,13 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             );
             continue;
         }
+
+        #[cfg(feature = "debug")]
+        if get_weak_next(prior_weak) {
+            let _next_ptr = item.next.load(Ordering::SeqCst);
+            debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is {:?})", item_ptr, _next_ptr);
+        }
+
 
         debug_println!("No add race, prior_weak: {}", format_weak(prior_weak));
 
@@ -2540,6 +2531,10 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             format_weak(prior_weak)
         );
         if get_weak_count(prior_weak) == 1 {
+            if get_weak_next(prior_weak) {
+                println!("This case should not be possible, since it implies the 'next' object didn't increase the refcount");
+                std::process::abort();
+            }
             // We know there's no next here either, since we checked 'get_weak_next' before the cmpxch, so we _KNOW_ we're the only user now.
             if !get_weak_prev(prior_weak) {
                 debug_println!("drop weak {:x?}, prior count = 1, raw deallocate", item_ptr);
@@ -2600,8 +2595,16 @@ fn do_update<T: ?Sized, M: IMetadata>(
         unsafe { (*val).prev = atomic::AtomicPtr::new(item_ptr as *mut _) };
 
         atomic::loom_fence();
-        item.weak_count.fetch_or(WEAK_HAVE_NEXT, Ordering::SeqCst);
-        let _weak_was = item.weak_count.fetch_add(1, Ordering::SeqCst);
+        let _weak_was = loop {
+            let weak_count = item.weak_count.load(Ordering::SeqCst); //TODO: Relaxed?
+            let new_weak_count = (weak_count|WEAK_HAVE_NEXT) + 1;
+            if item.weak_count.compare_exchange(weak_count, new_weak_count, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                debug_println!("update weak race. {:?} (to {})", item_ptr, format_weak(new_weak_count));
+                continue;
+            }
+            break weak_count;
+        };
+
         #[cfg(feature = "validate")]
         assert!(_weak_was > 0);
         debug_println!(
@@ -2714,7 +2717,7 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
         atomic::loom_fence();
         match item.next.compare_exchange(
             next_ptr,
-            decorate(next_ptr, decoration.dropped()) as *mut _,
+            decorate(undecorate(next_ptr), decoration.dropped()) as *mut _,
             Ordering::SeqCst,
             Ordering::SeqCst,
         ) {
