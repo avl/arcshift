@@ -1,7 +1,7 @@
 use crate::ArcShift;
-use std::cell::{Cell, UnsafeCell};
-use std::fmt::{Debug, Display, Formatter};
-use std::ops::Deref;
+use core::cell::{Cell, UnsafeCell};
+use core::fmt::{Debug, Display, Formatter};
+use core::ops::Deref;
 
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.
@@ -92,19 +92,20 @@ impl<T: 'static + ?Sized> Clone for ArcShiftCell<T> {
 /// a 'get'-method closure.
 pub struct RecursionDetected;
 
+
 impl Debug for RecursionDetected {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "RecursionDetected")
     }
 }
 
 impl Display for RecursionDetected {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "RecursionDetected")
     }
 }
 
-impl std::error::Error for RecursionDetected {}
+impl core::error::Error for RecursionDetected {}
 
 impl<T: 'static> ArcShiftCell<T> {
     /// Create a new ArcShiftCell with the given value.
@@ -202,7 +203,7 @@ impl<T: ?Sized + 'static> Debug for ArcShiftCell<T>
 where
     T: Debug,
 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "ArcShiftCell({:?})", &*self.borrow())
     }
 }

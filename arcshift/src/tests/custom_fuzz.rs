@@ -10,6 +10,10 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::format;
+use std::vec;
+use std::println;
+use std::vec::Vec;
 
 enum PipeItem<T: 'static> {
     Shift(ArcShift<T>),
@@ -118,7 +122,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                     }
                     FuzzerCommand::DowngradeLight(_) => {
                         if let Some(arc) = curval.as_ref() {
-                            curvalweak = Some(ArcShift::downgrade(&arc));
+                            curvalweak = Some(ArcShift::downgrade(arc));
                         }
                     }
                     FuzzerCommand::DropLight(_) => {
@@ -144,6 +148,8 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
     }
     drop(senders);
     debug_println!("Validating final arc0: {:x?}", start_arc0.item.as_ptr());
+    // SAFETY:
+    // No threading involved, &start_arc0 is valid.
     unsafe { ArcShift::debug_validate(&[&start_arc0], &[]) };
 }
 
@@ -229,7 +235,7 @@ fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
             }
             FuzzerCommand::DowngradeLight(chn) => {
                 if let Some(arc) = arcs[chn as usize].as_ref() {
-                    arcroots[chn as usize] = Some(ArcShift::downgrade(&arc));
+                    arcroots[chn as usize] = Some(ArcShift::downgrade(arc));
                 }
             }
             FuzzerCommand::DropLight(chn) => {
@@ -321,7 +327,7 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 fn generic_thread_fuzzing_57() {
     #[cfg(miri)]
     const COUNT: u64 = 30;
-    #[cfg(any(loom))]
+    #[cfg(loom)]
     const COUNT: u64 = 100;
     #[cfg(all(feature = "shuttle", not(coverage)))]
     const COUNT: u64 = 1000;
@@ -366,7 +372,7 @@ fn generic_thread_fuzzing_repro2() {
 fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     #[cfg(miri)]
     const COUNT: u64 = 30;
-    #[cfg(any(loom))]
+    #[cfg(loom)]
     const COUNT: u64 = 100;
     #[cfg(all(feature = "shuttle", not(coverage)))]
     const COUNT: u64 = 1000;

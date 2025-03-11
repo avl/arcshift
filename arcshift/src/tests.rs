@@ -1,6 +1,10 @@
 #![deny(warnings)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#![allow(clippy::bool_assert_comparison)]
+#![allow(clippy::unit_cmp)]
+
+
 use super::*;
 use crossbeam_channel::bounded;
 use leak_detection::{InstanceSpy, InstanceSpy2, SpyOwner2};
@@ -15,6 +19,10 @@ use std::mem::MaybeUninit;
 use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::Duration;
+use std::vec;
+use std::boxed::Box;
+use std::string::ToString;
+
 
 mod custom_fuzz;
 pub(crate) mod leak_detection;
@@ -63,7 +71,11 @@ fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
 #[cfg(not(any(loom, feature = "shuttle")))]
 mod simple {
     use std::alloc::Layout;
+    use std::vec;
     use super::{ArcShift, SpyOwner2};
+    use std::boxed::Box;
+    use std::string::ToString;
+
     #[test]
     fn simple_get() {
         let mut shift = ArcShift::new(42u32);
@@ -113,9 +125,9 @@ mod simple {
     use std::sync::atomic::Ordering;
     use crate::tests::leak_detection::InstanceSpy;
 
-    thread_local! {
+    std::thread_local! {
 
-        static THREADLOCAL_FOO: ArcShiftCell<String> = ArcShiftCell::new(String::new());
+        static THREADLOCAL_FOO: ArcShiftCell<std::string::String> = ArcShiftCell::new(std::string::String::new());
     }
 
     #[cfg(not(any(loom, feature = "shuttle")))]
@@ -408,10 +420,17 @@ mod simple {
 
         let layout = Layout::new::<MaybeUninit<[u64; SIZE]>>();
 
-        let ptr: *mut [u64; SIZE] = unsafe { std::alloc::alloc(layout) } as *mut [u64; SIZE];
+        let ptr: *mut [u64; SIZE] =
+            // # SAFETY:
+            // layout is not zero-sized
+            unsafe { std::alloc::alloc(layout) } as *mut [u64; SIZE];
         for i in 0..SIZE {
-            unsafe { *(&mut (*ptr)).get_unchecked_mut(i) = 42 };
+            // # SAFETY:
+            // ptr is valid (just allocated)
+            unsafe { *(*ptr).get_unchecked_mut(i) = 42 };
         }
+        // # SAFETY:
+        // ptr is valid (just allocated)
         let bigbox = unsafe { Box::from_raw(ptr) };
         let mut shift = ArcShift::from_box(bigbox);
         let value = shift.get();
@@ -478,6 +497,8 @@ mod simple {
         debug_println!("==== running arc.update() = ");
         shift2.update(InstanceSpy::new(count.clone()));
 
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[&shiftlight]) };
         debug_println!("==== Instance count: {}", count.load(Ordering::SeqCst));
         drop(shift1);
@@ -569,8 +590,8 @@ fn simple_threading2() {
                 debug_println!("t2 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
     });
 }
 #[test]
@@ -580,6 +601,8 @@ fn simple_threading2d() {
         {
             let mut shift = ArcShift::new(owner.create("orig"));
             let shiftlight = ArcShift::downgrade(&shift);
+            // SAFETY:
+            // No threading involved
             unsafe { ArcShift::debug_validate(&[&shift], &[&shiftlight]) };
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
@@ -600,8 +623,8 @@ fn simple_threading2d() {
                     debug_println!("t2 dropping");
                 })
                 .unwrap();
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
+            t1.join().unwrap();
+            t2.join().unwrap();
         }
         owner.validate();
     });
@@ -627,8 +650,8 @@ fn simple_threading_rcu() {
                 shift2.rcu(|prev| *prev + 1);
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
         assert_eq!(*shift3.get(), 44);
     });
 }
@@ -654,8 +677,8 @@ fn simple_threading2b() {
                 debug_println!("t2 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
     });
 }
 #[test]
@@ -680,8 +703,8 @@ fn simple_threading2c() {
                 debug_println!("=== t2 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
     });
 }
 
@@ -720,9 +743,9 @@ fn simple_threading3a() {
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
     });
 }
 #[test]
@@ -762,9 +785,9 @@ fn simple_threading3b() {
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
     });
 }
 #[test]
@@ -779,7 +802,7 @@ fn simple_threading3c() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                std::hint::black_box(shift1.lock().unwrap().update(43));
+                shift1.lock().unwrap().update(43);
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -789,7 +812,7 @@ fn simple_threading3c() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                std::hint::black_box(shift2.lock().unwrap().update(44));
+                shift2.lock().unwrap().update(44);
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -799,13 +822,13 @@ fn simple_threading3c() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.update(45));
+                shift3.update(45);
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
     });
 }
 
@@ -821,7 +844,7 @@ fn simple_threading3d() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t1 =");
-                std::hint::black_box(shift1.lock().unwrap().reload());
+                shift1.lock().unwrap().reload();
                 debug_println!(" = drop t1 =");
             })
             .unwrap();
@@ -831,7 +854,7 @@ fn simple_threading3d() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t2 =");
-                std::hint::black_box(shift2.lock().unwrap().update(44));
+                shift2.lock().unwrap().update(44);
                 debug_println!(" = drop t2 =");
             })
             .unwrap();
@@ -841,13 +864,13 @@ fn simple_threading3d() {
             .stack_size(1_000_000)
             .spawn(move || {
                 debug_println!(" = On thread t3 =");
-                std::hint::black_box(shift3.lock().unwrap().update(45));
+                shift3.lock().unwrap().update(45);
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
     });
 }
 
@@ -880,8 +903,8 @@ fn simple_threading2_rcu() {
             })
             .unwrap();
 
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
         assert_eq!(*shift0.get(), 4);
     });
 }
@@ -927,9 +950,9 @@ fn simple_threading3_rcu() {
                 debug_println!(" = drop t3 =");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
         assert_eq!(*shift0.get(), 6);
     });
 }
@@ -983,9 +1006,9 @@ fn simple_threading4a() {
             })
             .unwrap();
 
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
         let ret = t4.join().unwrap();
         assert!(ret == 42 || ret == 43 || ret == 44);
     });
@@ -1030,7 +1053,7 @@ fn simple_threading4b() {
                 temp.update(44);
                 let t = std::hint::black_box(temp.get());
                 debug_println!(" = drop t3 =");
-                return *t;
+                *t
             })
             .unwrap();
         let t4 = atomic::thread::Builder::new()
@@ -1044,12 +1067,12 @@ fn simple_threading4b() {
             })
             .unwrap();
 
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
         let ret3 = t3.join().unwrap();
         assert!(ret3 == 44 || ret3 == 43);
         let ret = t4.join().unwrap();
-        assert!(ret == None || ret == Some(43) || ret == Some(44) || ret == Some(42));
+        assert!(ret.is_none() || ret == Some(43) || ret == Some(44) || ret == Some(42));
     });
 }
 #[cfg(not(feature = "disable_slow_tests"))]
@@ -1068,7 +1091,7 @@ fn simple_threading4c() {
             let count2 = count.clone();
             let t1 = atomic::thread::Builder::new()
                 .name("t1".to_string())
-                .stack_size(1_000_00)
+                .stack_size(100_000)
                 .spawn(move || {
                     debug_println!(" = On thread t1 = {:?}", std::thread::current().id());
                     shift1.lock().unwrap().update(count1.create("t1val"));
@@ -1078,7 +1101,7 @@ fn simple_threading4c() {
 
             let t2 = atomic::thread::Builder::new()
                 .name("t2a".to_string())
-                .stack_size(1_000_00)
+                .stack_size(100_000)
                 .spawn(move || {
                     debug_println!(" = On thread t2 = {:?}", std::thread::current().id());
                     let mut _shift = shift2; //.clone()
@@ -1089,7 +1112,7 @@ fn simple_threading4c() {
 
             let t3 = atomic::thread::Builder::new()
                 .name("t3".to_string())
-                .stack_size(1_000_00)
+                .stack_size(100_000)
                 .spawn(move || {
                     debug_println!(" = On thread t3 = {:?}", std::thread::current().id());
                     shift3.lock().unwrap().update(count2.create("t3val"));
@@ -1099,7 +1122,7 @@ fn simple_threading4c() {
                 .unwrap();
             let t4 = atomic::thread::Builder::new()
                 .name("t4".to_string())
-                .stack_size(1_000_00)
+                .stack_size(100_000)
                 .spawn(move || {
                     debug_println!(" = On thread t4 = {:?}", std::thread::current().id());
                     let shift4 = &*shift4;
@@ -1109,10 +1132,10 @@ fn simple_threading4c() {
                 })
                 .unwrap();
 
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-            _ = t3.join().unwrap();
-            _ = t4.join().unwrap();
+            t1.join().unwrap();
+            t2.join().unwrap();
+            t3.join().unwrap();
+            t4.join().unwrap();
         }
         debug_println!("All threads stopped");
         count.validate();
@@ -1174,10 +1197,10 @@ fn simple_threading4d() {
                 })
                 .unwrap();
 
-            _ = t1.join().unwrap();
-            _ = t2.join().unwrap();
-            _ = t3.join().unwrap();
-            _ = t4.join().unwrap();
+            t1.join().unwrap();
+            t2.join().unwrap();
+            t3.join().unwrap();
+            t4.join().unwrap();
             debug_println!("JOined all threads");
             atomic::loom_fence();
         }
@@ -1235,10 +1258,10 @@ fn simple_threading4e() {
             })
             .unwrap();
 
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
-        _ = t4.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+        t4.join().unwrap();
     });
 }
 
@@ -1249,6 +1272,8 @@ fn simple_test_clones2() {
     let shift1 = ArcShift::downgrade(&shift);
     let shift2 = shift.clone();
     let shift3 = shift.clone();
+    // SAFETY:
+    // No threading involved
     unsafe { ArcShift::debug_validate(&[&shift, &shift2, &shift3], &[&shift1]) };
 }
 #[test]
@@ -1274,8 +1299,8 @@ fn simple_threading_update_in_one() {
                 debug_println!("t2 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
     });
 }
 #[test]
@@ -1285,6 +1310,8 @@ fn simple_threading_repro1() {
         let root = ArcShift::new(42u32);
         let mut curval = root.clone();
         let light = ArcShift::downgrade(&curval);
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&root, &curval], &[&light]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -1303,9 +1330,11 @@ fn simple_threading_repro1() {
                 debug_println!("t2 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
 
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&root], &[]) };
     });
 }
@@ -1317,6 +1346,8 @@ fn simple_threading_repro3() {
         let arc1 = ArcShift::downgrade(&root);
         let arc2 = ArcShift::downgrade(&root);
         drop(root);
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[], &[&arc1, &arc2]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -1335,8 +1366,8 @@ fn simple_threading_repro3() {
                 debug_println!("t2 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
     });
 }
 
@@ -1351,8 +1382,10 @@ fn simple_threading_repro2() {
         debug_println!("----> curval.dropping");
         drop(curval);
 
-        println!("----> light.upgrade");
+        std::println!("----> light.upgrade");
         light.upgrade();
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&root], &[&light]) };
         drop(light);
 }
@@ -1364,6 +1397,8 @@ fn simple_threading_update_twice() {
         let mut shift = ArcShift::new(42u32);
         let mut shift1 = shift.clone();
         let mut shift2 = shift.clone();
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2], &[]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -1382,8 +1417,10 @@ fn simple_threading_update_twice() {
                 debug_println!("--> t2 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift2], &[]) };
         debug_println!("--> Main dropping");
         assert!(*shift2.get() > 42);
@@ -1397,6 +1434,8 @@ fn simple_threading_update_thrice() {
         let mut shift1 = shift.clone();
         let mut shift2 = shift.clone();
         let mut shift3 = shift.clone();
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2, &shift3], &[]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
@@ -1424,9 +1463,11 @@ fn simple_threading_update_thrice() {
                 debug_println!("--> t3 dropping");
             })
             .unwrap();
-        _ = t1.join().unwrap();
-        _ = t2.join().unwrap();
-        _ = t3.join().unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+        // SAFETY:
+        // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift3], &[]) };
         debug_println!("--> Main dropping");
         assert!(*shift3.get() > 42);

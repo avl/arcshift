@@ -1,3 +1,4 @@
+#![no_std]
 #![cfg_attr(feature = "nightly", feature(ptr_metadata))]
 #![deny(warnings)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
@@ -6,8 +7,12 @@
 //! # Introduction to ArcShift
 //!
 //! [`ArcShift`] is a data type similar to [`std::sync::Arc`], except that it allows updating
-//! the value pointed to. The memory overhead is larger than that of Arc (5 words instead of
-//! 2). ArcShift is mainly intended for cases where updates are very infrequent.
+//! the value pointed to. It can be used as a replacement for [`std::sync::Arc<std::sync::Mutex<T>>`], but with
+//! significantly smaller overhead for reads.
+//!
+//! Writing to ArcShift is significantly more expensive than for [`std::sync::RwLock`], so
+//! ArcShift is most suited to use cases where updates are infrequent.
+//!
 //! See the 'Limitations'-heading further down before using!
 //!
 //! ## Example
@@ -31,7 +36,7 @@
 //!
 //! let j2 = thread::spawn(move||{
 //!     // Prints either 'Hello' or 'New value', depending on scheduling:
-//!     println!("Value in thread 2: '{}'", *arc2);
+//!     println!("Value in thread 2: '{}'", arc2.get());
 //! });
 //!
 //! j1.join().unwrap();
@@ -39,8 +44,10 @@
 //! # }
 //! ```
 //!
+//! # Implementation
+//!
 //! When ArcShift values are updated, a linked list of all updates is formed. Whenever
-//! an arcshift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
+//! an ArcShift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
 //! that instance advances along the linked list to the last
 //! node in the list. When no instance exists pointing at a node in the list, it is dropped.
 //! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to avoid retaining unneeded values.
@@ -50,11 +57,13 @@
 //! * All functions are lock free (see <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
 //! * For use cases where no modification of values occurs, performance is very good (much
 //!   better than RwLock or Mutex).
-//! * Modifying values is reasonably fast (think, 50 nanoseconds), but much slower than Mutex or
+//! * Modifying values is reasonably fast (think, 50-150 nanoseconds), but much slower than Mutex or
 //!   RwLock.
 //! * The function [`ArcShift::shared_get`] allows access without any overhead
 //!   at compared to regular Arc (benchmarks show identical performance to Arc).
 //! * ArcShift does not rely on thread-local variables.
+//! * ArcShift is no_std compatible (though 'alloc' is required, since ArcShift is a heap
+//!   allocating data structure).
 //!
 //! # Limitations
 //!
@@ -65,23 +74,16 @@
 //!   is accessed using a unique (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
 //!   This can be partially mitigated by using the [`ArcShiftWeak`]-type for long-lived
 //!   never-reloaded instances.
-//! * Modifying the value is approximately 10x-20x more expensive than modifying an `Arc<Mutex<T>>`.
+//! * Modifying the value is approximately 15x-30x more expensive than modifying an `Arc<Mutex<T>>`.
 //!   That said, if you're storing anything significantly more complex than an integer, the overhead
 //!   of ArcShift may be insignificant.
 //! * When the value is modified, the next subsequent reload is slower than an `Arc<RwLock<T>>`
 //!   access.
 //! * ArcShift is its own datatype. It is in no way compatible with `Arc<T>`.
 //! * At most usize::MAX/8 instances of ArcShift or ArcShiftWeak can be created for each value.
-//!   (this is because uses some bits of its weak refcount to store metadata).
+//!   (this is because it uses some bits of its weak refcount to store metadata).
 //! * ArcShift instances should ideally be owned (or be mutably accessible). This is because
 //!   reloading ArcShift requires mutable access to the ArcShift object itself.
-//! * Since ArcShift uses Relaxed atomics to check for updated values, there isn't a guarantee
-//!   that values become available immediately after an update. I.e, it can be possible for a
-//!   program to observe that 'reload' X happened after 'update' Y, with 'reload' X still
-//!   not seeing the updated value. For the purposes of ArcShift was made for, this is
-//!   usually totally acceptable, but is good to be aware of. Note: This does not mean that
-//!   updates take a long time to propagate. In practice, an updated value will be
-//!   available quickly.
 //!
 //! The last limitation might seem unacceptable, but for many applications it is not
 //! hard to make sure each thread/scope has its own instance of ArcShift pointing to
@@ -93,7 +95,7 @@
 //! modifying the stored value, with very little overhead over regular Arc for read heavy
 //! loads.
 //!
-//! The motivating use-case for ArcShift is reloadable assets in computer games.
+//! The motivating use-case for ArcShift is hot-reloadable assets in computer games.
 //! During normal usage, assets do not change. All benchmarks and play experience will
 //! be dependent only on this baseline performance. Ideally, we therefore want to have
 //! a very small performance penalty for the case when assets are *not* updated, comparable
@@ -114,19 +116,19 @@
 //! on arm it is not an expensive operation.
 //! The cost of such access is much smaller than a mutex access, even an uncontended one.
 //! In the case where a reload is actually necessary, there is a significant performance impact
-//! (but still typically below 100ns).
+//! (but still typically below 150ns for modern machines (2025)).
 //!
 //!
 //! # Implementation
 //!
 //! The basic idea of ArcShift is that each ArcShift instance points to a small heap block,
-//! that contains the pointee value of type T, two reference counts, and 'prev'/'next'-pointers.
+//! that contains the pointee value of type T, three reference counts, and 'prev'/'next'-pointers.
 //! The 'next'-pointer starts out as null, but when the value in an ArcShift is updated, the
 //! 'next'-pointer is set to point to the updated value.
 //!
 //! This means that each ArcShift-instance always points at valid value of type T. No locking
 //! or synchronization is required to get at this value. This is why ArcShift instances are fast
-//! to use. But it has the drawback that as long as an ArcShift-instance exists, whatever value
+//! to use. There is the drawback that as long as an ArcShift-instance exists, whatever value
 //! it points to must be kept alive. Each time an ArcShift instance is accessed mutably, we have
 //! an opportunity to update its pointer to the 'next' value. The operation to update the pointer
 //! is called a 'reload'.
@@ -145,11 +147,12 @@
 //! Be aware that ArcShift instances that are just "lying around" without ever being reloaded,
 //! will keep old values around, taking up memory. This is a fundamental drawback of the approach
 //! taken by ArcShift. One workaround is to replace any long-lived infrequently reloaded instances of
-//! [`ArcShift`] with [`ArcShiftWeak`]. This alleviates the problem.
+//! [`ArcShift`] with [`ArcShiftWeak`]. This alleviates the problem, though heap storage of approx
+//! `size_of<T>` + 5 words is still expended.
 //!
 //! # Pitfall #2 - reference count limitations
 //!
-//! ArcShift uses usize data type for the reference counts. However, it reserves two bits for
+//! ArcShift uses usize data type for the reference counts. However, it reserves three bits for
 //! tracking some metadata. This leaves usize::MAX/4 as the maximum usable reference count. To
 //! avoid having to check the refcount twice (once before increasing the count), we set the limit
 //! at usize::MAX/8, and check the count after the atomic operation. This has the effect that if more
@@ -225,6 +228,14 @@
 //! ```
 //!
 
+#[cfg(any(test,feature = "std"))]
+extern crate std;
+
+extern crate alloc;
+
+use alloc::boxed::Box;
+
+
 //TODO: try and extract patterns into helper-methods.
 
 /*
@@ -265,19 +276,17 @@ About the tools:
 
 */
 
-use std::alloc::Layout;
+use core::alloc::Layout;
 
 #[allow(unused)]
-use std::backtrace::Backtrace;
-use std::cell::UnsafeCell;
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use std::mem::{transmute, ManuallyDrop};
-use std::ops::Deref;
-use std::panic::UnwindSafe;
-use std::ptr::{addr_of_mut, null, null_mut, NonNull};
-use std::sync::atomic::Ordering;
+use core::cell::UnsafeCell;
+use core::fmt::{Debug, Formatter};
+use core::marker::PhantomData;
+use core::mem::{transmute, ManuallyDrop};
+use core::ops::Deref;
+use core::panic::UnwindSafe;
+use core::ptr::{addr_of_mut, null, null_mut, NonNull};
+use core::sync::atomic::Ordering;
 
 use crate::atomic::loom_fence;
 use crate::deferred::{DropHandler, IDropHandler, StealingDropHandler};
@@ -298,23 +307,26 @@ use crate::deferred::{DropHandler, IDropHandler, StealingDropHandler};
 /// Declarations of atomic ops for using Arcshift in production
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 mod atomic {
-    pub use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+    pub use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     #[cfg(test)]
     pub use std::sync::{Arc,Mutex};
-    #[allow(unused)]
+    #[cfg(test)]
     pub use std::thread;
     #[inline(always)]
     pub(crate) fn loom_fence() {}
 }
 
+
 mod deferred {
     use crate::{debug_println, get_holder_layout, IMetadata, ItemHolder, SizedMetadata};
-    use std::any::Any;
-    use std::mem::ManuallyDrop;
-    use std::panic::{resume_unwind, AssertUnwindSafe};
-    use std::ptr::addr_of_mut;
+    #[cfg(feature = "std")]
+    use core::any::Any;
+    use core::mem::ManuallyDrop;
+    #[cfg(feature="std")]
+    use std::panic::{AssertUnwindSafe,resume_unwind};
+    use core::ptr::addr_of_mut;
     #[allow(unused)]
-    use std::sync::atomic::Ordering;
+    use core::sync::atomic::Ordering;
 
     pub(crate) trait IDropHandler<T: ?Sized, M: IMetadata> {
         fn do_drop(&mut self, ptr: *mut ItemHolder<T, M>);
@@ -324,7 +336,8 @@ mod deferred {
 
     #[derive(Default)]
     pub(crate) struct DropHandler {
-        panic: Option<Box<dyn Any + Send + 'static>>,
+        #[cfg(feature = "std")]
+        panic: Option<alloc::boxed::Box<dyn Any + Send + 'static>>,
     }
 
     pub(crate) struct StealingDropHandler<T> {
@@ -402,7 +415,7 @@ mod deferred {
 
             // SAFETY:
             // item_ptr is still a valid, exclusively owned pointer
-            unsafe { std::alloc::dealloc(item_ptr as *mut _, layout) }
+            unsafe { alloc::alloc::dealloc(item_ptr as *mut _, layout) }
         }
 
         fn report_sole_user(&mut self) {}
@@ -424,20 +437,28 @@ mod deferred {
             //
             // This is deemed acceptable. Alternatives would be :
             //
-            // * Require that all payload objects implmenet UnwindSafe. Clearly annoying.
+            // * Require that all payload objects implement UnwindSafe. Clearly annoying.
             // * Don't run subsequent drop-methods if the first panicked. Since leaking is safe,
             //   this is perhaps technically more idiomatic than the chosen solution. However,
             //   Drop-impls should rarely need to update foreign objects, and also, drop-methods
             //   really shouldn't panic at all.
 
-            match std::panic::catch_unwind(AssertUnwindSafe(job)) {
-                Ok(()) => {}
-                Err(err) => {
-                    self.panic.get_or_insert(err);
+            #[cfg(feature="std")]
+            {
+                match std::panic::catch_unwind(AssertUnwindSafe(job)) {
+                    Ok(()) => {}
+                    Err(err) => {
+                        self.panic.get_or_insert(err);
+                    }
                 }
+            }
+            #[cfg(not(feature="std"))]
+            {
+                job();
             }
         }
         pub(crate) fn execute(self) {
+            #[cfg(feature = "std")]
             if let Some(panic) = self.panic {
                 resume_unwind(panic);
             }
@@ -525,15 +546,16 @@ impl<T: ?Sized> Debug for ArcShift<T>
 where
     T: Debug,
 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "ArcShift({:?})", self.shared_get())
     }
 }
+
 impl<T: ?Sized> Debug for ArcShiftWeak<T>
 where
     T: Debug,
 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "ArcShiftWeak(..)")
     }
 }
@@ -602,8 +624,8 @@ impl<T: ?Sized> Clone for UnsizedMetadata<T> {
     }
 }
 impl<T: ?Sized> Copy for UnsizedMetadata<T> {}
-impl<T: ?Sized> std::fmt::Debug for UnsizedMetadata<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl<T: ?Sized> core::fmt::Debug for UnsizedMetadata<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "Metadata({:?})", self.meta)
     }
 }
@@ -625,7 +647,7 @@ fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
     // It is sound as long as the actual internal representation of fat pointers doesn't change.
     #[cfg(not(feature = "nightly"))]
     unsafe {
-        std::mem::transmute_copy(&FatPtr {
+        core::mem::transmute_copy(&FatPtr {
             ptr: data_ptr,
             meta: metadata,
         })
@@ -752,11 +774,12 @@ fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
 }
 
 #[allow(unused)]
-fn format_weak(weak: usize) -> String {
+#[cfg(test)]
+fn format_weak(weak: usize) -> std::string::String {
     let count = weak & ((1 << (usize::BITS - 2)) - 1);
     let have_next = (weak & WEAK_HAVE_NEXT) != 0;
     let have_prev = (weak & WEAK_HAVE_PREV) != 0;
-    format!("(weak: {} prev: {} next: {})", count, have_prev, have_next)
+    std::format!("(weak: {} prev: {} next: {})", count, have_prev, have_next)
 }
 
 #[allow(unused)]
@@ -787,7 +810,7 @@ fn make_unsized_holder_from_box<T: ?Sized>(
             // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
             // The returned memory is uninitialized, but we will initialize the required parts of it
             // below.
-            unsafe { arc_from_raw_parts_mut(std::alloc::alloc(layout) as *mut _, metadata) };
+            unsafe { arc_from_raw_parts_mut(alloc::alloc::alloc(layout) as *mut _, metadata) };
         debug_println!("Sized result ptr: {:?}", item_holder_ptr);
         // SAFETY:
         // result_ptr is a valid pointer
@@ -899,7 +922,7 @@ fn make_sized_holder_from_box<T: ?Sized>(
     // the exact same thing as a thin pointer (is my guess).
     // Using transmute_copy to trim off the metadata is sound.
     let item_holder_ptr: *mut ItemHolder<T, SizedMetadata> =
-        unsafe { std::mem::transmute_copy(&std::alloc::alloc(layout)) };
+        unsafe { core::mem::transmute_copy(&alloc::alloc::alloc(layout)) };
 
     // SAFETY:
     // The copy is safe because MaybeUninit<ItemHolder<T>> is guaranteed to have the same
@@ -971,7 +994,7 @@ fn get_full_ptr_raw<T: ?Sized, M: IMetadata>(
         // SAFETY:
         // '*const ItemHolder<T, M>' is not _actually_ a fat pointer (it is just pointer sized),
         // so transmuting from dummy to it is correct.
-        unsafe { std::mem::transmute_copy(&dummy) }
+        unsafe { core::mem::transmute_copy(&dummy) }
     } else {
         assert_eq!(size_of::<M>(), size_of::<usize>()); //<- Verify that *const ItemHolder<T> is a fat ptr
 
@@ -1064,7 +1087,7 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
 
 impl<T: ?Sized, M: IMetadata> PartialEq for ItemHolder<T, M> {
     fn eq(&self, other: &ItemHolder<T, M>) -> bool {
-        std::ptr::addr_eq(self as *const _, other as *const _)
+        core::ptr::addr_eq(self as *const _, other as *const _)
     }
 }
 
@@ -1103,8 +1126,9 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
 
     /// Includes self
     #[allow(unused)]
-    fn debug_all_to_left<'a>(&self) -> Vec<&'a ItemHolder<T, M>> {
-        let mut ret = vec![];
+    #[cfg(test)]
+    fn debug_all_to_left<'a>(&self) -> std::vec::Vec<&'a ItemHolder<T, M>> {
+        let mut ret = std::vec![];
         let mut item_ptr = self as *const ItemHolder<T, M>;
         // Lock-free because this loop is run in debug harness, and doesn't do any synchronization
         loop {
@@ -1280,31 +1304,23 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
             let magic1 = atomic_magic1.load(Ordering::SeqCst);
             let magic2 = atomic_magic2.load(Ordering::SeqCst);
             if magic1 >> 16 != 0xbeefbeefbeef {
-                eprintln!(
-                    "Internal error - bad magic1 in {:?}: {} ({:x})",
-                    ptr, magic1, magic1
-                );
                 debug_println!(
                     "Internal error - bad magic1 in {:?}: {} ({:x})",
                     ptr,
                     magic1,
                     magic1
                 );
-                debug_println!("Backtrace: {}", Backtrace::capture());
+                debug_println!("Backtrace: {}", std::backtrace::Backtrace::capture());
                 std::process::abort();
             }
             if magic2 >> 16 != 0x123412341234 {
-                eprintln!(
-                    "Internal error - bad magic2 in {:?}: {} ({:x})",
-                    ptr, magic2, magic2
-                );
                 debug_println!(
                     "Internal error - bad magic2 in {:?}: {} ({:x})",
                     ptr,
                     magic2,
                     magic2
                 );
-                debug_println!("Backtrace: {}", Backtrace::capture());
+                debug_println!("Backtrace: {}", std::backtrace::Backtrace::capture());
                 std::process::abort();
             }
             #[cfg(not(any(loom, feature = "shuttle")))]
@@ -1320,10 +1336,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
             {
                 let diff = (magic1 & 0xffff) as isize - (magic2 & 0xffff) as isize;
                 if diff != 0 {
-                    eprintln!(
-                        "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
-                        ptr, magic1, magic1, magic2, magic2
-                    );
                     debug_println!(
                         "Internal error - bad magics in {:?}: {} ({:x}) and {} ({:x})",
                         ptr,
@@ -1332,7 +1344,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                         magic2,
                         magic2
                     );
-                    //println!("Backtrace: {}", Backtrace::capture());
+                    debug_println!("Backtrace: {}", std::backtrace::Backtrace::capture());
                     panic!();
                 }
                 let magic = MAGIC.fetch_add(1, Ordering::SeqCst);
@@ -1425,23 +1437,23 @@ impl ItemStateEnum {
     fn dropped(self) -> ItemStateEnum {
         // SAFETY:
         // All 3-bit values are legal ItemStateEnum values, so oring on 4 is ok
-        unsafe { std::mem::transmute::<u8, ItemStateEnum>(self as u8 | ITEM_STATE_DROPPED_FLAG) }
+        unsafe { core::mem::transmute::<u8, ItemStateEnum>(self as u8 | ITEM_STATE_DROPPED_FLAG) }
     }
     fn with_gc(self) -> ItemStateEnum {
         // SAFETY:
         // All 3-bit values are legal ItemStateEnum values, so oring on 1 is ok
-        unsafe { std::mem::transmute::<u8, ItemStateEnum>(self as u8 | ITEM_STATE_LOCKED_FLAG) }
+        unsafe { core::mem::transmute::<u8, ItemStateEnum>(self as u8 | ITEM_STATE_LOCKED_FLAG) }
     }
     fn with_disturbed(self) -> ItemStateEnum {
         // SAFETY:
         // All 3-bit values are legal ItemStateEnum values, so oring on 1 is ok
-        unsafe { std::mem::transmute::<u8, ItemStateEnum>(self as u8 | ITEM_STATE_DISTURBED_FLAG) }
+        unsafe { core::mem::transmute::<u8, ItemStateEnum>(self as u8 | ITEM_STATE_DISTURBED_FLAG) }
     }
     fn without_gc_and_disturbed(self) -> ItemStateEnum {
         // SAFETY:
         // All 3-bit values are legal ItemStateEnum values, so anding out 1 is ok
         unsafe {
-            std::mem::transmute::<u8, ItemStateEnum>(
+            core::mem::transmute::<u8, ItemStateEnum>(
                 self as u8 & (!ITEM_STATE_LOCKED_FLAG) & (!ITEM_STATE_DISTURBED_FLAG),
             )
         }
@@ -1471,7 +1483,7 @@ fn get_decoration<T: ?Sized>(ptr: *const ItemHolderDummy<T>) -> ItemStateEnum {
     // SAFETY:
     // All values `0..=7` are valid ItemStateEnum.
     // And the bitmask produces a value `0..=7`
-    unsafe { std::mem::transmute::<u8, ItemStateEnum>(raw) }
+    unsafe { core::mem::transmute::<u8, ItemStateEnum>(raw) }
 }
 
 /// Panic if the pointer is decorated
@@ -2080,6 +2092,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
 
 
     /// Stops search and returns true if 'f' returns true
+    /// Entire chain must be locked and contain valid pointers.
     fn for_any_in_chain<T:?Sized, M:IMetadata>(start: *const ItemHolderDummy<T>, mut f: impl FnMut(&ItemHolder<T,M>) -> bool) -> bool {
         let mut cur_ptr = start;
         loop {
@@ -2087,6 +2100,9 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             if cur_ptr.is_null(){
                 break;
             }
+            // SAFETY:
+            // the start pointer must be a valid pointer, and then we follow prev-links.
+            // The caller must ensure the entire chain is locked
             let cur: &ItemHolder<T, M> = unsafe { &*from_dummy::<T,M>(cur_ptr) };
             if f(cur) {
                 return true;
@@ -2102,11 +2118,15 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
     {
         let mut any_failed_locks = false;
         let cur_lock_start = cur_ptr;
-        let mut cur_ptr = cur_lock_start;
+        let mut cur_ptr = cur_ptr;
         debug_println!("Lock sweep start at {:x?}", cur_lock_start);
         let mut failed_lock = null();
         loop {
 
+            // SAFETY: cur_ptr is a valid pointer It starts out equal to
+            // 'start.prev', which is always valid or null, and we check it for null.
+            // We then fetch 'cur.prev' pointers, which is valid, since we only do so if
+            // we managed to take a lock. No other thread may free prev if it is locked.
             let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
             if !cur.lock_node_for_gc() {
                 failed_lock = cur_ptr;
@@ -2147,6 +2167,9 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                     debug_println!("Cleanup sweep is at end {:x?}", cur_ptr);
                     break;
                 }
+                // SAFETY:
+                // cur_ptr is a valid pointer. It's just the left traverse, across
+                // a chain of locked nodes.
                 let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
 
                 let prev_ptr: *const _ = cur.prev.load(Ordering::SeqCst);
@@ -2163,6 +2186,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
     }
 
     //TODO: Can we break the iterating machinery into a helper method?
+
     // Lock free, since this just iterates through the chain of nodes,
     // which has a bounded length.
     loop {
@@ -2216,7 +2240,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         let prior_prev_next = prev.next.load(Ordering::SeqCst);
         // Check if chain contains the previous next-value. If it didn't changing next will
         // move next _back_.
-        if for_any_in_chain::<T,M>(start_ptr, |x|to_dummy(x) == undecorate(prior_prev_next)) { //TODO: IS this optimization even worth?
+        if for_any_in_chain::<T,M>(start_ptr, |x|to_dummy(x) == undecorate(prior_prev_next)) { //TODO: IS this optimization even worth? (Does it impact correctness?)
             prev.set_next(start_ptr);
         } else {
             debug_println!("for {:x?}, {:x?} did not exist in chain", prev_ptr, prior_prev_next);
@@ -2532,8 +2556,11 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         );
         if get_weak_count(prior_weak) == 1 {
             if get_weak_next(prior_weak) {
-                println!("This case should not be possible, since it implies the 'next' object didn't increase the refcount");
-                std::process::abort();
+                #[cfg(test)]
+                {
+                    std::println!("This case should not be possible, since it implies the 'next' object didn't increase the refcount");
+                    std::process::abort();
+                }
             }
             // We know there's no next here either, since we checked 'get_weak_next' before the cmpxch, so we _KNOW_ we're the only user now.
             if !get_weak_prev(prior_weak) {
@@ -2640,13 +2667,12 @@ fn do_update<T: ?Sized, M: IMetadata>(
             }
         }
 
-        let _prev_weak = format_weak(item.weak_count.load(Ordering::SeqCst));
+        //let _prev_weak = format_weak(item.weak_count.load(Ordering::SeqCst));
         let strong_count = item.strong_count.fetch_sub(1, Ordering::SeqCst);
         debug_println!(
-            "do_update: strong count {:x?} is now decremented to {} (weak = {})",
+            "do_update: strong count {:x?} is now decremented to {}",
             item_ptr,
             strong_count - 1,
-            _prev_weak
         );
         if strong_count == 1 {
             // It's safe to drop payload here, we've just now added a new item
@@ -2875,7 +2901,7 @@ impl<T> ArcShift<T> {
             from_dummy::<T, SizedMetadata>(self.item.as_ptr()),
             &mut drop_handler,
         );
-        std::mem::forget(self);
+        core::mem::forget(self);
         drop_handler.take_stolen()
     }
 
@@ -3187,7 +3213,7 @@ impl<T: ?Sized> ArcShift<T> {
             if unsafe { undecorate((*item_ptr).next.load(Ordering::Relaxed)).is_null() } {
                 // Nothing to upgrade to
                 // This is a fast-path optimization
-                return std::ptr::null();
+                return core::ptr::null();
             }
             let mut jobq = DropHandler::default();
 
@@ -3228,6 +3254,7 @@ impl<T: ?Sized> ArcShift<T> {
     /// This method requires that no other threads access the chain while it is running.
     /// It is up to the caller to actually ensure this.
     #[allow(unused)]
+    #[cfg(test)]
     pub(crate) unsafe fn debug_validate(
         strong_handles: &[&Self],
         weak_handles: &[&ArcShiftWeak<T>],
@@ -3242,6 +3269,7 @@ impl<T: ?Sized> ArcShift<T> {
         });
     }
     #[allow(unused)]
+    #[cfg(test)]
     fn debug_validate_impl<M: IMetadata>(
         strong_handles: &[&ArcShift<T>],
         weak_handles: &[&ArcShiftWeak<T>],
@@ -3267,8 +3295,8 @@ impl<T: ?Sized> ArcShift<T> {
             last = from_dummy::<T, M>(next);
         }
 
-        let mut true_weak_refs = HashMap::<*const ItemHolderDummy<T>, usize>::new();
-        let mut true_strong_refs = HashMap::<*const ItemHolderDummy<T>, usize>::new();
+        let mut true_weak_refs = std::collections::HashMap::<*const ItemHolderDummy<T>, usize>::new();
+        let mut true_strong_refs = std::collections::HashMap::<*const ItemHolderDummy<T>, usize>::new();
         // SAFETY:
         // the loop above has yielded a valid last ptr
         let all_nodes = unsafe { (*last).debug_all_to_left() };
@@ -3371,11 +3399,15 @@ impl<T: ?Sized> ArcShift<T> {
 mod simple_tests {
     use crate::ArcShift;
     use std::thread;
+    use alloc::boxed::Box;
+    use std::string::ToString;
 
     #[test]
     fn simple_create() {
         let x = ArcShift::new(Box::new(45u32));
         assert_eq!(**x, 45);
+        // SAFETY:
+        // No threading involved, &x is valid.
         unsafe { ArcShift::debug_validate(&[&x], &[]) };
     }
     #[test]
@@ -3384,6 +3416,8 @@ mod simple_tests {
         assert_eq!(**x, 45);
         x.update(Box::new(1u32));
         assert_eq!(**x, 1);
+        // SAFETY:
+        // No threading involved, &x is valid.
         unsafe { ArcShift::debug_validate(&[&x], &[]) };
     }
     #[test]
@@ -3394,6 +3428,8 @@ mod simple_tests {
         assert_eq!(**x, 1);
         x.update(Box::new(21));
         assert_eq!(**x, 21);
+        // SAFETY:
+        // No threading involved, &x is valid.
         unsafe { ArcShift::debug_validate(&[&x], &[]) };
     }
     #[test]
@@ -3402,6 +3438,8 @@ mod simple_tests {
         let y = x.clone();
         assert_eq!(**x, 45);
         assert_eq!(**y, 45);
+        // SAFETY:
+        // No threading involved, &x and &y are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
     }
     #[test]
@@ -3410,6 +3448,8 @@ mod simple_tests {
         let y = x.clone();
         assert_eq!(**x, 45);
         assert_eq!(**y, 45);
+        // SAFETY:
+        // No threading involved, &x and &y are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
         drop(x);
         drop(y);
@@ -3462,6 +3502,8 @@ mod simple_tests {
         assert_eq!(left.strong_count(), 1);
         assert_eq!(left.weak_count(), 2); //'left' and ref from right
         debug_println!("Dropping 'left'");
+        // SAFETY:
+        // No threading involved, &left and &right are valid.
         unsafe { ArcShift::debug_validate(&[&left, &right], &[]) };
         drop(left);
         assert_eq!(right.strong_count(), 1);
@@ -3485,6 +3527,8 @@ mod simple_tests {
         assert_eq!(**x, 2);
         assert_eq!(**y, 1);
 
+        // SAFETY:
+        // No threading involved, &x and &y are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
         debug_println!("Dropping x");
         drop(x);
@@ -3501,9 +3545,13 @@ mod simple_tests {
         assert_eq!(**x, 1);
         x.update(Box::new(21));
         assert_eq!(**x, 21);
+        // SAFETY:
+        // No threading involved, &x and &y are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
         y.reload();
         assert_eq!(**y, 21);
+        // SAFETY:
+        // No threading involved, &x and &y are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
     }
 
@@ -3511,22 +3559,32 @@ mod simple_tests {
     fn simple_create_clone_twice_and_update_twice() {
         let mut x = ArcShift::new(Box::new(45u32));
         let mut y = x.clone();
+        // SAFETY:
+        // No threading involved, &x and &y are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
         assert_eq!(**x, 45);
         x.update(Box::new(1u32));
+        // SAFETY:
+        // No threading involved, &x and &y are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
         let z = x.clone();
         assert_eq!(**x, 1);
         x.update(Box::new(21));
+        // SAFETY:
+        // No threading involved, &x, &y and &z are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };
         assert_eq!(**x, 21);
         y.reload();
         assert_eq!(**y, 21);
+        // SAFETY:
+        // No threading involved, &x, &y and &z are valid.
         unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };
     }
 
     #[test]
     fn simple_threaded() {
+
+
         let mut arc = ArcShift::new("Hello".to_string());
         let arc2 = arc.clone();
 
@@ -3558,18 +3616,26 @@ mod simple_tests {
         let shift = ArcShift::new(crate::tests::leak_detection::InstanceSpy::new(
             count.clone(),
         ));
+        // SAFETY:
+        // No threading involved, &shift is valid.
         unsafe { ArcShift::debug_validate(&[&shift], &[]) };
         let shiftlight = ArcShift::downgrade(&shift);
+        // SAFETY:
+        // No threading involved, &shift and &shiftlight is valid.
         unsafe { ArcShift::debug_validate(&[&shift], &[&shiftlight]) };
 
         debug_println!("==== running shift.get() = ");
         let mut shift2 = shiftlight.upgrade().unwrap();
         debug_println!("==== running arc.update() = ");
+        // SAFETY:
+        // No threading involved, &shift, 2shift2 and &shiftlight are valid.
         unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shiftlight]) };
         shift2.update(crate::tests::leak_detection::InstanceSpy::new(
             count.clone(),
         ));
 
+        // SAFETY:
+        // No threading involved, &shift, &shift2 and &shiftlight are valid.
         unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shiftlight]) };
     }
 }

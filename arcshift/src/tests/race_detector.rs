@@ -3,6 +3,10 @@
 use crate::tests::leak_detection::SpyOwner2;
 use crate::tests::{model, model2, InstanceSpy2};
 use crate::{atomic, ArcShift, ArcShiftWeak};
+use std::vec;
+use std::println;
+use std::vec::Vec;
+use std::string::ToString;
 
 fn generic_3thread_ops_a<
     F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
@@ -43,7 +47,7 @@ fn generic_3thread_ops_a<
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t1 =");
-                    f1(&*owner_ref1, shift1, "t1")
+                    f1(&owner_ref1, shift1, "t1")
                 })
                 .unwrap();
 
@@ -52,7 +56,7 @@ fn generic_3thread_ops_a<
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t2 =");
-                    f2(&*owner_ref2, shift2, "t2")
+                    f2(&owner_ref2, shift2, "t2")
                 })
                 .unwrap();
 
@@ -61,7 +65,7 @@ fn generic_3thread_ops_a<
                 .stack_size(1_000_000)
                 .spawn(move || {
                     debug_println!(" = On thread t3 =");
-                    f3(&*owner_ref3, shift3, "t3")
+                    f3(&owner_ref3, shift3, "t3")
                 })
                 .unwrap();
             _ = t1.join().unwrap();
@@ -113,6 +117,8 @@ fn generic_3thread_ops_b<
                 let shift3 = shift.clone();
 
                 debug_println!("Prior to debug_validate");
+                // SAFETY:
+                // No threading involved
                 unsafe { ArcShift::debug_validate(&[&shift, &shift2, &shift3], &[&shift1]) };
                 debug_println!("Post debug_validate");
 
@@ -125,7 +131,7 @@ fn generic_3thread_ops_b<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t1 =");
-                        let t = f1(&*owner_ref1, shift1, "t1");
+                        let t = f1(&owner_ref1, shift1, "t1");
                         debug_println!(" = thread 1 dropping =");
                         t
                     })
@@ -136,7 +142,7 @@ fn generic_3thread_ops_b<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t2 =");
-                        let t = f2(&*owner_ref2, shift2, "t2");
+                        let t = f2(&owner_ref2, shift2, "t2");
 
                         debug_println!(" = thread 2 dropping =");
                         t
@@ -148,7 +154,7 @@ fn generic_3thread_ops_b<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t3 =");
-                        let t = f3(&*owner_ref3, shift3, "t3");
+                        let t = f3(&owner_ref3, shift3, "t3");
                         debug_println!(" = thread 3 dropping =");
                         t
                     })
@@ -157,6 +163,8 @@ fn generic_3thread_ops_b<
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
                 _ = t3.join().unwrap();
+                // SAFETY:
+                // No threading involved
                 unsafe { ArcShift::debug_validate(&[&shift], &[]) };
                 debug_println!("Joined all threads");
             }
@@ -198,6 +206,8 @@ fn generic_2thread_ops_b<
                 let shift2 = shift.clone();
 
                 debug_println!("Prior to debug_validate");
+                // SAFETY:
+                // No threading involved
                 unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shift1]) };
                 debug_println!("Post debug_validate");
 
@@ -209,7 +219,7 @@ fn generic_2thread_ops_b<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t1 =");
-                        let t = f1(&*owner_ref1, shift1, "t1");
+                        let t = f1(&owner_ref1, shift1, "t1");
                         debug_println!(" = thread 1 dropping =");
                         t
                     })
@@ -220,7 +230,7 @@ fn generic_2thread_ops_b<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t2 =");
-                        let t = f2(&*owner_ref2, shift2, "t2");
+                        let t = f2(&owner_ref2, shift2, "t2");
 
                         debug_println!(" = thread 2 dropping =");
                         t
@@ -230,6 +240,8 @@ fn generic_2thread_ops_b<
                 debug_println!("Begin joining threads");
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
+                // SAFETY:
+                // No threading involved
                 unsafe { ArcShift::debug_validate(&[&shift], &[]) };
                 debug_println!("Joined all threads");
             }
@@ -288,9 +300,13 @@ fn generic_3thread_ops_c<
                 shift.update(owner.create("orig3"));
                 let shift3 = ArcShift::downgrade(&shift);
                 debug_println!("Prior to debug_validate");
+                // SAFETY:
+                // No threading involved
                 unsafe { ArcShift::debug_validate(&[&shift], &[&shift1, &shift2, &shift3]) };
                 debug_println!("Post debug_validate");
                 drop(shift);
+                // SAFETY:
+                // No threading involved
                 unsafe { ArcShift::debug_validate(&[], &[&shift1, &shift2, &shift3]) };
 
                 let owner_ref1 = owner.clone();
@@ -302,7 +318,7 @@ fn generic_3thread_ops_c<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t1 =");
-                        let t = f1(&*owner_ref1, shift1, "t1");
+                        let t = f1(&owner_ref1, shift1, "t1");
                         debug_println!(" = thread 1 dropping =");
                         t
                     })
@@ -313,7 +329,7 @@ fn generic_3thread_ops_c<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t2 =");
-                        let t = f2(&*owner_ref2, shift2, "t2");
+                        let t = f2(&owner_ref2, shift2, "t2");
 
                         debug_println!(" = thread 2 dropping =");
                         t
@@ -325,7 +341,7 @@ fn generic_3thread_ops_c<
                     .stack_size(1_000_000)
                     .spawn(move || {
                         debug_println!(" = On thread t3 =");
-                        let t = f3(&*owner_ref3, shift3, "t3");
+                        let t = f3(&owner_ref3, shift3, "t3");
                         debug_println!(" = thread 3 dropping =");
                         t
                     })
@@ -362,6 +378,7 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
     } else {
         usize::MAX / 10
     };
+    #[allow(clippy::type_complexity)]
     let ops1: Vec<
         fn(
             &SpyOwner2,
@@ -391,6 +408,7 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
         },
         |_, _, _| None,
     ];
+    #[allow(clippy::type_complexity)]
     let ops23: Vec<
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
     > = vec![
@@ -446,6 +464,7 @@ fn generic_3threading_a_3() {
 
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_3threading_a_all_impl(skip: usize) {
+    #[allow(clippy::type_complexity)]
     let ops: Vec<
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
     > = vec![
