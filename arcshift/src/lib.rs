@@ -2194,8 +2194,8 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         assert_ne!(prev_ptr, start_ptr);
 
         prev.set_next(start_ptr);
-
         atomic::fence(Ordering::SeqCst);
+
         let adv_count = prev.advance_count.load(Ordering::SeqCst);
         debug_println!("advance_count of {:x?} is {}", prev_ptr, adv_count);
         if adv_count > 0 {
@@ -3345,7 +3345,7 @@ impl<T: ?Sized> ArcShift<T> {
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 #[cfg(test)]
 mod simple_tests {
-    use crate::ArcShift;
+    use crate::{ArcShift, SizedMetadata};
     use std::thread;
     use alloc::boxed::Box;
     use std::string::ToString;
@@ -3358,6 +3358,20 @@ mod simple_tests {
         // No threading involved, &x is valid.
         unsafe { ArcShift::debug_validate(&[&x], &[]) };
     }
+
+    #[test]
+    fn simple_janitor_test() {
+        let mut x = ArcShift::new(45u32);
+        x.update(46);
+        // SAFETY:
+        // No threading involved, item pointer of ArcShift is always valid
+        let item = unsafe { &*crate::from_dummy::<u32,SizedMetadata>(x.item.as_ptr()) };
+        let prev = item.prev.load(crate::atomic::Ordering::SeqCst);
+        assert_eq!(prev, core::ptr::null_mut());
+        assert_eq!(*x, 46);
+    }
+
+
     #[test]
     fn simple_create_and_update_once() {
         let mut x = ArcShift::new(Box::new(45u32));
