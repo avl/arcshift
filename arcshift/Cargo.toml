@@ -1,6 +1,6 @@
 [package]
 name = "arcshift"
-version = "0.1.11"
+version = "0.2.0"
 documentation = "https://docs.rs/arcshift/"
 homepage = "https://github.com/avl/arcshift/"
 repository = "https://github.com/avl/arcshift/"
@@ -29,7 +29,7 @@ debug = []
 disable_slow_tests = []
 
 # Enables use of some compiler features which are not yet available on stable.
-# Doesn't actually change the function, but is more forward compatible, and more guaranteed to work
+# Doesn't actually change the function, but is more forward compatible, and more likely to work
 # on future compilers.
 nightly = []
 
