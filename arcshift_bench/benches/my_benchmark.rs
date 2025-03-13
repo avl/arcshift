@@ -57,7 +57,7 @@ fn arcshift_update_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
     c.bench_function("arcshift_update", |b| {
         b.iter(|| {
-            ac.update(42);
+            ac.update(43);
         })
     });
 }

@@ -4,25 +4,23 @@
 #![allow(clippy::bool_assert_comparison)]
 #![allow(clippy::unit_cmp)]
 
-
 use super::*;
 use crossbeam_channel::bounded;
 use leak_detection::{InstanceSpy, InstanceSpy2, SpyOwner2};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::alloc::Layout;
+use std::boxed::Box;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
 use std::mem::MaybeUninit;
+use std::string::ToString;
 use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::Duration;
 use std::vec;
-use std::boxed::Box;
-use std::string::ToString;
-
 
 mod custom_fuzz;
 pub(crate) mod leak_detection;
@@ -70,11 +68,11 @@ fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
 
 #[cfg(not(any(loom, feature = "shuttle")))]
 mod simple {
-    use std::alloc::Layout;
-    use std::vec;
     use super::{ArcShift, SpyOwner2};
+    use std::alloc::Layout;
     use std::boxed::Box;
     use std::string::ToString;
+    use std::vec;
 
     #[test]
     fn simple_get() {
@@ -120,10 +118,10 @@ mod simple {
         assert_eq!(shift.get(), "hello");
     }
     use crate::cell::ArcShiftCell;
+    use crate::tests::leak_detection::InstanceSpy;
     use std::cell::{Cell, RefCell};
     use std::mem::MaybeUninit;
     use std::sync::atomic::Ordering;
-    use crate::tests::leak_detection::InstanceSpy;
 
     std::thread_local! {
 
@@ -1081,8 +1079,7 @@ fn simple_threading4c() {
     model(|| {
         let count = atomic::Arc::new(SpyOwner2::new());
         {
-            let shift1 =
-                atomic::Arc::new(atomic::Mutex::new(ArcShift::new(count.create("orig"))));
+            let shift1 = atomic::Arc::new(atomic::Mutex::new(ArcShift::new(count.create("orig"))));
             let shift2 = atomic::Arc::clone(&shift1);
             let shift3 = atomic::Arc::clone(&shift1);
             let shift4 = atomic::Arc::clone(&shift1);
@@ -1374,20 +1371,20 @@ fn simple_threading_repro3() {
 #[cfg(not(any(loom, feature = "shuttle")))]
 #[test]
 fn simple_threading_repro2() {
-        debug_println!("-------- loom -------------");
-        let root = ArcShift::new(42u32);
-        let mut curval = root.clone();
-        let light = ArcShift::downgrade(&curval);
-        curval.update(42);
-        debug_println!("----> curval.dropping");
-        drop(curval);
+    debug_println!("-------- loom -------------");
+    let root = ArcShift::new(42u32);
+    let mut curval = root.clone();
+    let light = ArcShift::downgrade(&curval);
+    curval.update(42);
+    debug_println!("----> curval.dropping");
+    drop(curval);
 
-        std::println!("----> light.upgrade");
-        light.upgrade();
-        // SAFETY:
-        // No threading involved
-        unsafe { ArcShift::debug_validate(&[&root], &[&light]) };
-        drop(light);
+    std::println!("----> light.upgrade");
+    light.upgrade();
+    // SAFETY:
+    // No threading involved
+    unsafe { ArcShift::debug_validate(&[&root], &[&light]) };
+    drop(light);
 }
 
 #[test]

@@ -3,10 +3,10 @@
 use crate::tests::leak_detection::SpyOwner2;
 use crate::tests::{model, model2, InstanceSpy2};
 use crate::{atomic, ArcShift, ArcShiftWeak};
-use std::vec;
 use std::println;
-use std::vec::Vec;
 use std::string::ToString;
+use std::vec;
+use std::vec::Vec;
 
 fn generic_3thread_ops_a<
     F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>

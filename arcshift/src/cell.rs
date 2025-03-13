@@ -92,7 +92,6 @@ impl<T: 'static + ?Sized> Clone for ArcShiftCell<T> {
 /// a 'get'-method closure.
 pub struct RecursionDetected;
 
-
 impl Debug for RecursionDetected {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "RecursionDetected")

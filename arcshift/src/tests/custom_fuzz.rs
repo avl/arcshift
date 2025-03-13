@@ -8,11 +8,11 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::hash::Hash;
-use std::sync::Arc;
 use std::format;
-use std::vec;
+use std::hash::Hash;
 use std::println;
+use std::sync::Arc;
+use std::vec;
 use std::vec::Vec;
 
 enum PipeItem<T: 'static> {
@@ -474,7 +474,6 @@ fn generic_fuzzing_all() {
     #[cfg(not(any(miri)))]
     const COUNT: u64 = 50000;
     for i in 0..COUNT {
-
         let mut rng = StdRng::seed_from_u64(i);
         let mut counter = 0u32;
         debug_println!("Running seed {}", i);
@@ -482,7 +481,6 @@ fn generic_fuzzing_all() {
             counter += 1;
             counter
         });
-
     }
 }
 
