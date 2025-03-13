@@ -18,5 +18,7 @@ jobs:
       - uses: actions/checkout@v3
       - name: Install rust
         run: rustup toolchain install stable
+      - name: Install nextest
+        run: cargo install cargo-nextest
       - name: Loom
         run: cd arcshift && ./run_loom_fast.sh
