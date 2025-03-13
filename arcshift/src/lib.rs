@@ -1566,7 +1566,6 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
     // However, update fails only if there has been system-wide progress (see comment in
     // do_advance_strong).
     loop {
-
         debug_println!("In advance-loop, item_ptr: {:x?}", item_ptr);
         // SAFETY:
         // item_ptr is a pointer we have advanced to. Forward advance always visits only
@@ -1898,7 +1897,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
 
     let start_ptr = to_dummy(start_ptr);
 
-
     if !start.lock_node_for_gc() {
         debug_println!("Janitor task for {:x?} - gc already active!", start_ptr);
         return (false, get_strong_status(have_seen_left_strong_refs, false));
@@ -1938,7 +1936,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             // We then fetch 'cur.prev' pointers, which is valid, since we only do so if
             // we managed to take a lock. No other thread may free prev if it is locked.
             let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
-
 
             if !cur.lock_node_for_gc() {
                 failed_lock = cur_ptr;
@@ -2589,7 +2586,7 @@ fn raw_do_unconditional_drop_payload_if_not_dropped<T: ?Sized, M: IMetadata>(
         drop_job_queue.do_drop(item_ptr);
     }
 }
-fn do_dealloc<T:?Sized, M: IMetadata>(item_ptr: *const ItemHolder<T, M>) {
+fn do_dealloc<T: ?Sized, M: IMetadata>(item_ptr: *const ItemHolder<T, M>) {
     // SAFETY:
     // item_ptr is still a valid, exclusively owned pointer
     let layout = get_holder_layout(&unsafe { &*item_ptr }.payload);

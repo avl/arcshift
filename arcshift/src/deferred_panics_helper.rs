@@ -67,7 +67,6 @@ impl<T> IDropHandler<T, SizedMetadata> for StealingDropHandler<T> {
         let payload = ManuallyDrop::into_inner(payload.into_inner());
         self.stolen = Some(payload);
         debug_println!("payload stolen");
-
     }
 
     fn report_sole_user(&mut self) {
@@ -88,8 +87,6 @@ impl<T: ?Sized, M: IMetadata> IDropHandler<T, M> for DropHandler {
             debug_println!("payload dropped");
         })
     }
-
-
 
     fn report_sole_user(&mut self) {}
 }
