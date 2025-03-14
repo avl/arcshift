@@ -21,4 +21,4 @@ jobs:
       - name: Install nextest
         run: cargo install cargo-nextest
       - name: Shuttle
-        run: cd arcshift && ./run_shuttle.sh
+        run: cd arcshift && ./run_shuttle_fast.sh
