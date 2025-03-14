@@ -235,46 +235,6 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 
-//TODO: Figure out which fences aren't needed.
-
-/*
-TODO: Remove this section.
-
-Talking points:
-
-Arc<[u8]> is actually 2 words (16 bytes on 64-bit platforms).
-
-This works, because the length can't be changed. But for ArcShift<[u8]>, we'd expect to be able
-to change the length! Describe the challenge of sized values!
-
-When decreasing a reference count, if it doesn't go to 0, you know _nothing_ about the count.
-
-Watch out for loom's LOOM_CHECKPOINT_FILE. If you change the code, but keep the file, you
-can get crashes.
-
-Talk about the 'helper' concept, how lock-free-ness can be achieved by delegating tasks to other
-concurrent threads.
-
-"memory reclamation" problem. Mention:
-Mention hazard-pointers (haphazard library) and epoch-based (crossbeam)
-
-The fundamental problem of not being able to look at item at all after decreasing refcount to
-something else than 0.
-
-Talk about using least significant bits to store flags.
-
-You may think that if two things happen on adjacent instructions, they'll happen mostly atomically
-"in practice". Not true, millions of lines of code can occur between any two instructions, because
-of task scheduling. And there's no guarantee hardware effects couldn't produce similar effects.
-
-About the tools:
-
- * Loom - most powerful at finding errors. Very slow. Slightly error-prone. Often bad error messages.
- * Shuttle - faster. Less magic, in some ways easier to work with. Not as many diagnostics mean less tricky errors
- * Miri - very good error messages. Overall very solid. Doesn't produce as much scheduling jitter as loom.
-
-*/
-
 use core::alloc::Layout;
 
 #[allow(unused)]
@@ -2264,8 +2224,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
 
         #[cfg(feature = "validate")]
         assert!(get_weak_count(prior_weak) > 0);
-
-        //atomic::fence(Ordering::SeqCst);
 
         let next_ptr = item.next.load(Ordering::SeqCst);
         let have_next = !undecorate(next_ptr).is_null();
