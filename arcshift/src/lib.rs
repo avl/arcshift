@@ -2491,22 +2491,29 @@ fn do_update<T: ?Sized, M: IMetadata>(
             );
             #[cfg(feature = "validate")]
             assert!(get_weak_count(_weak_count) > 1);
+
+
         }
 
         item_ptr = val_dummy;
-        // Lock free
-        // Only loops if another thread has set the 'disturbed' flag, meaning it has offloaded
-        // work on us, and it has made progress, which means there is system wide progress.
-        loop {
-            let (need_rerun, _strong_refs) =
-                do_janitor_task(from_dummy::<T, M>(item_ptr), drop_job_queue);
-            if need_rerun {
-                item_ptr = do_advance_strong::<T, M>(item_ptr, drop_job_queue);
-                debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
-                continue;
+
+        //If the strong_count of the previous went to 0, do a janitor-cycle
+        if strong_count == 1 {
+            // Lock free
+            // Only loops if another thread has set the 'disturbed' flag, meaning it has offloaded
+            // work on us, and it has made progress, which means there is system wide progress.
+            loop {
+                let (need_rerun, _strong_refs) =
+                    do_janitor_task(from_dummy::<T, M>(item_ptr), drop_job_queue);
+                if need_rerun {
+                    item_ptr = do_advance_strong::<T, M>(item_ptr, drop_job_queue);
+                    debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
+                    continue;
+                }
+                break;
             }
-            return item_ptr;
         }
+        return item_ptr;
     }
 }
 
