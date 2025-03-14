@@ -279,7 +279,7 @@ mod deferred_panics_helper;
 mod atomic {
     #[allow(unused)]
     pub use shuttle::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
-
+    #[allow(unused)]
     pub use shuttle::sync::{Arc, Mutex};
     #[allow(unused)]
     pub use shuttle::thread;
@@ -2812,32 +2812,38 @@ pub struct ArcShiftLight {}
 
 impl<T: ?Sized> ArcShift<T> {
     #[doc(hidden)]
+    #[cfg_attr(test, mutants::skip)]
     #[deprecated = "rcu_project was completely removed in ArcShift 0.2. Please use method 'rcu' instead, and just manually access the desired field."]
     pub fn rcu_project(&mut self, _marker: NoLongerAvailableMarker) {
         unreachable!("method cannot be called")
     }
     #[doc(hidden)]
+    #[cfg_attr(test, mutants::skip)]
     #[deprecated = "rcu_maybe2 was completely removed in ArcShift 0.2. Please use 'rcu_maybe' instead. It has the same features."]
     pub fn rcu_maybe2(&mut self, _marker: NoLongerAvailableMarker) {
         unreachable!("method cannot be called")
     }
 
     #[doc(hidden)]
+    #[cfg_attr(test, mutants::skip)]
     #[deprecated = "update_shared_box was completely removed in ArcShift 0.2. Shared references can no longer be updated. Please file an issue if this is a blocker!"]
     pub fn update_shared_box(&mut self, _marker: NoLongerAvailableMarker) {
         unreachable!("method cannot be called")
     }
     #[doc(hidden)]
+    #[cfg_attr(test, mutants::skip)]
     #[deprecated = "update_shared was completely removed in ArcShift 0.2. Shared references can no longer be updated. Please file an issue if this is a blocker!"]
     pub fn update_shared(&mut self, _marker: NoLongerAvailableMarker) {
         unreachable!("method cannot be called")
     }
     #[doc(hidden)]
+    #[cfg_attr(test, mutants::skip)]
     #[deprecated = "make_light was completely removed in ArcShift 0.2. Please use ArcShift::downgrade(&item) instead."]
     pub fn make_light(&mut self, _marker: NoLongerAvailableMarker) {
         unreachable!("method cannot be called")
     }
     #[doc(hidden)]
+    #[cfg_attr(test, mutants::skip)]
     #[deprecated = "shared_non_reloading_get now does the same thing as 'shared_get', please use the latter instead."]
     pub fn shared_non_reloading_get(&self) -> &T {
         self.shared_get()
