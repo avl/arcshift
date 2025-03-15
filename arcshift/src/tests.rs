@@ -29,7 +29,7 @@ mod race_detector;
 // This is needed to make the tests runnable from within the Shuttle and Loom frameworks.
 
 #[cfg(all(not(loom), not(feature = "shuttle")))]
-fn model(x: impl FnOnce()) {
+pub(crate) fn model(x: impl FnOnce()) {
     x()
 }
 #[cfg(all(not(loom), not(feature = "shuttle")))]
@@ -42,7 +42,7 @@ pub(crate) fn dummy_model(x: impl FnOnce()) {
 }
 
 #[cfg(loom)]
-fn model(x: impl Fn() + 'static + Send + Sync) {
+pub(crate) fn model(x: impl Fn() + 'static + Send + Sync) {
     loom::model(x)
 }
 #[cfg(loom)]
