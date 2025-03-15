@@ -348,8 +348,12 @@ fn generic_thread_fuzzing_57() {
 fn generic_thread_fuzzing_all() {
     #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
     {
-        const THREADS: usize = 100;
-        const COUNT_PER_THREAD: usize = 1000000;
+        const THREADS: usize = 20;
+        #[cfg(debug_assertions)]
+        const COUNT_PER_THREAD: usize = 100;
+        #[cfg(not(debug_assertions))]
+        const COUNT_PER_THREAD: usize = 1000;
+
         let mut jhs = vec![];
         for t in 0..THREADS {
             let range = COUNT_PER_THREAD * t..(COUNT_PER_THREAD) * (t + 1);

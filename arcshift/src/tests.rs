@@ -5,7 +5,6 @@
 #![allow(clippy::unit_cmp)]
 
 use super::*;
-use crossbeam_channel::bounded;
 use leak_detection::{InstanceSpy, InstanceSpy2, SpyOwner2};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
