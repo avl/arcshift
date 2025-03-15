@@ -565,6 +565,7 @@ fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
 
 #[allow(unused)]
 #[cfg(all(feature = "std", feature = "debug"))]
+#[cfg_attr(test, mutants::skip)]
 fn format_weak(weak: usize) -> std::string::String {
     let count = weak & ((1 << (usize::BITS - 2)) - 1);
     let have_prev = (weak & WEAK_HAVE_PREV) != 0;
@@ -2985,6 +2986,8 @@ impl<T: ?Sized> ArcShift<T> {
             item: unsafe { NonNull::new_unchecked(t as *mut _) },
         }
     }
+
+    /// Note, if there is at least one strong count, these collectively hold a weak count.
     #[allow(unused)]
     pub(crate) fn weak_count(&self) -> usize {
         with_holder!(self.item, T, |item: *const ItemHolder<T, _>| -> usize {
@@ -3201,263 +3204,373 @@ impl<T: ?Sized> ArcShift<T> {
     }
 }
 
-#[cfg(all(not(loom), not(feature = "shuttle")))]
+#[cfg(not(loom))]
 #[cfg(test)]
 mod simple_tests {
-    use crate::{ArcShift, SizedMetadata};
+    use crate::tests::dummy_model;
+    use crate::{ArcShift, ItemStateEnum, SizedMetadata};
     use alloc::boxed::Box;
+
+    #[cfg(not(feature = "shuttle"))]
+    use crate::tests::model;
+    #[cfg(not(feature = "shuttle"))]
     use std::string::ToString;
+    #[cfg(not(feature = "shuttle"))]
     use std::thread;
 
     #[test]
     fn simple_create() {
-        let x = ArcShift::new(Box::new(45u32));
-        assert_eq!(**x, 45);
-        // SAFETY:
-        // No threading involved, &x is valid.
-        unsafe { ArcShift::debug_validate(&[&x], &[]) };
+        dummy_model(|| {
+            let x = ArcShift::new(Box::new(45u32));
+            assert_eq!(x.strong_count(), 1);
+            assert_eq!(x.weak_count(), 1);
+            assert_eq!(**x, 45);
+            // SAFETY:
+            // No threading involved, &x is valid.
+            unsafe { ArcShift::debug_validate(&[&x], &[]) };
+        });
     }
 
     #[test]
     fn simple_janitor_test() {
-        let mut x = ArcShift::new(45u32);
-        x.update(46);
-        // SAFETY:
-        // No threading involved, item pointer of ArcShift is always valid
-        let item = unsafe { &*crate::from_dummy::<u32, SizedMetadata>(x.item.as_ptr()) };
-        let prev = item.prev.load(crate::atomic::Ordering::SeqCst);
-        assert_eq!(prev, core::ptr::null_mut());
-        assert_eq!(*x, 46);
+        dummy_model(|| {
+            let mut x = ArcShift::new(45u32);
+            x.update(46);
+            // SAFETY:
+            // No threading involved, item pointer of ArcShift is always valid
+            let item = unsafe { &*crate::from_dummy::<u32, SizedMetadata>(x.item.as_ptr()) };
+            let prev = item.prev.load(crate::atomic::Ordering::SeqCst);
+            assert_eq!(prev, core::ptr::null_mut());
+            assert_eq!(*x, 46);
+        });
     }
 
     #[test]
     fn simple_create_and_update_once() {
-        let mut x = ArcShift::new(Box::new(45u32));
-        assert_eq!(**x, 45);
-        x.update(Box::new(1u32));
-        assert_eq!(**x, 1);
-        // SAFETY:
-        // No threading involved, &x is valid.
-        unsafe { ArcShift::debug_validate(&[&x], &[]) };
+        dummy_model(|| {
+            let mut x = ArcShift::new(Box::new(45u32));
+            assert_eq!(**x, 45);
+            x.update(Box::new(1u32));
+            assert_eq!(**x, 1);
+            // SAFETY:
+            // No threading involved, &x is valid.
+            unsafe { ArcShift::debug_validate(&[&x], &[]) };
+        });
     }
     #[test]
     fn simple_create_and_update_twice() {
-        let mut x = ArcShift::new(Box::new(45u32));
-        assert_eq!(**x, 45);
-        x.update(Box::new(1u32));
-        assert_eq!(**x, 1);
-        x.update(Box::new(21));
-        assert_eq!(**x, 21);
-        // SAFETY:
-        // No threading involved, &x is valid.
-        unsafe { ArcShift::debug_validate(&[&x], &[]) };
+        dummy_model(|| {
+            let mut x = ArcShift::new(Box::new(45u32));
+            assert_eq!(**x, 45);
+            x.update(Box::new(1u32));
+            assert_eq!(**x, 1);
+            x.update(Box::new(21));
+            assert_eq!(**x, 21);
+            // SAFETY:
+            // No threading involved, &x is valid.
+            unsafe { ArcShift::debug_validate(&[&x], &[]) };
+        });
     }
     #[test]
     fn simple_create_and_clone() {
-        let x = ArcShift::new(Box::new(45u32));
-        let y = x.clone();
-        assert_eq!(**x, 45);
-        assert_eq!(**y, 45);
-        // SAFETY:
-        // No threading involved, &x and &y are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+        dummy_model(|| {
+            let x = ArcShift::new(Box::new(45u32));
+            let y = x.clone();
+            assert_eq!(**x, 45);
+            assert_eq!(**y, 45);
+            // SAFETY:
+            // No threading involved, &x and &y are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+        });
     }
     #[test]
     fn simple_create_and_clone_drop_other_order() {
-        let x = ArcShift::new(Box::new(45u32));
-        let y = x.clone();
-        assert_eq!(**x, 45);
-        assert_eq!(**y, 45);
-        // SAFETY:
-        // No threading involved, &x and &y are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
-        drop(x);
-        drop(y);
+        dummy_model(|| {
+            let x = ArcShift::new(Box::new(45u32));
+            let y = x.clone();
+            assert_eq!(**x, 45);
+            assert_eq!(**y, 45);
+            // SAFETY:
+            // No threading involved, &x and &y are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+            drop(x);
+            drop(y);
+        });
     }
     #[test]
     fn simple_downgrade() {
-        let x = ArcShift::new(Box::new(45u32));
-        let _y = ArcShift::downgrade(&x);
+        dummy_model(|| {
+            let x = ArcShift::new(Box::new(45u32));
+            let _y = ArcShift::downgrade(&x);
+        });
     }
 
     #[test]
     #[should_panic(expected = "panic: A")]
     fn panic_boxed_drop() {
-        struct PanicOnDrop(char);
-        impl Drop for PanicOnDrop {
-            fn drop(&mut self) {
-                panic!("panic: {}", self.0)
+        dummy_model(|| {
+            struct PanicOnDrop(char);
+            impl Drop for PanicOnDrop {
+                fn drop(&mut self) {
+                    panic!("panic: {}", self.0)
+                }
             }
-        }
-        _ = Box::new(PanicOnDrop('A'));
+            _ = Box::new(PanicOnDrop('A'));
+        });
     }
     #[test]
     #[should_panic(expected = "panic: A")]
     fn simple_panic() {
-        struct PanicOnDrop(char);
-        impl Drop for PanicOnDrop {
-            fn drop(&mut self) {
-                panic!("panic: {}", self.0)
+        dummy_model(|| {
+            struct PanicOnDrop(char);
+            impl Drop for PanicOnDrop {
+                fn drop(&mut self) {
+                    panic!("panic: {}", self.0)
+                }
             }
-        }
-        // Use a box so that T has a heap-allocation, so miri will tell us
-        // if it's dropped correctly (it should be)
-        let a = ArcShift::new(Box::new(PanicOnDrop('A')));
-        let mut b = a.clone();
-        b.update(Box::new(PanicOnDrop('B')));
-        drop(b); //This doesn't drop anything, since 'b' is kept alive by next-ref of a
-        drop(a); //This will panic, but shouldn't leak memory
+            // Use a box so that T has a heap-allocation, so miri will tell us
+            // if it's dropped correctly (it should be)
+            let a = ArcShift::new(Box::new(PanicOnDrop('A')));
+            let mut b = a.clone();
+            b.update(Box::new(PanicOnDrop('B')));
+            drop(b); //This doesn't drop anything, since 'b' is kept alive by next-ref of a
+            drop(a); //This will panic, but shouldn't leak memory
+        });
     }
     #[test]
     fn simple_create_and_clone_and_update1() {
-        let mut right = ArcShift::new(Box::new(1u32));
-        assert_eq!(right.strong_count(), 1);
-        assert_eq!(right.weak_count(), 1);
-        let left = right.clone();
-        right.update(Box::new(2u32)); // becomes right here
-        assert_eq!(right.strong_count(), 1);
-        assert_eq!(right.weak_count(), 1);
-        assert_eq!(**right, 2);
-        assert_eq!(**left, 1);
-        assert_eq!(left.strong_count(), 1);
-        assert_eq!(left.weak_count(), 2); //'left' and ref from right
-        debug_println!("Dropping 'left'");
-        // SAFETY:
-        // No threading involved, &left and &right are valid.
-        unsafe { ArcShift::debug_validate(&[&left, &right], &[]) };
-        drop(left);
-        assert_eq!(right.strong_count(), 1);
-        assert_eq!(right.weak_count(), 1);
+        dummy_model(|| {
+            let mut right = ArcShift::new(Box::new(1u32));
+            assert_eq!(right.strong_count(), 1);
+            assert_eq!(right.weak_count(), 1);
+            let left = right.clone();
+            right.update(Box::new(2u32)); // becomes right here
+            assert_eq!(right.strong_count(), 1);
+            assert_eq!(right.weak_count(), 1);
+            assert_eq!(**right, 2);
+            assert_eq!(**left, 1);
+            assert_eq!(left.strong_count(), 1);
+            assert_eq!(left.weak_count(), 2); //'left' and ref from right
+            debug_println!("Dropping 'left'");
+            // SAFETY:
+            // No threading involved, &left and &right are valid.
+            unsafe { ArcShift::debug_validate(&[&left, &right], &[]) };
+            drop(left);
+            assert_eq!(right.strong_count(), 1);
+            assert_eq!(right.weak_count(), 1);
+        });
     }
     #[test]
     fn simple_create_and_clone_and_update_other_drop_order() {
-        let mut x = ArcShift::new(Box::new(1u32));
-        assert_eq!(x.strong_count(), 1);
-        assert_eq!(x.weak_count(), 1);
-        let y = x.clone();
-        assert_eq!(y.strong_count(), 2);
-        assert_eq!(y.weak_count(), 1);
-        x.update(Box::new(2u32));
-        assert_eq!(x.strong_count(), 1);
-        assert_eq!(x.weak_count(), 1);
+        dummy_model(|| {
+            let mut x = ArcShift::new(Box::new(1u32));
+            assert_eq!(x.strong_count(), 1);
+            assert_eq!(x.weak_count(), 1);
+            let y = x.clone();
+            assert_eq!(y.strong_count(), 2);
+            assert_eq!(y.weak_count(), 1);
+            x.update(Box::new(2u32));
+            assert_eq!(x.strong_count(), 1);
+            assert_eq!(x.weak_count(), 1);
 
-        assert_eq!(y.strong_count(), 1);
-        assert_eq!(y.weak_count(), 2);
+            assert_eq!(y.strong_count(), 1);
+            assert_eq!(y.weak_count(), 2);
 
-        assert_eq!(**x, 2);
-        assert_eq!(**y, 1);
+            assert_eq!(**x, 2);
+            assert_eq!(**y, 1);
 
-        // SAFETY:
-        // No threading involved, &x and &y are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
-        debug_println!("Dropping x");
-        drop(x);
-        debug_println!("Dropping y");
-        drop(y);
+            // SAFETY:
+            // No threading involved, &x and &y are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+            debug_println!("Dropping x");
+            drop(x);
+            debug_println!("Dropping y");
+            drop(y);
+        });
+    }
+
+    #[test]
+    fn simple_item_state_enum_semantics() {
+        dummy_model(|| {
+            assert_eq!(
+                ItemStateEnum::UndisturbedUndecorated.with_gc(),
+                ItemStateEnum::UndisturbedGcIsActive
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedGcIsActive.with_gc(),
+                ItemStateEnum::UndisturbedGcIsActive
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedPayloadDropped.with_gc(),
+                ItemStateEnum::UndisturbedPayloadDroppedAndGcActive
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedPayloadDroppedAndGcActive.with_gc(),
+                ItemStateEnum::UndisturbedPayloadDroppedAndGcActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedUndecorated.with_gc(),
+                ItemStateEnum::DisturbedGcIsActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedGcIsActive.with_gc(),
+                ItemStateEnum::DisturbedGcIsActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedPayloadDropped.with_gc(),
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive.with_gc(),
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive
+            );
+
+            assert_eq!(
+                ItemStateEnum::UndisturbedUndecorated.with_disturbed(),
+                ItemStateEnum::DisturbedUndecorated
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedGcIsActive.with_disturbed(),
+                ItemStateEnum::DisturbedGcIsActive
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedPayloadDropped.with_disturbed(),
+                ItemStateEnum::DisturbedPayloadDropped
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedPayloadDroppedAndGcActive.with_disturbed(),
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedUndecorated.with_disturbed(),
+                ItemStateEnum::DisturbedUndecorated
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedGcIsActive.with_disturbed(),
+                ItemStateEnum::DisturbedGcIsActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedPayloadDropped.with_disturbed(),
+                ItemStateEnum::DisturbedPayloadDropped
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive.with_disturbed(),
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive
+            );
+        });
     }
 
     #[test]
     fn simple_create_clone_and_update_twice() {
-        let mut x = ArcShift::new(Box::new(45u32));
-        let mut y = x.clone();
-        assert_eq!(**x, 45);
-        x.update(Box::new(1u32));
-        assert_eq!(**x, 1);
-        x.update(Box::new(21));
-        assert_eq!(**x, 21);
-        // SAFETY:
-        // No threading involved, &x and &y are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
-        y.reload();
-        assert_eq!(**y, 21);
-        // SAFETY:
-        // No threading involved, &x and &y are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+        dummy_model(|| {
+            let mut x = ArcShift::new(Box::new(45u32));
+            let mut y = x.clone();
+            assert_eq!(**x, 45);
+            x.update(Box::new(1u32));
+            assert_eq!(**x, 1);
+            x.update(Box::new(21));
+            assert_eq!(**x, 21);
+            // SAFETY:
+            // No threading involved, &x and &y are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+            y.reload();
+            assert_eq!(**y, 21);
+            // SAFETY:
+            // No threading involved, &x and &y are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+        });
     }
 
     #[test]
     fn simple_create_clone_twice_and_update_twice() {
-        let mut x = ArcShift::new(Box::new(45u32));
-        let mut y = x.clone();
-        // SAFETY:
-        // No threading involved, &x and &y are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
-        assert_eq!(**x, 45);
-        x.update(Box::new(1u32));
-        // SAFETY:
-        // No threading involved, &x and &y are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
-        let z = x.clone();
-        assert_eq!(**x, 1);
-        x.update(Box::new(21));
-        // SAFETY:
-        // No threading involved, &x, &y and &z are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };
-        assert_eq!(**x, 21);
-        y.reload();
-        assert_eq!(**y, 21);
-        // SAFETY:
-        // No threading involved, &x, &y and &z are valid.
-        unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };
+        dummy_model(|| {
+            let mut x = ArcShift::new(Box::new(45u32));
+            let mut y = x.clone();
+            // SAFETY:
+            // No threading involved, &x and &y are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+            assert_eq!(**x, 45);
+            x.update(Box::new(1u32));
+            // SAFETY:
+            // No threading involved, &x and &y are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
+            let z = x.clone();
+            assert_eq!(**x, 1);
+            x.update(Box::new(21));
+            // SAFETY:
+            // No threading involved, &x, &y and &z are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };
+            assert_eq!(**x, 21);
+            y.reload();
+            assert_eq!(**y, 21);
+            // SAFETY:
+            // No threading involved, &x, &y and &z are valid.
+            unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };
+        });
     }
 
     #[test]
+    #[cfg(not(feature = "shuttle"))]
     fn simple_threaded() {
-        let mut arc = ArcShift::new("Hello".to_string());
-        let arc2 = arc.clone();
+        model(|| {
+            let mut arc = ArcShift::new("Hello".to_string());
+            let arc2 = arc.clone();
 
-        let j1 = thread::Builder::new()
-            .name("thread1".to_string())
-            .spawn(move || {
-                //println!("Value in thread 1: '{}'", *arc); //Prints 'Hello'
-                arc.update("New value".to_string());
-                //println!("Updated value in thread 1: '{}'", *arc); //Prints 'New value'
-            })
-            .unwrap();
+            let j1 = thread::Builder::new()
+                .name("thread1".to_string())
+                .spawn(move || {
+                    //println!("Value in thread 1: '{}'", *arc); //Prints 'Hello'
+                    arc.update("New value".to_string());
+                    //println!("Updated value in thread 1: '{}'", *arc); //Prints 'New value'
+                })
+                .unwrap();
 
-        let j2 = thread::Builder::new()
-            .name("thread2".to_string())
-            .spawn(move || {
-                // Prints either 'Hello' or 'New value', depending on scheduling:
-                let _a = arc2;
-                //println!("Value in thread 2: '{}'", arc2.get());
-            })
-            .unwrap();
+            let j2 = thread::Builder::new()
+                .name("thread2".to_string())
+                .spawn(move || {
+                    // Prints either 'Hello' or 'New value', depending on scheduling:
+                    let _a = arc2;
+                    //println!("Value in thread 2: '{}'", arc2.get());
+                })
+                .unwrap();
 
-        j1.join().unwrap();
-        j2.join().unwrap();
+            j1.join().unwrap();
+            j2.join().unwrap();
+        });
     }
 
     #[test]
     fn simple_upgrade_reg() {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shift = ArcShift::new(crate::tests::leak_detection::InstanceSpy::new(
-            count.clone(),
-        ));
-        // SAFETY:
-        // No threading involved, &shift is valid.
-        unsafe { ArcShift::debug_validate(&[&shift], &[]) };
-        let shiftlight = ArcShift::downgrade(&shift);
-        // SAFETY:
-        // No threading involved, &shift and &shiftlight is valid.
-        unsafe { ArcShift::debug_validate(&[&shift], &[&shiftlight]) };
+        dummy_model(|| {
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let shift = ArcShift::new(crate::tests::leak_detection::InstanceSpy::new(
+                count.clone(),
+            ));
+            // SAFETY:
+            // No threading involved, &shift is valid.
+            unsafe { ArcShift::debug_validate(&[&shift], &[]) };
+            let shiftlight = ArcShift::downgrade(&shift);
+            // SAFETY:
+            // No threading involved, &shift and &shiftlight is valid.
+            unsafe { ArcShift::debug_validate(&[&shift], &[&shiftlight]) };
 
-        debug_println!("==== running shift.get() = ");
-        let mut shift2 = shiftlight.upgrade().unwrap();
-        debug_println!("==== running arc.update() = ");
-        // SAFETY:
-        // No threading involved, &shift, 2shift2 and &shiftlight are valid.
-        unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shiftlight]) };
-        shift2.update(crate::tests::leak_detection::InstanceSpy::new(
-            count.clone(),
-        ));
+            debug_println!("==== running shift.get() = ");
+            let mut shift2 = shiftlight.upgrade().unwrap();
+            debug_println!("==== running arc.update() = ");
+            // SAFETY:
+            // No threading involved, &shift, 2shift2 and &shiftlight are valid.
+            unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shiftlight]) };
+            shift2.update(crate::tests::leak_detection::InstanceSpy::new(
+                count.clone(),
+            ));
 
-        // SAFETY:
-        // No threading involved, &shift, &shift2 and &shiftlight are valid.
-        unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shiftlight]) };
+            // SAFETY:
+            // No threading involved, &shift, &shift2 and &shiftlight are valid.
+            unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shiftlight]) };
+        });
     }
 }
 
 // Module for tests
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

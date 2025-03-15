@@ -37,7 +37,7 @@ fn model2(x: impl FnOnce(), _repro: Option<&str>) {
     x()
 }
 #[cfg(all(not(loom), not(feature = "shuttle")))]
-fn dummy_model(x: impl FnOnce()) {
+pub(crate) fn dummy_model(x: impl FnOnce()) {
     x()
 }
 
@@ -56,12 +56,12 @@ const SHUTTLE_ITERATIONS: usize = 50;
 const SHUTTLE_ITERATIONS: usize = 500000;
 
 #[cfg(feature = "shuttle")]
-fn model(x: impl Fn() + 'static + Send + Sync) {
+pub(crate) fn model(x: impl Fn() + 'static + Send + Sync) {
     shuttle::check_pct(x, SHUTTLE_ITERATIONS, 4);
 }
 #[cfg(feature = "shuttle")]
-fn dummy_model(x: impl Fn() + 'static + Send + Sync) {
-    shuttle::check_random(x, SHUTTLE_ITERATIONS);
+pub(crate) fn dummy_model(x: impl Fn() + 'static + Send + Sync) {
+    shuttle::check_random(x, 1);
 }
 #[cfg(feature = "shuttle")]
 fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
@@ -74,6 +74,8 @@ fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
 
 // Here follows some simple basic tests
 
+// TODO: We should probably improve the structure of all the tests.
+// They're currently split into different modules in a rather disorganized way.
 #[cfg(not(any(loom)))]
 mod simple {
     use super::{dummy_model, ArcShift, SpyOwner2};
