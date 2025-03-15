@@ -262,7 +262,9 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 ) -> Vec<FuzzerCommand<T>> {
     let mut ret = Vec::new();
 
-    #[cfg(not(loom))]
+    #[cfg(not(any(loom, feature = "shuttle")))]
+    const COUNT: usize = 20;
+    #[cfg(feature = "shuttle")]
     const COUNT: usize = 15;
     #[cfg(loom)]
     const COUNT: usize = 6;
@@ -325,39 +327,52 @@ fn make_commands<T: Clone + Eq + Hash + Debug>(
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_57() {
-    #[cfg(miri)]
-    const COUNT: u64 = 30;
-    #[cfg(loom)]
-    const COUNT: u64 = 100;
-    #[cfg(all(feature = "shuttle", not(coverage)))]
-    const COUNT: u64 = 1000;
-    #[cfg(coverage)]
-    const COUNT: u64 = 10;
-
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-    #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
-    const COUNT: u64 = 100000;
-    {
-        let i = 57;
-        println!("--- Seed {} ---", i);
-        model(move || {
-            let mut rng = StdRng::seed_from_u64(i);
-            let mut counter = 0usize;
-            let owner = std::sync::Arc::new(SpyOwner2::new());
-            let owner_ref = owner.clone();
-            run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
-                counter += 1;
-                owner_ref.create(statics[counter % 10])
-            });
-            owner.validate();
+
+    let i = 57;
+    println!("--- Seed {} ---", i);
+    model(move || {
+        let mut rng = StdRng::seed_from_u64(i);
+        let mut counter = 0usize;
+        let owner = std::sync::Arc::new(SpyOwner2::new());
+        let owner_ref = owner.clone();
+        run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
+            counter += 1;
+            owner_ref.create(statics[counter % 10])
         });
-    }
+        owner.validate();
+    });
 }
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_all() {
+    #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
+    {
+        const THREADS: usize = 100;
+        const COUNT_PER_THREAD: usize = 1000000;
+        let mut jhs = vec![];
+        for t in 0..THREADS {
+            let range = COUNT_PER_THREAD * t..(COUNT_PER_THREAD) * (t + 1);
+            jhs.push(std::thread::spawn(move || {
+                for seed in range.clone() {
+                    if seed % 1000 == 0 {
+                        println!("Seed:#{} {}", t, seed - range.start);
+                    }
+                    crate::tests::custom_fuzz::generic_thread_fuzzing_all_impl(
+                        Some(seed as u64),
+                        None,
+                    );
+                }
+            }));
+        }
+        for jh in jhs {
+            jh.join().unwrap();
+        }
+    }
+    #[cfg(any(loom, miri, feature = "shuttle", coverage))]
     generic_thread_fuzzing_all_impl(None, None)
 }
+
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_repro1() {
@@ -381,7 +396,7 @@ fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
 
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
     #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
-    const COUNT: u64 = 10000;
+    const COUNT: u64 = 1000000;
     let range = if let Some(seed) = seed {
         seed..seed + 1
     } else {

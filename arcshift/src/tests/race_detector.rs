@@ -360,18 +360,14 @@ fn generic_3thread_ops_c<
 }
 
 fn generic_2thread_ops_d<
-    F1: Fn(
-        &SpyOwner2,
-        ArcShift<InstanceSpy2>,
-        &'static str,
-    ) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+    F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+        + Sync
+        + Send
+        + 'static,
     F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
 >(
     f1: F1,
     f2: F2,
@@ -690,11 +686,9 @@ fn generic_2threading2c() {
 
 /// Simple race between non-trivial janitor and Drop
 #[test]
-    fn generic_2threading2d() {
+fn generic_2threading2d() {
     generic_2thread_ops_d(
-        |_owner1, _shift1, _thread| {
-            None
-        },
+        |_owner1, _shift1, _thread| None,
         |owner2, mut shift2, thread| {
             shift2.update(owner2.create(thread));
             None

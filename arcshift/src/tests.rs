@@ -100,10 +100,10 @@ mod simple {
     #[test]
     fn simple_unsized() {
         dummy_model(|| {
-        let biggish = vec![1u32, 2u32].into_boxed_slice();
-        let mut shift = ArcShift::from_box(biggish);
-        debug_println!("Drop");
-        assert_eq!(shift.get(), &vec![1, 2]);
+            let biggish = vec![1u32, 2u32].into_boxed_slice();
+            let mut shift = ArcShift::from_box(biggish);
+            debug_println!("Drop");
+            assert_eq!(shift.get(), &vec![1, 2]);
         });
     }
 
@@ -121,19 +121,19 @@ mod simple {
     #[test]
     fn simple_unsized_closure() {
         dummy_model(|| {
-        let boxed_trait: Box<dyn ExampleTrait> = Box::new(ExampleStruct { x: 42 });
-        let mut shift = ArcShift::from_box(boxed_trait);
-        debug_println!("Drop");
-        assert_eq!(shift.get().call(), 42);
+            let boxed_trait: Box<dyn ExampleTrait> = Box::new(ExampleStruct { x: 42 });
+            let mut shift = ArcShift::from_box(boxed_trait);
+            debug_println!("Drop");
+            assert_eq!(shift.get().call(), 42);
         });
     }
     #[test]
     fn simple_unsized_str() {
         dummy_model(|| {
-        let boxed_str: Box<str> = Box::new("hello".to_string()).into_boxed_str();
-        let mut shift = ArcShift::from_box(boxed_str);
-        debug_println!("Drop");
-        assert_eq!(shift.get(), "hello");
+            let boxed_str: Box<str> = Box::new("hello".to_string()).into_boxed_str();
+            let mut shift = ArcShift::from_box(boxed_str);
+            debug_println!("Drop");
+            assert_eq!(shift.get(), "hello");
         });
     }
     use crate::cell::ArcShiftCell;
@@ -166,490 +166,490 @@ mod simple {
     #[test]
     fn simple_cell() {
         dummy_model(|| {
-        let owner = SpyOwner2::new();
-        {
-            let mut root = ArcShift::new(owner.create("root"));
-            let cell = ArcShiftCell::from_arcshift(root.clone());
-            cell.get(|val| {
-                assert_eq!(val.str(), "root");
-            });
-            root.update(owner.create("new"));
+            let owner = SpyOwner2::new();
+            {
+                let mut root = ArcShift::new(owner.create("root"));
+                let cell = ArcShiftCell::from_arcshift(root.clone());
+                cell.get(|val| {
+                    assert_eq!(val.str(), "root");
+                });
+                root.update(owner.create("new"));
 
-            assert_eq!(owner.count(), 2);
+                assert_eq!(owner.count(), 2);
 
-            cell.reload();
-            assert_eq!(owner.count(), 1);
+                cell.reload();
+                assert_eq!(owner.count(), 1);
 
-            cell.get(|val| {
-                assert_eq!(val.str(), "new");
-            });
+                cell.get(|val| {
+                    assert_eq!(val.str(), "new");
+                });
 
-            root.update(owner.create("new2"));
-            assert_eq!(owner.count(), 2);
+                root.update(owner.create("new2"));
+                assert_eq!(owner.count(), 2);
 
-            cell.get(|val| {
-                assert_eq!(val.str(), "new2");
-            });
+                cell.get(|val| {
+                    assert_eq!(val.str(), "new2");
+                });
 
-            assert_eq!(owner.count(), 1);
-        }
-        owner.validate();
+                assert_eq!(owner.count(), 1);
+            }
+            owner.validate();
         });
     }
     #[test]
     fn simple_cell_handle() {
         dummy_model(|| {
-        let owner = SpyOwner2::new();
-        {
-            let mut root = ArcShift::new(owner.create("root"));
-            let cell = ArcShiftCell::from_arcshift(root.clone());
-            let r = cell.borrow();
-            assert_eq!(r.str(), "root");
-            assert_eq!(owner.count(), 1);
-            root.update(owner.create("new"));
-            assert_eq!(owner.count(), 2); // Since we haven't dropped 'r', its value must be kept
-            drop(r);
-            assert_eq!(owner.count(), 1); //'cell' should now have been reloaded.
-        }
+            let owner = SpyOwner2::new();
+            {
+                let mut root = ArcShift::new(owner.create("root"));
+                let cell = ArcShiftCell::from_arcshift(root.clone());
+                let r = cell.borrow();
+                assert_eq!(r.str(), "root");
+                assert_eq!(owner.count(), 1);
+                root.update(owner.create("new"));
+                assert_eq!(owner.count(), 2); // Since we haven't dropped 'r', its value must be kept
+                drop(r);
+                assert_eq!(owner.count(), 1); //'cell' should now have been reloaded.
+            }
         });
     }
 
     #[test]
     fn simple_multiple_cell_handles() {
         dummy_model(|| {
-        let owner = SpyOwner2::new();
-        {
-            let mut root = ArcShift::new(owner.create("root"));
-            let cell = ArcShiftCell::from_arcshift(root.clone());
+            let owner = SpyOwner2::new();
             {
-                let r = cell.borrow();
-                assert_eq!(r.str(), "root");
-                assert_eq!(owner.count(), 1);
-            }
+                let mut root = ArcShift::new(owner.create("root"));
+                let cell = ArcShiftCell::from_arcshift(root.clone());
+                {
+                    let r = cell.borrow();
+                    assert_eq!(r.str(), "root");
+                    assert_eq!(owner.count(), 1);
+                }
 
-            root.update(owner.create("A"));
-            assert_eq!(owner.count(), 2);
+                root.update(owner.create("A"));
+                assert_eq!(owner.count(), 2);
 
-            {
-                let r = cell.borrow();
-                assert_eq!(r.str(), "A");
-                assert_eq!(owner.count(), 1);
-            }
+                {
+                    let r = cell.borrow();
+                    assert_eq!(r.str(), "A");
+                    assert_eq!(owner.count(), 1);
+                }
 
-            {
-                let r = cell.borrow();
-                root.update(owner.create("B"));
-                assert_eq!(r.str(), "B");
-                assert_eq!(owner.count(), 1);
-            }
+                {
+                    let r = cell.borrow();
+                    root.update(owner.create("B"));
+                    assert_eq!(r.str(), "B");
+                    assert_eq!(owner.count(), 1);
+                }
 
-            {
-                let r1 = cell.borrow();
-                let r2 = cell.borrow();
-                root.update(owner.create("C"));
-                assert_eq!(root.str(), "C");
-                assert_eq!(r1.str(), "B");
-                assert_eq!(r2.str(), "B");
-                assert_eq!(owner.count(), 2); //Because we have two references, we can't reload.
+                {
+                    let r1 = cell.borrow();
+                    let r2 = cell.borrow();
+                    root.update(owner.create("C"));
+                    assert_eq!(root.str(), "C");
+                    assert_eq!(r1.str(), "B");
+                    assert_eq!(r2.str(), "B");
+                    assert_eq!(owner.count(), 2); //Because we have two references, we can't reload.
+                }
+                {
+                    let r1 = cell.borrow();
+                    let r2 = cell.borrow();
+                    assert_eq!(r1.str(), "C");
+                    assert_eq!(r2.str(), "C");
+                }
+                assert_eq!(owner.count(), 1); //But when the last ref is dropped, we do reload
             }
-            {
-                let r1 = cell.borrow();
-                let r2 = cell.borrow();
-                assert_eq!(r1.str(), "C");
-                assert_eq!(r2.str(), "C");
-            }
-            assert_eq!(owner.count(), 1); //But when the last ref is dropped, we do reload
-        }
         });
     }
 
     #[test]
     fn simple_cell_recursion() {
         dummy_model(|| {
-        let owner = SpyOwner2::new();
-        {
-            let mut root = ArcShift::new(owner.create("root"));
-            let cell = ArcShiftCell::from_arcshift(root.clone());
-            cell.get(|val| {
-                assert_eq!(val.str(), "root");
-                assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
+            let owner = SpyOwner2::new();
+            {
+                let mut root = ArcShift::new(owner.create("root"));
+                let cell = ArcShiftCell::from_arcshift(root.clone());
                 cell.get(|val| {
                     assert_eq!(val.str(), "root");
-                    root.update(owner.create("B"));
+                    assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
                     cell.get(|val| {
+                        assert_eq!(val.str(), "root");
+                        root.update(owner.create("B"));
+                        cell.get(|val| {
+                            assert_eq!(val.str(), "root");
+                        });
                         assert_eq!(val.str(), "root");
                     });
                     assert_eq!(val.str(), "root");
                 });
-                assert_eq!(val.str(), "root");
-            });
-            cell.get(|val| {
-                assert_eq!(val.str(), "B");
-            });
-        }
-        owner.validate();
+                cell.get(|val| {
+                    assert_eq!(val.str(), "B");
+                });
+            }
+            owner.validate();
         });
     }
     #[test]
     fn simple_cell_assign() {
-        dummy_model(||{
-        let owner = SpyOwner2::new();
-        {
-            let cell = ArcShiftCell::new(owner.create("original"));
-            let new_value = ArcShift::new(owner.create("new"));
+        dummy_model(|| {
+            let owner = SpyOwner2::new();
+            {
+                let cell = ArcShiftCell::new(owner.create("original"));
+                let new_value = ArcShift::new(owner.create("new"));
 
-            cell.get(|val| {
-                assert_eq!(val.str(), "original");
-                assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
-            });
+                cell.get(|val| {
+                    assert_eq!(val.str(), "original");
+                    assert!(cell.assign(&ArcShift::new(owner.create("dummy"))).is_err());
+                });
 
-            cell.assign(&new_value).unwrap();
+                cell.assign(&new_value).unwrap();
 
-            cell.get(|val| assert_eq!(val.str(), "new"));
-        }
-    });
+                cell.get(|val| assert_eq!(val.str(), "new"));
+            }
+        });
     }
 
     #[test]
     fn simple_rcu() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        shift.rcu(|x| x + 1);
-        assert_eq!(*shift.get(), 43u32);
+            let mut shift = ArcShift::new(42u32);
+            shift.rcu(|x| x + 1);
+            assert_eq!(*shift.get(), 43u32);
         });
     }
 
     #[test]
     fn simple_rcu_maybe() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert!(shift.rcu_maybe(|x| Some(x + 1)));
-        assert_eq!(*shift.get(), 43u32);
-        assert_eq!(shift.rcu_maybe(|_x| None), false);
-        assert_eq!(*shift.get(), 43u32);
+            let mut shift = ArcShift::new(42u32);
+            assert!(shift.rcu_maybe(|x| Some(x + 1)));
+            assert_eq!(*shift.get(), 43u32);
+            assert_eq!(shift.rcu_maybe(|_x| None), false);
+            assert_eq!(*shift.get(), 43u32);
         });
     }
     #[test]
     fn simple_rcu_maybe2() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert_eq!(shift.rcu_maybe(|x| Some(x + 1)), true);
-        assert_eq!(shift.rcu_maybe(|_x| None), false);
-        assert_eq!(*shift.get(), 43u32);
-        assert_eq!(shift.rcu_maybe(|_x| None), false);
-        assert_eq!(*shift.get(), 43u32);
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(shift.rcu_maybe(|x| Some(x + 1)), true);
+            assert_eq!(shift.rcu_maybe(|_x| None), false);
+            assert_eq!(*shift.get(), 43u32);
+            assert_eq!(shift.rcu_maybe(|_x| None), false);
+            assert_eq!(*shift.get(), 43u32);
         });
     }
 
     #[test]
     fn simple_rcu_maybe3() {
-        dummy_model(||{
-        let mut shift = ArcShift::new(42u32);
-        let mut shift2 = shift.clone();
-        assert_eq!(shift.rcu_maybe(|x| Some(x + 1)), true);
-        assert_eq!(shift.rcu_maybe(|_x| None), false);
-        assert_eq!(*shift.get(), 43u32);
-        assert_eq!(shift.rcu_maybe(|_x| None), false);
-        assert_eq!(*shift.get(), 43u32);
-        assert_eq!(*shift2.get(), 43u32);
-    });
+        dummy_model(|| {
+            let mut shift = ArcShift::new(42u32);
+            let mut shift2 = shift.clone();
+            assert_eq!(shift.rcu_maybe(|x| Some(x + 1)), true);
+            assert_eq!(shift.rcu_maybe(|_x| None), false);
+            assert_eq!(*shift.get(), 43u32);
+            assert_eq!(shift.rcu_maybe(|_x| None), false);
+            assert_eq!(*shift.get(), 43u32);
+            assert_eq!(*shift2.get(), 43u32);
+        });
     }
     #[test]
     fn simple_deref() {
         dummy_model(|| {
-        let shift = ArcShift::new(42u32);
-        assert_eq!(*shift, 42u32);
+            let shift = ArcShift::new(42u32);
+            assert_eq!(*shift, 42u32);
         });
     }
     #[test]
     fn simple_get4() {
         dummy_model(|| {
-        let shift = ArcShift::new(42u32);
-        assert_eq!(*shift.shared_get(), 42u32);
+            let shift = ArcShift::new(42u32);
+            assert_eq!(*shift.shared_get(), 42u32);
         });
     }
     #[test]
     fn simple_get_mut() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        // Uniquely owned values can be modified using 'try_get_mut'.
-        assert_eq!(*shift.try_get_mut().unwrap(), 42);
+            let mut shift = ArcShift::new(42u32);
+            // Uniquely owned values can be modified using 'try_get_mut'.
+            assert_eq!(*shift.try_get_mut().unwrap(), 42);
         });
     }
     #[test]
     fn simple_zerosized() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(());
-        assert_eq!(*shift.get(), ());
-        shift.update(());
-        assert_eq!(*shift.get(), ());
+            let mut shift = ArcShift::new(());
+            assert_eq!(*shift.get(), ());
+            shift.update(());
+            assert_eq!(*shift.get(), ());
         });
     }
     #[test]
     fn simple_update() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42);
-        let old = &*shift;
-        shift.update(*old + 4);
-        shift.reload();
+            let mut shift = ArcShift::new(42);
+            let old = &*shift;
+            shift.update(*old + 4);
+            shift.reload();
         });
     }
 
     #[test]
     fn simple_get_mut2() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        let mut shift2 = shift.clone();
-        shift2.update(43);
-        assert_eq!(shift.try_get_mut(), None);
+            let mut shift = ArcShift::new(42u32);
+            let mut shift2 = shift.clone();
+            shift2.update(43);
+            assert_eq!(shift.try_get_mut(), None);
         });
     }
     #[test]
     fn simple_get_mut3() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        let _shift2 = ArcShift::downgrade(&shift);
-        shift.update(43);
-        assert_eq!(shift.try_get_mut(), None);
+            let mut shift = ArcShift::new(42u32);
+            let _shift2 = ArcShift::downgrade(&shift);
+            shift.update(43);
+            assert_eq!(shift.try_get_mut(), None);
         });
     }
     #[test]
     fn simple_get_mut4_mut() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        let mut shift2 = shift.clone();
-        shift2.update(43);
-        drop(shift2);
-        assert_eq!(shift.try_get_mut(), Some(&mut 43));
+            let mut shift = ArcShift::new(42u32);
+            let mut shift2 = shift.clone();
+            shift2.update(43);
+            drop(shift2);
+            assert_eq!(shift.try_get_mut(), Some(&mut 43));
         });
     }
     #[test]
     fn simple_try_into() {
         dummy_model(|| {
-        let shift = ArcShift::new(42u32);
-        // Uniquely owned values can be moved out without being dropped
-        assert_eq!(shift.try_into_inner().unwrap(), 42);
+            let shift = ArcShift::new(42u32);
+            // Uniquely owned values can be moved out without being dropped
+            assert_eq!(shift.try_into_inner().unwrap(), 42);
         });
     }
 
     #[test]
     fn simple_into_inner() {
         dummy_model(|| {
-        let shift = ArcShift::new(42u32);
-        // Uniquely owned values can be moved out without being dropped
-        assert_eq!(shift.try_into_inner().unwrap(), 42);
+            let shift = ArcShift::new(42u32);
+            // Uniquely owned values can be moved out without being dropped
+            assert_eq!(shift.try_into_inner().unwrap(), 42);
         });
     }
     #[test]
     fn simple_into_inner2() {
         dummy_model(|| {
-        let shift = ArcShift::new(42u32);
-        let mut shift2 = shift.clone();
-        shift2.update(43);
-        drop(shift2);
-        assert_eq!(shift.try_into_inner(), Some(43));
+            let shift = ArcShift::new(42u32);
+            let mut shift2 = shift.clone();
+            shift2.update(43);
+            drop(shift2);
+            assert_eq!(shift.try_into_inner(), Some(43));
         });
     }
     #[test]
     fn simple_failing_into_inner() {
         dummy_model(|| {
-        let shift = ArcShift::new(42u32);
-        let _shift2 = shift.clone();
+            let shift = ArcShift::new(42u32);
+            let _shift2 = shift.clone();
 
-        assert_eq!(shift.try_into_inner(), None);
+            assert_eq!(shift.try_into_inner(), None);
         });
     }
     #[test]
     fn simple_failing_into_inner2() {
         dummy_model(|| {
-        let shift = ArcShift::new(42u32);
-        let mut shift2 = shift.clone();
-        shift2.update(43);
+            let shift = ArcShift::new(42u32);
+            let mut shift2 = shift.clone();
+            shift2.update(43);
 
-        assert_eq!(shift.try_into_inner(), None);
+            assert_eq!(shift.try_into_inner(), None);
         });
     }
 
     #[test]
     // There's no point in running this test under shuttle/loom,
     // and since it can take some time, let's just disable it.
-    #[cfg(not(any(loom,feature="shuttle")))]
+    #[cfg(not(any(loom, feature = "shuttle")))]
     fn simple_large() {
         dummy_model(|| {
-        #[cfg(not(miri))]
-        const SIZE: usize = 10_000_000;
-        #[cfg(miri)]
-        const SIZE: usize = 10_000;
+            #[cfg(not(miri))]
+            const SIZE: usize = 10_000_000;
+            #[cfg(miri)]
+            const SIZE: usize = 10_000;
 
-        let layout = Layout::new::<MaybeUninit<[u64; SIZE]>>();
+            let layout = Layout::new::<MaybeUninit<[u64; SIZE]>>();
 
-        let ptr: *mut [u64; SIZE] =
+            let ptr: *mut [u64; SIZE] =
             // # SAFETY:
             // layout is not zero-sized
             unsafe { std::alloc::alloc(layout) } as *mut [u64; SIZE];
-        for i in 0..SIZE {
+            for i in 0..SIZE {
+                // # SAFETY:
+                // ptr is valid (just allocated)
+                unsafe { *(*ptr).get_unchecked_mut(i) = 42 };
+            }
             // # SAFETY:
             // ptr is valid (just allocated)
-            unsafe { *(*ptr).get_unchecked_mut(i) = 42 };
-        }
-        // # SAFETY:
-        // ptr is valid (just allocated)
-        let bigbox = unsafe { Box::from_raw(ptr) };
-        let mut shift = ArcShift::from_box(bigbox);
-        let value = shift.get();
-        assert_eq!(value[0], 42);
+            let bigbox = unsafe { Box::from_raw(ptr) };
+            let mut shift = ArcShift::from_box(bigbox);
+            let value = shift.get();
+            assert_eq!(value[0], 42);
         });
     }
     #[test]
     fn simple_get2() {
         dummy_model(|| {
-        let mut shift = ArcShift::from_box(Box::new(42u32));
-        assert_eq!(*shift.get(), 42u32);
+            let mut shift = ArcShift::from_box(Box::new(42u32));
+            assert_eq!(*shift.get(), 42u32);
         });
     }
     #[test]
     fn simple_get3() {
         dummy_model(|| {
-        let mut shift = ArcShift::new("hello".to_string());
-        assert_eq!(shift.get(), "hello");
+            let mut shift = ArcShift::new("hello".to_string());
+            assert_eq!(shift.get(), "hello");
         });
     }
     #[test]
     fn simple_update0() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert_eq!(*shift.get(), 42u32);
-        shift.update(43);
-        assert_eq!(*shift.get(), 43u32);
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
+            shift.update(43);
+            assert_eq!(*shift.get(), 43u32);
         });
     }
     #[test]
     fn simple_update_boxed() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert_eq!(*shift.get(), 42u32);
-        shift.update_box(Box::new(43));
-        assert_eq!(*shift.get(), 43u32);
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
+            shift.update_box(Box::new(43));
+            assert_eq!(*shift.get(), 43u32);
         });
     }
 
     #[test]
     fn simple_update2() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert_eq!(*shift.get(), 42u32);
-        shift.update(43);
-        shift.update(44);
-        shift.update(45);
-        assert_eq!(*shift.get(), 45u32);
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
+            shift.update(43);
+            shift.update(44);
+            shift.update(45);
+            assert_eq!(*shift.get(), 45u32);
         });
     }
     #[test]
     fn simple_update3() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert_eq!(*shift.get(), 42u32);
-        shift.update_box(Box::new(45));
-        assert_eq!(*shift.get(), 45u32);
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
+            shift.update_box(Box::new(45));
+            assert_eq!(*shift.get(), 45u32);
         });
     }
 
     #[test]
     fn simple_update5() {
         dummy_model(|| {
-        let mut shift = ArcShift::new(42u32);
-        assert_eq!(*shift.get(), 42u32);
-        shift.update(45);
-        assert_eq!(*shift.get(), 45u32);
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
+            shift.update(45);
+            assert_eq!(*shift.get(), 45u32);
         });
     }
 
     #[test]
     fn simple_upgrade3a1() {
         dummy_model(|| {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let shift1 = ArcShift::new(InstanceSpy::new(count.clone()));
-        let shiftlight = ArcShift::downgrade(&shift1);
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let shift1 = ArcShift::new(InstanceSpy::new(count.clone()));
+            let shiftlight = ArcShift::downgrade(&shift1);
 
-        debug_println!("==== running shift.get() = ");
-        let mut shift2 = shiftlight.upgrade().unwrap();
-        debug_println!("==== running arc.update() = ");
-        shift2.update(InstanceSpy::new(count.clone()));
+            debug_println!("==== running shift.get() = ");
+            let mut shift2 = shiftlight.upgrade().unwrap();
+            debug_println!("==== running arc.update() = ");
+            shift2.update(InstanceSpy::new(count.clone()));
 
-        // SAFETY:
-        // No threading involved
-        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[&shiftlight]) };
-        debug_println!("==== Instance count: {}", count.load(Ordering::SeqCst));
-        drop(shift1);
-        assert_eq!(count.load(Ordering::SeqCst), 1); // The 'ArcShiftLight' should *not* keep any version alive
-        debug_println!("==== drop arc =");
-        drop(shift2);
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-        debug_println!("==== drop shiftroot =");
-        drop(shiftlight);
-        assert_eq!(count.load(Ordering::SeqCst), 0);
+            // SAFETY:
+            // No threading involved
+            unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[&shiftlight]) };
+            debug_println!("==== Instance count: {}", count.load(Ordering::SeqCst));
+            drop(shift1);
+            assert_eq!(count.load(Ordering::SeqCst), 1); // The 'ArcShiftLight' should *not* keep any version alive
+            debug_println!("==== drop arc =");
+            drop(shift2);
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+            debug_println!("==== drop shiftroot =");
+            drop(shiftlight);
+            assert_eq!(count.load(Ordering::SeqCst), 0);
         });
     }
     #[test]
     fn simple_upgrade3a0() {
-        dummy_model(||{
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut arc = ArcShift::new(InstanceSpy::new(count.clone()));
-        for _ in 0..10 {
-            arc.update(InstanceSpy::new(count.clone()));
-            debug_println!("Instance count: {}", count.load(Ordering::SeqCst));
-            arc.reload();
-            assert_eq!(count.load(Ordering::Relaxed), 1); // The 'arc' should *not* keep any version alive
-        }
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-        drop(arc);
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-    });
+        dummy_model(|| {
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut arc = ArcShift::new(InstanceSpy::new(count.clone()));
+            for _ in 0..10 {
+                arc.update(InstanceSpy::new(count.clone()));
+                debug_println!("Instance count: {}", count.load(Ordering::SeqCst));
+                arc.reload();
+                assert_eq!(count.load(Ordering::Relaxed), 1); // The 'arc' should *not* keep any version alive
+            }
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            drop(arc);
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+        });
     }
 
     #[test]
     fn simple_upgrade4b() {
         dummy_model(|| {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        {
-            let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
-            let shiftlight = ArcShift::downgrade(&shift);
-            let _shiftlight1 = shiftlight.clone();
-            let _shiftlight2 = shiftlight.clone();
-            let _shiftlight3 = shiftlight.clone();
-            let _shiftlight4 = shiftlight.clone();
-            let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            {
+                let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
+                let shiftlight = ArcShift::downgrade(&shift);
+                let _shiftlight1 = shiftlight.clone();
+                let _shiftlight2 = shiftlight.clone();
+                let _shiftlight3 = shiftlight.clone();
+                let _shiftlight4 = shiftlight.clone();
+                let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
 
-            debug_println!("== Calling update_shared ==");
-            shift.update(InstanceSpy::new(count.clone()));
-            assert_eq!(count.load(Ordering::SeqCst), 1);
-            debug_println!("== Calling drop(shift) ==");
-            drop(shift);
-            assert_eq!(count.load(Ordering::SeqCst), 0);
-        }
-        assert_eq!(count.load(Ordering::Relaxed), 0);
+                debug_println!("== Calling update_shared ==");
+                shift.update(InstanceSpy::new(count.clone()));
+                assert_eq!(count.load(Ordering::SeqCst), 1);
+                debug_println!("== Calling drop(shift) ==");
+                drop(shift);
+                assert_eq!(count.load(Ordering::SeqCst), 0);
+            }
+            assert_eq!(count.load(Ordering::Relaxed), 0);
         });
     }
     #[test]
     fn simple_upgrade4c() {
         dummy_model(|| {
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        {
-            let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
-            let shiftlight = ArcShift::downgrade(&shift);
-            let _shiftlight1 = shiftlight.clone();
-            let _shiftlight2 = shiftlight.clone();
-            let _shiftlight3 = shiftlight.clone();
-            let _shiftlight4 = shiftlight.clone();
-            let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            {
+                let mut shift = ArcShift::new(InstanceSpy::new(count.clone()));
+                let shiftlight = ArcShift::downgrade(&shift);
+                let _shiftlight1 = shiftlight.clone();
+                let _shiftlight2 = shiftlight.clone();
+                let _shiftlight3 = shiftlight.clone();
+                let _shiftlight4 = shiftlight.clone();
+                let _shiftlight5 = shiftlight.clone(); //Verify that early drop still happens with several light references (silences a cargo mutants-test :-) )
 
-            debug_println!("== Calling update_shared ==");
-            shift.update(InstanceSpy::new(count.clone()));
-            assert_eq!(count.load(Ordering::Relaxed), 1);
-            debug_println!("== Calling drop(shift) ==");
-            assert_eq!(count.load(Ordering::Relaxed), 1);
-        }
-        assert_eq!(count.load(Ordering::Relaxed), 0);
+                debug_println!("== Calling update_shared ==");
+                shift.update(InstanceSpy::new(count.clone()));
+                assert_eq!(count.load(Ordering::Relaxed), 1);
+                debug_println!("== Calling drop(shift) ==");
+                assert_eq!(count.load(Ordering::Relaxed), 1);
+            }
+            assert_eq!(count.load(Ordering::Relaxed), 0);
         });
     }
 }

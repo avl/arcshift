@@ -535,8 +535,6 @@ fn get_weak_count(count: usize) -> usize {
     count
 }
 
-/// Node has next, or will soon have next
-const WEAK_HAVE_NEXT: usize = 1 << (usize::BITS - 1);
 const WEAK_HAVE_PREV: usize = 1 << (usize::BITS - 2);
 
 /// To avoid potential unsafety if refcounts overflow and wrap around,
@@ -555,10 +553,6 @@ fn get_weak_prev(count: usize) -> bool {
     (count & WEAK_HAVE_PREV) != 0
 }
 
-fn get_weak_next(count: usize) -> bool {
-    (count & WEAK_HAVE_NEXT) != 0
-}
-
 fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
     if prev.is_null() {
         1
@@ -571,9 +565,8 @@ fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
 #[cfg(any(test, feature = "debug"))]
 fn format_weak(weak: usize) -> std::string::String {
     let count = weak & ((1 << (usize::BITS - 2)) - 1);
-    let have_next = (weak & WEAK_HAVE_NEXT) != 0;
     let have_prev = (weak & WEAK_HAVE_PREV) != 0;
-    std::format!("(weak: {} prev: {} next: {})", count, have_prev, have_next)
+    std::format!("(weak: {} prev: {})", count, have_prev)
 }
 
 #[allow(unused)]
@@ -1595,8 +1588,6 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
                 item_ptr,
                 format_weak(_res - 1)
             );
-            #[cfg(feature = "validate")]
-            assert!(get_weak_next(_res));
             // This should never reach 0 here. We _know_ that 'item' has a 'next'. Thus, this 'next'
             // must hold a reference count on this.
             #[cfg(feature = "validate")]
@@ -2237,12 +2228,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             continue;
         }
 
-        #[cfg(feature = "debug")]
-        if get_weak_next(prior_weak) {
-            let _next_ptr = item.next.load(Ordering::SeqCst);
-            debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is {:?})", item_ptr, _next_ptr);
-        }
-
         debug_println!("No add race, prior_weak: {}", format_weak(prior_weak));
 
         // We now have enough information to know if we can drop payload, if desired
@@ -2308,14 +2293,7 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             format_weak(prior_weak)
         );
         if get_weak_count(prior_weak) == 1 {
-            if get_weak_next(prior_weak) {
-                #[cfg(test)]
-                {
-                    std::eprintln!("This case should not be possible, since it implies the 'next' object didn't increase the refcount");
-                    std::process::abort();
-                }
-            }
-            // We know there's no next here either, since we checked 'get_weak_next' before the cmpxch, so we _KNOW_ we're the only user now.
+            // We know there's no next here either, because prior weak_count was 1, which is impossible if there is a 'next'
             if !get_weak_prev(prior_weak) {
                 debug_println!("drop weak {:x?}, prior count = 1, raw deallocate", item_ptr);
                 drop_job_queue.report_sole_user();
@@ -2375,7 +2353,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
 
         let _weak_was = loop {
             let weak_count = item.weak_count.load(Ordering::SeqCst);
-            let new_weak_count = (weak_count | WEAK_HAVE_NEXT) + 1;
+            let new_weak_count = (weak_count) + 1;
             if item
                 .weak_count
                 .compare_exchange(
@@ -2449,8 +2427,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
             );
             #[cfg(feature = "validate")]
             assert!(get_weak_count(_weak_count) > 1);
-
-
         }
 
         item_ptr = val_dummy;
@@ -2873,12 +2849,11 @@ impl<T: ?Sized> ArcShift<T> {
             let item = unsafe { &*item_ptr };
             let weak_count = item.weak_count.load(Ordering::SeqCst);
             if get_weak_count(weak_count) == 1
-                && !get_weak_next(weak_count)
                 && !get_weak_prev(weak_count)
                 && item.strong_count.load(Ordering::SeqCst) == 1
             {
                 let weak_count = item.weak_count.load(Ordering::SeqCst);
-                if get_weak_count(weak_count) == 1 && !get_weak_next(weak_count) {
+                if get_weak_count(weak_count) == 1 {
                     // SAFETY:
                     // The above constraints actually guarantee there can be no concurrent access.
                     //
@@ -2933,8 +2908,31 @@ impl<T: ?Sized> ArcShift<T> {
     /// Reload this ArcShift instance, and return the latest value.
     #[inline(always)]
     pub fn get(&mut self) -> &T {
-        self.reload();
-        (*self).deref()
+        if is_sized::<T>() {
+            let ptr = from_dummy::<T, SizedMetadata>(self.item.as_ptr());
+            // SAFETY:
+            // self.item is always a valid pointer
+            let item = unsafe { &*ptr };
+            let next = item.next.load(Ordering::Relaxed);
+            if next.is_null() {
+                // SAFETY:
+                // self.item is always a valid pointer
+                return unsafe { item.payload() };
+            }
+            Self::advance_strong_helper2::<SizedMetadata>(&mut self.item)
+        } else {
+            let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
+            // SAFETY:
+            // self.item is always a valid pointer
+            let item = unsafe { &*ptr };
+            let next = item.next.load(Ordering::Relaxed);
+            if next.is_null() {
+                // SAFETY:
+                // self.item is always a valid pointer
+                return unsafe { item.payload() };
+            }
+            Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item)
+        }
     }
 
     /// Get the current value of this ArcShift instance.
@@ -2982,60 +2980,58 @@ impl<T: ?Sized> ArcShift<T> {
             unsafe { (*item).strong_count.load(Ordering::SeqCst) }
         })
     }
+    #[inline(never)]
+    #[cold]
+    fn advance_strong_helper2<M: IMetadata>(old_item_ptr: &mut NonNull<ItemHolderDummy<T>>) -> &T {
+        let mut jobq = DropHandler::default();
+        let mut item_ptr = old_item_ptr.as_ptr() as *const _;
+        // Lock free. Only loops if disturb-flag was set, meaning other thread
+        // has offloaded work on us, and it has made progress.
+        loop {
+            item_ptr = do_advance_strong::<T, M>(item_ptr, &mut jobq);
+            let (need_rerun, _strong_refs) =
+                do_janitor_task(from_dummy::<T, M>(item_ptr), &mut jobq);
+            if need_rerun {
+                debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
+                continue;
+            }
+            jobq.resume_any_panics();
+            // SAFETY:
+            // pointer returned by do_advance_strong is always a valid pointer
+            *old_item_ptr = unsafe { NonNull::new_unchecked(item_ptr as *mut _) };
+            // SAFETY:
+            // pointer returned by do_advance_strong is always a valid pointer
+            let item = unsafe { &*from_dummy::<T, M>(item_ptr) };
+            // SAFETY:
+            // pointer returned by do_advance_strong is always a valid pointer
+            return unsafe { item.payload() };
+        }
+    }
 
     /// Update this instance to the latest value.
     #[inline(always)]
     pub fn reload(&mut self) {
-        #[inline(never)]
-        fn advance_strong_helper2<T: ?Sized, M: IMetadata>(
-            item_ptr: *const ItemHolder<T, M>,
-        ) -> *const ItemHolderDummy<T> {
-            let mut jobq = DropHandler::default();
-            let mut item_ptr = to_dummy(item_ptr);
-            // Lock free. Only loops if disturb-flag was set, meaning other thread
-            // has offloaded work on us, and it has made progress.
-            loop {
-                item_ptr = do_advance_strong::<T, M>(item_ptr, &mut jobq);
-                let (need_rerun, _strong_refs) =
-                    do_janitor_task(from_dummy::<T, M>(item_ptr), &mut jobq);
-                if need_rerun {
-                    debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
-                    continue;
-                }
-                jobq.resume_any_panics();
-                return item_ptr;
-            }
-        }
-
-        #[inline(always)]
-        fn advance_strong_helper<T: ?Sized, M: IMetadata>(
-            item_ptr: *const ItemHolder<T, M>,
-        ) -> *const ItemHolderDummy<T> {
+        if is_sized::<T>() {
+            let ptr = from_dummy::<T, SizedMetadata>(self.item.as_ptr());
             // SAFETY:
-            // self.item (ptr) is a valid non-null pointer.
-            // Doing a relaxed load here is safe. It doesn't matter at all for correctness
-            // if this load synchronizes with anything. If the loaded value is non-null,
-            // we proceed with the full 'advance' operation.
-            // See crate documentation.
-            if unsafe { undecorate((*item_ptr).next.load(Ordering::Relaxed)).is_null() } {
-                // Nothing to upgrade to
-                // This is a fast-path optimization
-                return core::ptr::null();
+            // self.item is always a valid pointer
+            let item = unsafe { &*ptr };
+            let next = item.next.load(Ordering::Relaxed);
+            if next.is_null() {
+                return;
             }
-            advance_strong_helper2(item_ptr)
+            Self::advance_strong_helper2::<SizedMetadata>(&mut self.item);
+        } else {
+            let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
+            // SAFETY:
+            // self.item is always a valid pointer
+            let item = unsafe { &*ptr };
+            let next = item.next.load(Ordering::Relaxed);
+            if next.is_null() {
+                return;
+            }
+            Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item);
         }
-        let advanced = with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
-            advance_strong_helper(item)
-        });
-        if advanced.is_null() {
-            return;
-        }
-
-        // SAFETY:
-        // 'advanced' is either null, or a value returned by 'do_advance_strong'.
-        // it isn't null, since we checked that above. And 'do_advance_strong' always
-        // returns valid non-null pointers.
-        self.item = unsafe { NonNull::new_unchecked(advanced as *mut _) };
     }
 
     /// Check all links and refcounts.
