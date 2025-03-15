@@ -1,14 +1,12 @@
-use std::hint::black_box;
 use arcshift::ArcShift;
+use std::hint::black_box;
 use std::thread;
-
 
 /// Test
 #[inline(never)]
 pub fn show_reload(t: &mut ArcShift<u64>) -> &u64 {
     t.get()
 }
-
 
 fn main() {
     let mut arc = ArcShift::new("Hello".to_string());

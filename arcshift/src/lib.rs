@@ -266,9 +266,11 @@ use crate::deferred_panics_helper::{DropHandler, IDropHandler, StealingDropHandl
 #[cfg(all(not(loom), not(feature = "shuttle")))]
 mod atomic {
     pub use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
-    #[cfg(test)]
+    #[allow(unused)]
+    #[cfg(any(test, feature = "std"))]
     pub use std::sync::{Arc, Mutex};
-    #[cfg(test)]
+    #[allow(unused)]
+    #[cfg(any(test, feature = "std"))]
     pub use std::thread;
 }
 
@@ -296,16 +298,16 @@ mod atomic {
 }
 
 #[doc(hidden)]
-#[cfg(all(feature = "debug", not(loom)))]
+#[cfg(all(feature = "std", feature = "debug", not(loom)))]
 #[macro_export]
 macro_rules! debug_println {
     ($($x:tt)*) => {
-        println!("{:?}: {}", crate::atomic::thread::current().id(), format!($($x)*))
+        std::println!("{:?}: {}", $crate::atomic::thread::current().id(), std::format!($($x)*))
     }
 }
 
 #[doc(hidden)]
-#[cfg(all(feature = "debug", loom))]
+#[cfg(all(feature = "std", feature = "debug", loom))]
 #[macro_export]
 macro_rules! debug_println {
     ($($x:tt)*) => { std::println!($($x)*) }
@@ -562,7 +564,7 @@ fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
 }
 
 #[allow(unused)]
-#[cfg(any(test, feature = "debug"))]
+#[cfg(all(feature = "std", feature = "debug"))]
 fn format_weak(weak: usize) -> std::string::String {
     let count = weak & ((1 << (usize::BITS - 2)) - 1);
     let have_prev = (weak & WEAK_HAVE_PREV) != 0;
@@ -1752,6 +1754,8 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         a,
                         a_strong,
                         a_strong - 1,
+                        // SAFETY:
+                        // a has not yet been dropped and is a valid ptr
                         format_weak(unsafe { (*a).weak_count.load(Ordering::SeqCst) })
                     );
                     if a_strong == 1 {
@@ -1794,6 +1798,8 @@ fn raw_deallocate_node<T: ?Sized, M: IMetadata>(
     // that it has exclusive access.
     #[cfg(feature = "validate")]
     assert_eq!(
+        // SAFETY:
+        // item_ptr is guaranteed valid by caller
         unsafe { (*item_ptr).strong_count.load(Ordering::SeqCst) },
         0,
         "{:x?} strong count must be 0 when deallocating",
@@ -1802,6 +1808,8 @@ fn raw_deallocate_node<T: ?Sized, M: IMetadata>(
 
     #[cfg(feature = "validate")]
     {
+        // SAFETY:
+        // item_ptr is guaranteed valid by caller
         let item_ref = unsafe { &*(item_ptr as *mut ItemHolder<T, M>) };
         item_ref.magic1.store(0xdeaddead, Ordering::Relaxed);
         item_ref.magic2.store(0xdeaddea2, Ordering::Relaxed);
@@ -2054,7 +2062,10 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 );
                 return (deleted_count > 0).then_some(item_ptr);
             }
-            debug_println!("Deallocating node in janitor task: {:x?}, dec: {:?}, weak count: {}, strong count: {}", item_ptr, unsafe{ (*from_dummy::<T,M>(item_ptr)).decoration()}, format_weak(item_weak_count),
+            debug_println!("Deallocating node in janitor task: {:x?}, dec: {:?}, weak count: {}, strong count: {}", item_ptr,
+                // SAFETY:
+                // item_ptr is valid
+                unsafe{ (*from_dummy::<T,M>(item_ptr)).decoration()}, format_weak(item_weak_count),
                 item.strong_count.load(Ordering::SeqCst)
             );
 
@@ -2501,9 +2512,13 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
             }
         }
     }
-    debug_println!("Dropping payload {:x?} (dec: {:?})", item_ptr, unsafe {
-        (*item_ptr).decoration()
-    });
+    debug_println!(
+        "Dropping payload {:x?} (dec: {:?})",
+        item_ptr,
+        // SAFETY:
+        // item_ptr is valid
+        unsafe { (*item_ptr).decoration() }
+    );
     // SAFETY: item_ptr must be valid, guaranteed by caller.
 
     drop_queue.do_drop(item_ptr as *mut _);
@@ -2537,6 +2552,8 @@ fn do_dealloc<T: ?Sized, M: IMetadata>(item_ptr: *const ItemHolder<T, M>) {
 
     #[cfg(feature = "validate")]
     {
+        // SAFETY:
+        // item_ptr is valid
         let item_ref = unsafe { &*(item_ptr as *mut ItemHolder<T, M>) };
         item_ref.magic1.store(0xdeaddead, Ordering::Relaxed);
         item_ref.magic2.store(0xdeaddea2, Ordering::Relaxed);
@@ -2554,7 +2571,11 @@ fn do_drop_strong<T: ?Sized, M: IMetadata>(
     debug_println!(
         "drop strong of {:x?} (strong count: {:?}, weak: {})",
         full_item_ptr,
+        // SAFETY:
+        // full_item_ptr is valid
         unsafe { (*full_item_ptr).strong_count.load(Ordering::SeqCst) },
+        // SAFETY:
+        // full_item_ptr is valid
         get_weak_count(unsafe { (*full_item_ptr).weak_count.load(Ordering::SeqCst) })
     );
     let mut item_ptr = to_dummy(full_item_ptr);
