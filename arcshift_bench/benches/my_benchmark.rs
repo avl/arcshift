@@ -96,11 +96,7 @@ fn arcswap_cached_bench(c: &mut Criterion) {
 
 fn arcswap_update(c: &mut Criterion) {
     let ac = ArcSwap::from_pointee(42u32);
-    c.bench_function("arc_swap_update", |b| {
-        b.iter(|| {
-            ac.swap(Arc::new(43u32))
-        })
-    });
+    c.bench_function("arc_swap_update", |b| b.iter(|| ac.swap(Arc::new(43u32))));
 }
 criterion_group!(
     benches,
