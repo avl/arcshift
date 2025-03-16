@@ -526,6 +526,11 @@ fn generic_3threading_a_all() {
 fn generic_3threading_a_3() {
     generic_3threading_a_all_impl(3)
 }
+#[cfg(not(feature = "disable_slow_tests"))]
+#[test]
+fn generic_3threading_a_5() {
+    generic_3threading_a_all_impl(5)
+}
 
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_3threading_a_all_impl(skip: usize) {
@@ -534,26 +539,34 @@ fn generic_3threading_a_all_impl(skip: usize) {
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
     > = vec![
         |owner, mut shift, thread| {
+            debug_println!("====> shift.update()");
             shift.update(owner.create(thread));
             Some(shift)
         },
         |owner, mut shift, thread| {
+            debug_println!("====> shift.update()");
             shift.update(owner.create(thread));
             Some(shift)
         },
         |_owner, mut shift, _thread| {
+            debug_println!("====> shift.get()");
             std::hint::black_box(shift.get());
             Some(shift)
         },
         |_owner, shift, _thread| {
+            debug_println!("====> shift.shared_get()");
             std::hint::black_box(shift.shared_get());
             Some(shift)
         },
         |_owner, mut shift, _thread| {
+            debug_println!("====> shift.reload()");
             shift.reload();
             Some(shift)
         },
-        |_owner, _shift, _thread| None,
+        |_owner, _shift, _thread| {
+            debug_println!("====> drop()");
+            None
+        },
     ];
     for (n1, op1) in ops.iter().enumerate() {
         for (n2, op2) in ops.iter().enumerate() {
@@ -561,7 +574,10 @@ fn generic_3threading_a_all_impl(skip: usize) {
                 {
                     println!("========= {} {} {} ==========", n1, n2, n3);
                 }
-                generic_3thread_ops_a(*op1, *op2, *op3)
+                generic_3thread_ops_a(*op1, *op2, *op3);
+                if skip != 0 {
+                    return;
+                }
             }
         }
     }

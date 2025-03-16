@@ -944,10 +944,12 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         ret
     }
 
+
+    /*
     #[cfg(feature = "debug")]
     fn decoration(&self) -> ItemStateEnum {
         get_decoration(self.next.load(Ordering::SeqCst))
-    }
+    }*/
 
     fn has_payload(&self) -> bool {
         !get_decoration(self.next.load(atomic::Ordering::SeqCst)).is_dropped()
@@ -1049,8 +1051,9 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
             #[cfg(feature = "validate")]
             assert!(
                 decoration.is_locked(),
-                "node {:x?} was not actually locked",
-                self as *const _
+                "node {:x?} was not actually locked, decoration: {:?}",
+                self as *const _,
+                decoration
             );
 
             debug_println!("Unlocked dec {:x?}: {:x?}", self as *const Self, decoration);
@@ -1332,9 +1335,8 @@ fn do_clone_strong<T: ?Sized, M: IMetadata>(
     // do_clone_strong must be called with a valid item_ptr
     let item = unsafe { &*item_ptr };
     debug_println!(
-        "Strong clone, about to access strong count of {:x?} (weak: {})",
-        item_ptr,
-        format_weak(item.weak_count.load(Ordering::Relaxed))
+        "Strong clone, about to access strong count of {:x?}",
+        item_ptr
     );
     let strong_count = item.strong_count.fetch_add(1, Ordering::Relaxed);
 
@@ -1366,7 +1368,7 @@ fn do_clone_weak<T: ?Sized, M: IMetadata>(
         panic!("weak ref count max limit exceeded")
     }
     debug_println!(
-        "weak-clone, fetch_add, new weak count: {:x?} is {}",
+        "==> weak-clone, fetch_add, new weak count: {:x?} is {}",
         item_ptr,
         format_weak(weak_count + 1)
     );
@@ -1396,7 +1398,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
             panic!("weak ref count max limit exceeded")
         }
         debug_println!(
-            "do_upgrade_weak {:x?} incr weak count to {}",
+            "==> do_upgrade_weak {:x?} incr weak count to {}",
             item_ptr,
             format_weak(weak_count + 1)
         );
@@ -1415,7 +1417,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
             if prior_strong_count == 0 {
                 let _prior_weak_count = item.weak_count.fetch_add(1, Ordering::SeqCst);
                 debug_println!(
-                    "pre-upgrade strong=0 {:x?}, increase weak to {}",
+                    "==> pre-upgrade strong=0 {:x?}, increase weak to {}",
                     item_ptr,
                     get_weak_count(_prior_weak_count) + 1
                 );
@@ -1442,6 +1444,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                         let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
                         #[cfg(feature = "validate")]
                         assert!(get_weak_count(_prior_weak_count) > 1);
+                        debug_println!("==> {:x?} reduced weak to {}", item_ptr, get_weak_count(_prior_weak_count-1));
                     }
                     // Lock free. We only get here if some other node has dropped 'item_next'
                     // which is considered progress.
@@ -1450,7 +1453,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
 
                 let _reduce_weak = item.weak_count.fetch_sub(1, Ordering::SeqCst);
                 debug_println!(
-                    "upgrade success, new strong_count: {}, new weak: {}",
+                    "==> upgrade success, new strong_count: {}, new weak: {}",
                     prior_strong_count + 1,
                     format_weak(_reduce_weak - 1)
                 );
@@ -1466,7 +1469,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 if prior_strong_count == 0 {
                     let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
                     debug_println!(
-                        "pre-upgrade strong=0 race2 {:x?}, decrease weak to {}",
+                        "==> pre-upgrade strong=0 race2 {:x?}, decrease weak to {}",
                         item_ptr,
                         get_weak_count(_prior_weak_count) - 1
                     );
@@ -1569,11 +1572,10 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
         debug_println!("advance: Increasing next(={:x?}).weak_count", next_ptr);
         let _res = next.weak_count.fetch_add(1, Ordering::SeqCst);
         debug_println!(
-            "do_advance_impl: increment weak of {:?}, was {}, now {}, now accessing: {:x?}",
+            "==> do_advance_impl: increment weak of {:?}, was {}, now {}",
             next_ptr,
             format_weak(_res),
             format_weak(_res + 1),
-            item_ptr
         );
 
         let _advanced = item.advance_count.fetch_sub(1, Ordering::SeqCst);
@@ -1587,7 +1589,7 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
             debug_println!("do_advance_impl: decrease weak from {:x?}", item_ptr);
             let _res = item.weak_count.fetch_sub(1, Ordering::SeqCst);
             debug_println!(
-                "do_advance_impl: decrease weak from {:x?} - decreased to {}",
+                "==> do_advance_impl: decrease weak from {:x?} - decreased to {}",
                 item_ptr,
                 format_weak(_res - 1)
             );
@@ -1617,9 +1619,10 @@ fn do_advance_weak<T: ?Sized, M: IMetadata>(
             let _a_weak = unsafe { (*a).weak_count.fetch_sub(1, Ordering::SeqCst) };
             // We have a weak ref count on 'b' given to use by `do_advance_impl`, which we're fine with
             debug_println!(
-                "weak advance {:x?}, decremented weak count to {}",
+                "==> weak advance {:x?}, decremented weak counts to a:{:x?}={}",
                 a,
-                format_weak(_a_weak.wrapping_sub(1))
+                a,
+                format_weak(_a_weak.wrapping_sub(1)),
             );
             #[cfg(feature = "validate")]
             assert!(get_weak_count(_a_weak) > 1);
@@ -1669,7 +1672,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                 // b is a valid pointer (see above)
                 let _prior_weak = unsafe { (*b).weak_count.fetch_add(1, Ordering::SeqCst) };
                 debug_println!(
-                    "Prior to strong_count imcrement {:x?} from 0, added weak count. Weak now: {}",
+                    "==> Prior to strong_count increment {:x?} from 0, added weak count. Weak now: {}",
                     b,
                     format_weak(_prior_weak + 1)
                 );
@@ -1724,10 +1727,11 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                             // b is a valid pointer. See above.
                             let _b_weak_count =
                                 unsafe { (*b).weak_count.fetch_sub(1, Ordering::SeqCst) };
-                            debug_println!("do_advance_strong:rare2 {:x?} reduced strong count back to 0, reduced weak to: {}", b, get_weak_count(_b_weak_count-1));
+                            debug_println!("==> do_advance_strong:rare2 {:x?} reduced strong count back to 0, reduced weak to: {}", b, get_weak_count(_b_weak_count-1));
                             #[cfg(feature = "validate")]
                             assert!(get_weak_count(_b_weak_count) > 1);
                         }
+                        debug_println!("race, other thread added new node");
                         // Lock free, we can only get here if another thread has added a new node.
                         return false;
                     }
@@ -1738,7 +1742,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                     // b is a valid pointer. See above.
                     let _b_weak_count = unsafe { (*b).weak_count.fetch_sub(1, Ordering::SeqCst) };
                     debug_println!(
-                        "strong advance {:x?}, reducing free b-count to {:?}",
+                        "==> strong advance {:x?}, reducing free weak b-count to {:?}",
                         b,
                         format_weak(_b_weak_count - 1)
                     );
@@ -1751,13 +1755,10 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                     #[cfg(feature = "validate")]
                     assert_ne!(a_strong, 0);
                     debug_println!(
-                        "a-strong {:x?} decreased {} -> {} (weak of a: {})",
+                        "a-strong {:x?} decreased {} -> {}",
                         a,
                         a_strong,
                         a_strong - 1,
-                        // SAFETY:
-                        // a has not yet been dropped and is a valid ptr
-                        format_weak(unsafe { (*a).weak_count.load(Ordering::SeqCst) })
                     );
                     if a_strong == 1 {
                         do_drop_payload_if_possible(a, false, drop_job_queue);
@@ -1765,7 +1766,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         // SAFETY:
                         // a is a valid pointer. See above.
                         let _a_weak = unsafe { (*a).weak_count.fetch_sub(1, Ordering::SeqCst) };
-                        debug_println!("do_advance_strong:maybe dropping payload of a {:x?} (because strong-count is now 0). Adjusted weak to {}", a, format_weak(_a_weak.wrapping_sub(1)));
+                        debug_println!("==> do_advance_strong:maybe dropping payload of a {:x?} (because strong-count is now 0). Adjusted weak to {}", a, format_weak(_a_weak.wrapping_sub(1)));
                         #[cfg(feature = "validate")]
                         assert!(get_weak_count(_a_weak) > 0);
                     }
@@ -1776,7 +1777,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         // SAFETY:
                         // b is a valid pointer. See above.
                         let _prior_weak = unsafe { (*b).weak_count.fetch_sub(1, Ordering::SeqCst) };
-                        debug_println!("do_advance_strong: race on strong_count for {:x?} (restore-decr weak to {})", b, get_weak_count(_prior_weak - 1));
+                        debug_println!("==> do_advance_strong: race on strong_count for {:x?} (restore-decr weak to {})", b, get_weak_count(_prior_weak - 1));
                         #[cfg(feature = "validate")]
                         assert!(get_weak_count(_prior_weak) > 1);
                     }
@@ -1962,11 +1963,11 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         // ensures that no other janitor task can free them.
         let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
         debug_println!(
-            "Setting next of {:x?} to {:x?} (weak: {} (weak of start: {})",
+            "Setting next of {:x?} to {:x?}", // (weak: {} (weak of start: {})
             cur_ptr,
             start_ptr,
-            format_weak(cur.weak_count.load(Ordering::SeqCst)),
-            format_weak(start.weak_count.load(Ordering::SeqCst))
+            //format_weak(cur.weak_count.load(Ordering::SeqCst)),
+            //format_weak(start.weak_count.load(Ordering::SeqCst))
         );
         #[cfg(feature = "validate")]
         assert_ne!(cur_ptr, start_ptr);
@@ -2056,23 +2057,24 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             let item_weak_count = item.weak_count.load(Ordering::SeqCst);
             if get_weak_count(item_weak_count) > 1 {
                 debug_println!(
-                    "Find non-deleted {:x?}, count = {}, found node with weak count > 1 ({})",
+                    "==> Find non-deleted {:x?}, count = {}, found node with weak count > 1 ({})",
                     item_ptr,
                     deleted_count,
                     format_weak(item_weak_count)
                 );
                 return (deleted_count > 0).then_some(item_ptr);
             }
-            debug_println!("Deallocating node in janitor task: {:x?}, dec: {:?}, weak count: {}, strong count: {}", item_ptr,
+            debug_println!("==> Deallocating node in janitor task: {:x?}, dec: ?, weak count: {}", item_ptr,
                 // SAFETY:
                 // item_ptr is valid
-                unsafe{ (*from_dummy::<T,M>(item_ptr)).decoration()}, format_weak(item_weak_count),
-                item.strong_count.load(Ordering::SeqCst)
+                //unsafe{ (*from_dummy::<T,M>(item_ptr)).decoration()},
+                format_weak(item_weak_count),
+                //item.strong_count.load(Ordering::SeqCst)
             );
 
             #[cfg(feature = "validate")]
             {
-                let prior_item_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
+                let prior_item_weak_count = item.weak_count.load(Ordering::SeqCst);
                 if get_weak_count(prior_item_weak_count) != 1 {
                     #[cfg(feature = "validate")]
                     assert_eq!(
@@ -2268,11 +2270,11 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             }
         }
 
-        #[cfg(feature = "debug")]
+        /*#[cfg(feature = "debug")]
         {
             let _have_prev = !item.prev.load(Ordering::SeqCst).is_null();
             debug_println!("do_drop_weak: reducing weak count of {:x?}, to {} -> {} (have next/gc: {}, have prev: {}) ", item_ptr, format_weak(prior_weak), format_weak(prior_weak.wrapping_sub(1)), false,_have_prev);
-        }
+        }*/
 
         match item.weak_count.compare_exchange(
             prior_weak,
@@ -2282,7 +2284,7 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
         ) {
             Ok(_) => {
                 debug_println!(
-                    "drop weak {:x?}, did reduce weak to {}",
+                    "==> drop weak {:x?}, did reduce weak to {}",
                     item_ptr,
                     format_weak(prior_weak - 1)
                 );
@@ -2383,6 +2385,9 @@ fn do_update<T: ?Sized, M: IMetadata>(
                 );
                 continue;
             }
+            debug_println!("==> do_update {:x?} weak updated from {} to {}",
+                item_ptr, weak_count, new_weak_count
+            );
             break weak_count;
         };
 
@@ -2409,7 +2414,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
                 debug_println!("race, update of {:x?} to {:x?} failed", item_ptr, new_next);
                 let _res = item.weak_count.fetch_sub(1, Ordering::SeqCst);
                 debug_println!(
-                    "race, decreasing {:x?} weak to {}",
+                    "==> race, decreasing {:x?} weak to {}",
                     item_ptr,
                     format_weak(_res - 1)
                 );
@@ -2433,7 +2438,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
             do_drop_payload_if_possible(from_dummy::<T, M>(item_ptr), false, drop_job_queue);
             let _weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst);
             debug_println!(
-                "do_update: decrement weak of {:?}, new weak: {}",
+                "==> do_update: decrement weak of {:?}, new weak: {}",
                 item_ptr,
                 format_weak(_weak_count.saturating_sub(1))
             );
@@ -2514,11 +2519,11 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
         }
     }
     debug_println!(
-        "Dropping payload {:x?} (dec: {:?})",
+        "Dropping payload {:x?} (dec: ?)",
         item_ptr,
         // SAFETY:
         // item_ptr is valid
-        unsafe { (*item_ptr).decoration() }
+        //unsafe { (*item_ptr).decoration() }
     );
     // SAFETY: item_ptr must be valid, guaranteed by caller.
 
@@ -2570,14 +2575,14 @@ fn do_drop_strong<T: ?Sized, M: IMetadata>(
     drop_job_queue: &mut impl IDropHandler<T, M>,
 ) {
     debug_println!(
-        "drop strong of {:x?} (strong count: {:?}, weak: {})",
+        "drop strong of {:x?}",
         full_item_ptr,
         // SAFETY:
         // full_item_ptr is valid
-        unsafe { (*full_item_ptr).strong_count.load(Ordering::SeqCst) },
+        //unsafe { (*full_item_ptr).strong_count.load(Ordering::SeqCst) },
         // SAFETY:
         // full_item_ptr is valid
-        get_weak_count(unsafe { (*full_item_ptr).weak_count.load(Ordering::SeqCst) })
+        //get_weak_count(unsafe { (*full_item_ptr).weak_count.load(Ordering::SeqCst) })
     );
     let mut item_ptr = to_dummy(full_item_ptr);
 
@@ -2587,11 +2592,11 @@ fn do_drop_strong<T: ?Sized, M: IMetadata>(
 
     let prior_strong = item.strong_count.fetch_sub(1, Ordering::SeqCst);
     debug_println!(
-        "drop strong of {:x?}, prev count: {}, now {} (weak is {})",
+        "drop strong of {:x?}, prev count: {}, now {}",
         item_ptr,
         prior_strong,
         prior_strong - 1,
-        format_weak(item.weak_count.load(Ordering::SeqCst))
+        //format_weak(item.weak_count.load(Ordering::SeqCst))
     );
     if prior_strong == 1 {
         // This is the only case where we actually might need to drop the rightmost node's payload
