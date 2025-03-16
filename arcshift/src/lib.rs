@@ -2276,14 +2276,15 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             let o_strong = o_item.strong_count.load(Ordering::SeqCst);
             //let original_next = o_item.next.load(Ordering::SeqCst);
             if o_strong == 0 {
-                let can_drop_now_despite_next_check;
-                if strong_refs == NodeStrongStatus::NoStrongRefsExist {
+                let can_drop_now_despite_next_check = if strong_refs
+                    == NodeStrongStatus::NoStrongRefsExist
+                {
                     debug_println!("final drop analysis {:x?}: Can drop this payload, because no strong refs exists anywhere", item_ptr);
-                    can_drop_now_despite_next_check = true;
+                    true
                 } else {
                     debug_println!("final drop analysis {:x?}: no exemption condition found, can't drop this payload", item_ptr);
-                    can_drop_now_despite_next_check = false;
-                }
+                    false
+                };
                 if can_drop_now_despite_next_check {
                     do_drop_payload_if_possible(
                         o_item,
