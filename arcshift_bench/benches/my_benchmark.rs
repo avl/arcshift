@@ -94,6 +94,14 @@ fn arcswap_cached_bench(c: &mut Criterion) {
     });
 }
 
+fn arcswap_update(c: &mut Criterion) {
+    let ac = ArcSwap::from_pointee(42u32);
+    c.bench_function("arc_swap_update", |b| {
+        b.iter(|| {
+            ac.swap(Arc::new(43u32))
+        })
+    });
+}
 criterion_group!(
     benches,
     arcshift_shared_bench,
@@ -104,6 +112,7 @@ criterion_group!(
     arcswap_bench,
     arcswap_cached_bench,
     mutex_bench,
-    rwlock_read_bench
+    rwlock_read_bench,
+    arcswap_update,
 );
 criterion_main!(benches);

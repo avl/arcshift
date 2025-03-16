@@ -712,3 +712,16 @@ fn generic_2threading2d() {
         None,
     );
 }
+
+/// Simple race of drops, where the chain is 3 items long, and one instance points at start,
+/// and the other at end.
+#[test]
+fn generic_2threading2e() {
+    generic_2thread_ops_d(
+        |_owner1, _shift1, _thread| None,
+        |_owner2, mut _shift2, _thread| {
+            None
+        },
+        None,
+    );
+}

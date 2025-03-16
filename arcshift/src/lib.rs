@@ -2123,6 +2123,9 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         unlock_carry = node;
     };
 
+    #[cfg(feature="validate")]
+    assert!(!cur_ptr.is_null());
+
     // Iterate through chain, deleting nodes when possible
     // Lock free, since this loop just iterates through each node in the chain.
     while cur_ptr != end_ptr && !cur_ptr.is_null() {
@@ -3261,9 +3264,9 @@ impl<T: ?Sized> ArcShift<T> {
 #[cfg(test)]
 mod simple_tests {
     use crate::tests::dummy_model;
-    use crate::{ArcShift, ItemStateEnum, SizedMetadata};
+    use crate::{decorate, get_decoration, ArcShift, ItemStateEnum, SizedMetadata};
     use alloc::boxed::Box;
-
+    use std::ptr::dangling;
     #[cfg(not(feature = "shuttle"))]
     use crate::tests::model;
     #[cfg(not(feature = "shuttle"))]
@@ -3357,7 +3360,15 @@ mod simple_tests {
             let _y = ArcShift::downgrade(&x);
         });
     }
-
+    #[test]
+    fn pointer_decoration() {
+        dummy_model(|| {
+            assert_eq!(
+                get_decoration(decorate::<u32>(dangling(), ItemStateEnum::UndisturbedGcIsActive)),
+                ItemStateEnum::UndisturbedGcIsActive
+            );
+        });
+    }
     #[test]
     #[should_panic(expected = "panic: A")]
     fn panic_boxed_drop() {
@@ -3445,6 +3456,17 @@ mod simple_tests {
     #[test]
     fn simple_item_state_enum_semantics() {
         dummy_model(|| {
+
+
+            assert!(!ItemStateEnum::UndisturbedUndecorated.is_locked());
+            assert!(ItemStateEnum::UndisturbedGcIsActive.is_locked());
+            assert!(!ItemStateEnum::UndisturbedPayloadDropped.is_locked());
+            assert!(ItemStateEnum::UndisturbedPayloadDroppedAndGcActive.is_locked());
+            assert!(!ItemStateEnum::DisturbedUndecorated.is_locked());
+            assert!(ItemStateEnum::DisturbedGcIsActive.is_locked());
+            assert!(!ItemStateEnum::DisturbedPayloadDropped.is_locked());
+            assert!(ItemStateEnum::DisturbedPayloadDroppedAndGcActive.is_locked());
+
             assert_eq!(
                 ItemStateEnum::UndisturbedUndecorated.with_gc(),
                 ItemStateEnum::UndisturbedGcIsActive
@@ -3510,6 +3532,41 @@ mod simple_tests {
                 ItemStateEnum::DisturbedPayloadDroppedAndGcActive.with_disturbed(),
                 ItemStateEnum::DisturbedPayloadDroppedAndGcActive
             );
+
+
+            assert_eq!(
+                ItemStateEnum::UndisturbedUndecorated.dropped(),
+                ItemStateEnum::UndisturbedPayloadDropped
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedGcIsActive.dropped(),
+                ItemStateEnum::UndisturbedPayloadDroppedAndGcActive
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedPayloadDropped.dropped(),
+                ItemStateEnum::UndisturbedPayloadDropped
+            );
+            assert_eq!(
+                ItemStateEnum::UndisturbedPayloadDroppedAndGcActive.dropped(),
+                ItemStateEnum::UndisturbedPayloadDroppedAndGcActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedUndecorated.dropped(),
+                ItemStateEnum::DisturbedPayloadDropped
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedGcIsActive.dropped(),
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedPayloadDropped.dropped(),
+                ItemStateEnum::DisturbedPayloadDropped
+            );
+            assert_eq!(
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive.dropped(),
+                ItemStateEnum::DisturbedPayloadDroppedAndGcActive
+            );
+
         });
     }
 
@@ -3544,6 +3601,8 @@ mod simple_tests {
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
             assert_eq!(**x, 45);
             x.update(Box::new(1u32));
+            assert_eq!(x.weak_count(), 1);
+
             // SAFETY:
             // No threading involved, &x and &y are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
@@ -3603,6 +3662,9 @@ mod simple_tests {
             // No threading involved, &shift is valid.
             unsafe { ArcShift::debug_validate(&[&shift], &[]) };
             let shiftlight = ArcShift::downgrade(&shift);
+
+            assert_eq!(shift.weak_count(), 2);
+
             // SAFETY:
             // No threading involved, &shift and &shiftlight is valid.
             unsafe { ArcShift::debug_validate(&[&shift], &[&shiftlight]) };
