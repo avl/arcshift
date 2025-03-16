@@ -540,8 +540,6 @@ fn get_weak_count(count: usize) -> usize {
     count
 }
 
-/// Node has next, or will soon have next
-const WEAK_HAVE_NEXT: usize = 1 << (usize::BITS - 1);
 const WEAK_HAVE_PREV: usize = 1 << (usize::BITS - 2);
 
 /// To avoid potential unsafety if refcounts overflow and wrap around,
@@ -560,10 +558,6 @@ fn get_weak_prev(count: usize) -> bool {
     (count & WEAK_HAVE_PREV) != 0
 }
 
-fn get_weak_next(count: usize) -> bool {
-    (count & WEAK_HAVE_NEXT) != 0
-}
-
 #[cfg_attr(test, mutants::skip)]
 fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
     if prev.is_null() {
@@ -578,9 +572,8 @@ fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
 #[cfg_attr(test, mutants::skip)]
 fn format_weak(weak: usize) -> std::string::String {
     let count = weak & ((1 << (usize::BITS - 2)) - 1);
-    let have_next = (weak & WEAK_HAVE_NEXT) != 0;
     let have_prev = (weak & WEAK_HAVE_PREV) != 0;
-    std::format!("(weak: {} prev: {} next: {})", count, have_prev, have_next)
+    std::format!("(weak: {} prev: {})", count, have_prev)
 }
 
 #[allow(unused)]
@@ -1192,18 +1185,6 @@ fn verify_item<T: ?Sized>(_ptr: *const ItemHolderDummy<T>) {
         }
     }
 }
-#[cfg(feature = "validate")]
-#[cfg_attr(test, mutants::skip)] // This is only used for validation and test, it has no behaviour
-impl<T: ?Sized, M: IMetadata> Drop for ItemHolder<T, M> {
-    fn drop(&mut self) {
-        Self::verify(self as *const _);
-        debug_println!("ItemHolder<T>::drop {:?}", self as *const ItemHolder<T, M>);
-        {
-            self.magic1 = std::sync::atomic::AtomicU64::new(0xDEADDEA1DEADDEA1);
-            self.magic2 = std::sync::atomic::AtomicU64::new(0xDEADDEA2DEADDEA2);
-        }
-    }
-}
 
 const ITEM_STATE_LOCKED_FLAG: u8 = 1;
 const ITEM_STATE_DROPPED_FLAG: u8 = 2;
@@ -1607,8 +1588,7 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
                 item_ptr,
                 format_weak(_res - 1)
             );
-            #[cfg(feature = "validate")]
-            assert!(get_weak_next(_res));
+
             // This should never reach 0 here. We _know_ that 'item' has a 'next'. Thus, this 'next'
             // must hold a reference count on this.
             #[cfg(feature = "validate")]
@@ -2253,15 +2233,9 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             continue;
         }
         // Note, 'next' may be set here, immediately after us loading 'next' above.
-        // This is benign. In this case, 'prior_weak' will also have get_weak_next(prior_weak)==true
-        // and get_weak_count(prior_weak)>1. We will not drop the entire chain, but whoever
+        // This is benign. In this case, 'prior_weak' will also have
+        // get_weak_count(prior_weak)>1. We will not drop the entire chain, but whoever
         // just set 'next' definitely will.
-
-        #[cfg(feature = "debug")]
-        if get_weak_next(prior_weak) {
-            //let _next_ptr = item.next.load(Ordering::SeqCst);
-            debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is ?)", item_ptr);
-        }
 
         debug_println!("No add race, prior_weak: {}", format_weak(prior_weak));
 
@@ -2342,14 +2316,7 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             format_weak(prior_weak)
         );
         if get_weak_count(prior_weak) == 1 {
-            if get_weak_next(prior_weak) {
-                #[cfg(test)]
-                {
-                    std::eprintln!("This case should not be possible, since it implies the 'next' object didn't increase the refcount");
-                    std::process::abort();
-                }
-            }
-            // We know there's no next here either, since we checked 'get_weak_next' before the cmpxch, so we _KNOW_ we're the only user now.
+            // We know there's no next here either, since then weak count wouldn't be 1
             if !get_weak_prev(prior_weak) {
                 debug_println!("drop weak {:x?}, prior count = 1, raw deallocate", item_ptr);
                 drop_job_queue.report_sole_user();
@@ -2408,33 +2375,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
         unsafe { (*val).prev = atomic::AtomicPtr::new(item_ptr as *mut _) };
 
         let _weak_was = item.weak_count.fetch_add(1, Ordering::Relaxed);
-        item.weak_count.fetch_or(WEAK_HAVE_NEXT, Ordering::SeqCst);
-
-        /*let _weak_was = loop {
-            let weak_count = item.weak_count.load(Ordering::SeqCst);
-            let new_weak_count = (weak_count | WEAK_HAVE_NEXT) + 1;
-            if item
-                .weak_count
-                .compare_exchange(
-                    weak_count,
-                    new_weak_count,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_err()
-            {
-                debug_println!(
-                    "update weak race. {:?} (to {})",
-                    item_ptr,
-                    format_weak(new_weak_count)
-                );
-                continue;
-            }
-            debug_println!("==> do_update {:x?} weak updated from {} to {}",
-                item_ptr, weak_count, new_weak_count
-            );
-            break weak_count;
-        };*/
 
         #[cfg(feature = "validate")]
         assert!(_weak_was > 0);
@@ -3260,8 +3200,8 @@ mod simple_tests {
     #[cfg(not(any(loom, feature = "shuttle")))]
     use crate::tests::model;
     use crate::{
-        decorate, get_decoration, get_weak_count, get_weak_next, get_weak_prev, ArcShift,
-        ItemStateEnum, SizedMetadata,
+        decorate, get_decoration, get_weak_count, get_weak_prev, ArcShift, ItemStateEnum,
+        SizedMetadata,
     };
     use alloc::boxed::Box;
     use std::ptr::dangling;
@@ -3432,9 +3372,7 @@ mod simple_tests {
             assert_eq!(get_weak_count(542 | 1 << 63), 542);
             assert_eq!(get_weak_count(1 << 62), 0);
             assert_eq!(get_weak_count(1 << 63), 0);
-            assert_eq!(get_weak_next(1 << 63), true);
             assert_eq!(get_weak_prev(1 << 63), false);
-            assert_eq!(get_weak_next(1 << 62), false);
             assert_eq!(get_weak_prev(1 << 62), true);
         });
     }

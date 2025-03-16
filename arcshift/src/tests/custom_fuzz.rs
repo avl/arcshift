@@ -396,7 +396,7 @@ fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     #[cfg(all(feature = "shuttle", not(coverage)))]
     const COUNT: u64 = 1000;
     #[cfg(coverage)]
-    const COUNT: u64 = 10;
+    const COUNT: u64 = 1000;
 
     let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
     #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]

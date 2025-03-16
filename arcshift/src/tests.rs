@@ -720,6 +720,51 @@ fn simple_threading2d() {
     });
 }
 #[test]
+fn simple_threading_rcu_maybe() {
+    model(|| {
+        std::println!("== seed ==");
+        let mut shift1 = ArcShift::new(0u32);
+        let mut shift2 = ArcShift::clone(&shift1);
+        let mut shift3 = ArcShift::clone(&shift1);
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let mut temp = true;
+                shift1.rcu_maybe(|prev| {
+                    if temp {
+                        temp = false;
+                        Some(*prev + 1)
+                    } else {
+                        None
+                    }
+                });
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let mut temp = true;
+                shift2.rcu_maybe(|prev| {
+                    if temp {
+                        temp = false;
+                        Some(*prev + 1)
+                    } else {
+                        None
+                    }
+                });
+            })
+            .unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let x = *shift3.get();
+        assert!(x >= 1);
+        assert!(x <= 2);
+    });
+}
+#[test]
 fn simple_threading_rcu() {
     model(|| {
         let mut shift1 = ArcShift::new(42u32);
