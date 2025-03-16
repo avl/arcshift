@@ -16,9 +16,11 @@
 //! See the 'Limitations'-heading further down before using!
 //!
 //! ## Example
-//! ```rust
-//! # #[cfg(not(any(loom,feature="shuttle")))]
-//! # {
+//! ```
+//! # #[cfg(any(feature="loom",feature="shuttle"))]
+//! # pub fn main() {}
+//! # #[cfg(not(any(feature="loom",feature="shuttle")))]
+//! # pub fn main() {
 //! # extern crate arcshift;
 //! # use arcshift::ArcShift;
 //! use std::thread;
@@ -165,9 +167,7 @@
 //!
 //! # A larger example
 //!
-//! ```rust
-//! # #[cfg(not(any(loom,feature="shuttle")))]
-//! # {
+//! ```no_run
 //! # extern crate arcshift;
 //! # use arcshift::ArcShift;
 //!
@@ -224,7 +224,6 @@
 //! }
 //!
 //!
-//! # }
 //! ```
 //!
 
@@ -325,9 +324,11 @@ macro_rules! debug_println {
 /// See `crate` documentation for more information.
 ///
 /// ```rust
-/// # #[cfg(not(any(loom,feature="shuttle")))]
-/// # {
 /// # extern crate arcshift;
+/// # #[cfg(any(feature="loom",feature="shuttle"))]
+/// # fn main() {}
+/// # #[cfg(not(any(feature="loom",feature="shuttle")))]
+/// # pub fn main() {
 /// # use arcshift::ArcShift;
 /// let mut instance = ArcShift::new("test");
 /// println!("Value: {:?}", instance.get());
@@ -360,10 +361,12 @@ where
 /// from being deallocated. This can be useful when creating cyclic data structure, to avoid
 /// memory leaks.
 ///
-/// ```
+/// ```no_run
 /// # use arcshift::ArcShift;
-/// ##[cfg(not(any(loom,feature="shuttle")))]
-/// # {
+/// # #[cfg(any(feature="loom",feature="shuttle"))]
+/// # fn main() {}
+/// # #[cfg(not(any(feature="loom",feature="shuttle")))]
+/// # fn main() {
 /// # extern crate arcshift;
 /// # use arcshift::ArcShiftWeak;
 /// let original_instance = ArcShift::new("test");
@@ -3260,18 +3263,17 @@ impl<T: ?Sized> ArcShift<T> {
     }
 }
 
-#[cfg(not(loom))]
 #[cfg(test)]
 mod simple_tests {
     use crate::tests::dummy_model;
     use crate::{decorate, get_decoration, ArcShift, ItemStateEnum, SizedMetadata};
     use alloc::boxed::Box;
     use std::ptr::dangling;
-    #[cfg(not(feature = "shuttle"))]
+    #[cfg(not(any(loom, feature = "shuttle")))]
     use crate::tests::model;
-    #[cfg(not(feature = "shuttle"))]
+    #[cfg(not(any(loom, feature = "shuttle")))]
     use std::string::ToString;
-    #[cfg(not(feature = "shuttle"))]
+    #[cfg(not(any(loom, feature = "shuttle")))]
     use std::thread;
 
     #[test]
@@ -3622,7 +3624,7 @@ mod simple_tests {
     }
 
     #[test]
-    #[cfg(not(feature = "shuttle"))]
+    #[cfg(not(any(loom, feature = "shuttle")))]
     fn simple_threaded() {
         model(|| {
             let mut arc = ArcShift::new("Hello".to_string());

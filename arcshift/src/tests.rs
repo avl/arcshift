@@ -49,6 +49,10 @@ pub(crate) fn model(x: impl Fn() + 'static + Send + Sync) {
 fn model2(x: impl Fn() + 'static + Send + Sync, _repro: Option<&str>) {
     loom::model(x)
 }
+#[cfg(loom)]
+pub(crate) fn dummy_model(x: impl Fn() + 'static + Send + Sync) {
+    loom::model(x)
+}
 
 #[cfg(all(feature = "shuttle", coverage))]
 const SHUTTLE_ITERATIONS: usize = 50;
@@ -76,7 +80,6 @@ fn model2(x: impl Fn() + 'static + Send + Sync, repro: Option<&str>) {
 
 // TODO: We should probably improve the structure of all the tests.
 // They're currently split into different modules in a rather disorganized way.
-#[cfg(not(any(loom)))]
 mod simple {
     use super::{dummy_model, ArcShift, SpyOwner2};
     use std::alloc::Layout;

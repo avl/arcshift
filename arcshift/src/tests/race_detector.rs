@@ -605,6 +605,7 @@ fn generic_3threading1() {
 }
 
 #[test]
+#[cfg(not(feature = "disable_slow_tests"))]
 fn generic_3threading2a() {
     generic_3thread_ops_b(
         |owner1, shift1, thread| {

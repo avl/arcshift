@@ -1,4 +1,5 @@
 exclude_globs = [
+    "replace > with == in do_clone_weak",  #Because we need 2^63 ops to trigger this clause
     "replace > with == in do_upgrade_weak",  #Because we need 2^63 ops to trigger this clause
     "replace |= with &= in do_janitor_task", #This only goes wrong in far-fetched scenarios. Detecting them is done, but that test takes too long to run under cargo mutants.
     "replace |= with ^= in do_janitor_task", #This only goes wrong in far-fetched scenarios. Detecting them is done, but that test takes too long to run under cargo mutants.

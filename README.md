@@ -15,10 +15,11 @@ ArcShift instances to reload them (freeing up memory).
 You can think of ArcShift as an Arc<> over a linked list of versions, with the ability to add 
 a new version and automatically reload on read (see [`ArcShift::get`]).
 
-```rust
+```
 use std::thread;
 use arcshift::ArcShift;
 
+# #[cfg(not(loom))]
 fn main () {
    let mut arc = ArcShift::new("Hello".to_string());
    let mut arc2 = arc.clone();
