@@ -1,7 +1,11 @@
 exclude_re = [
     ".*replace > with == in do_clone_weak.*",  #Because we need 2^63 ops to trigger this clause
     "replace > with == in do_upgrade_weak",  #Because we need 2^63 ops to trigger this clause
-    "replace \\|= with &= in do_janitor_task", #This only goes wrong in far-fetched scenarios. Detecting them is done, but that test takes too long to run under cargo mutants.
-    "replace \\|= with ^= in do_janitor_task", #This only goes wrong in far-fetched scenarios. Detecting them is done, but that test takes too long to run under cargo mutants.
-    "replace \\|\\| with && in do_janitor_task::delete_nodes_that_can_be_deleted" # This one is interesting. The code is correct as implemented, but it may be that this rewrite is also correct, in which case the code could be simplified.
+    "replace > with == in do_clone_strong",  #Because we need 2^63 ops to trigger this clause
+    "replace \\|\\| with && in do_janitor_task::delete_nodes_that_can_be_deleted", # This one is interesting. The code is correct as implemented, but it may be that this rewrite is also correct, in which case the code could be simplified.
+    "replace ItemHolder<T, M>::has_payload", # This is mostly an optimization, removing this code still gives correct behavior but the retry advance happens later
+    # Unlikely races, not findable in quick mutants run:
+    "replace \\|= with &= in do_janitor_task",
+    ".*replace \\|= with \\^= in do_janitor_task.*",
+    "delete ! in do_drop_payload_if_possible",
 ]

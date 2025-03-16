@@ -564,6 +564,7 @@ fn get_weak_next(count: usize) -> bool {
     (count & WEAK_HAVE_NEXT) != 0
 }
 
+#[cfg_attr(test, mutants::skip)]
 fn initial_weak_count<T: ?Sized>(prev: *const ItemHolderDummy<T>) -> usize {
     if prev.is_null() {
         1
@@ -1999,7 +2000,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 start_ptr,
                 cur_ptr
             );
-            cur_ptr = null_mut();
             break;
         }
 
@@ -2041,26 +2041,21 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         }
         cur_ptr = prev_ptr;
     }
-    // The leftmost stop to this janitor cycle. This node must not be operated on.
-    // I.e, it's one-beyond-the-end.
-    let end_ptr = cur_ptr;
 
     fn delete_nodes_that_can_be_deleted<T: ?Sized, M: IMetadata>(
         mut item_ptr: *const ItemHolderDummy<T>,
-        last_valid: *const ItemHolderDummy<T>,
         jobq: &mut impl IDropHandler<T, M>,
     ) -> Option<*const ItemHolderDummy<T>> {
         let mut deleted_count = 0;
 
         // Lock free, since this loop at most iterates once per node in the chain.
         loop {
-            if item_ptr == last_valid || item_ptr.is_null() {
+            if item_ptr.is_null() {
                 debug_println!(
-                    "Find non-deleted {:x?}, count = {}, item_ptr = {:x?}, last_valid = {:x?}",
+                    "Find non-deleted {:x?}, count = {}, item_ptr = {:x?}",
                     item_ptr,
                     deleted_count,
                     item_ptr,
-                    last_valid
                 );
                 return (deleted_count > 0).then_some(item_ptr);
             }
@@ -2092,15 +2087,13 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             #[cfg(feature = "validate")]
             {
                 let prior_item_weak_count = item.weak_count.load(Ordering::SeqCst);
-                if get_weak_count(prior_item_weak_count) != 1 {
-                    #[cfg(feature = "validate")]
-                    assert_eq!(
-                        get_weak_count(prior_item_weak_count),
-                        1,
-                        "{:x?} weak_count should still be 1, and we decrement it to 0",
-                        item_ptr
-                    );
-                }
+                #[cfg(feature = "validate")]
+                assert_eq!(
+                    get_weak_count(prior_item_weak_count),
+                    1,
+                    "{:x?} weak_count should still be 1, and we decrement it to 0",
+                    item_ptr
+                );
             }
 
             let prev_item_ptr = item.prev.load(Ordering::SeqCst);
@@ -2126,15 +2119,15 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         unlock_carry = node;
     };
 
-    #[cfg(feature="validate")]
+    #[cfg(feature = "validate")]
     assert!(!cur_ptr.is_null());
 
     // Iterate through chain, deleting nodes when possible
     // Lock free, since this loop just iterates through each node in the chain.
-    while cur_ptr != end_ptr && !cur_ptr.is_null() {
+    while !cur_ptr.is_null() {
         let new_predecessor = must_see_before_deletes_can_be_made
             .is_null()
-            .then(|| delete_nodes_that_can_be_deleted::<T, M>(cur_ptr, end_ptr, jobq))
+            .then(|| delete_nodes_that_can_be_deleted::<T, M>(cur_ptr, jobq))
             .flatten();
 
         if cur_ptr == must_see_before_deletes_can_be_made {
@@ -2167,9 +2160,6 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 break;
             }
             debug_println!("found new_predecessor: {:x?}", new_predecessor_ptr);
-            if new_predecessor_ptr == end_ptr {
-                break;
-            }
             right_ptr = new_predecessor_ptr;
             // SAFETY:
             // We only visit nodes we have managed to lock. new_predecessor is such a node
@@ -2178,7 +2168,8 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             cur_ptr = new_predecessor.prev.load(Ordering::SeqCst);
             #[cfg(feature = "validate")]
             assert_ne!(
-                new_predecessor_ptr as *const _, end_ptr,
+                new_predecessor_ptr as *const _,
+                null(),
                 "assert failed, {:?} was endptr",
                 new_predecessor_ptr
             );
@@ -3266,11 +3257,14 @@ impl<T: ?Sized> ArcShift<T> {
 #[cfg(test)]
 mod simple_tests {
     use crate::tests::dummy_model;
-    use crate::{decorate, get_decoration, ArcShift, ItemStateEnum, SizedMetadata};
-    use alloc::boxed::Box;
-    use std::ptr::dangling;
     #[cfg(not(any(loom, feature = "shuttle")))]
     use crate::tests::model;
+    use crate::{
+        decorate, get_decoration, get_weak_count, get_weak_next, get_weak_prev, ArcShift,
+        ItemStateEnum, SizedMetadata,
+    };
+    use alloc::boxed::Box;
+    use std::ptr::dangling;
     #[cfg(not(any(loom, feature = "shuttle")))]
     use std::string::ToString;
     #[cfg(not(any(loom, feature = "shuttle")))]
@@ -3366,7 +3360,10 @@ mod simple_tests {
     fn pointer_decoration() {
         dummy_model(|| {
             assert_eq!(
-                get_decoration(decorate::<u32>(dangling(), ItemStateEnum::UndisturbedGcIsActive)),
+                get_decoration(decorate::<u32>(
+                    dangling(),
+                    ItemStateEnum::UndisturbedGcIsActive
+                )),
                 ItemStateEnum::UndisturbedGcIsActive
             );
         });
@@ -3427,6 +3424,21 @@ mod simple_tests {
         });
     }
     #[test]
+    fn get_weak_count_works() {
+        dummy_model(|| {
+            assert_eq!(get_weak_count(1 << 55), 1 << 55);
+            assert_eq!(get_weak_count(1), 1);
+            assert_eq!(get_weak_count(542 | 1 << 62), 542);
+            assert_eq!(get_weak_count(542 | 1 << 63), 542);
+            assert_eq!(get_weak_count(1 << 62), 0);
+            assert_eq!(get_weak_count(1 << 63), 0);
+            assert_eq!(get_weak_next(1 << 63), true);
+            assert_eq!(get_weak_prev(1 << 63), false);
+            assert_eq!(get_weak_next(1 << 62), false);
+            assert_eq!(get_weak_prev(1 << 62), true);
+        });
+    }
+    #[test]
     fn simple_create_and_clone_and_update_other_drop_order() {
         dummy_model(|| {
             let mut x = ArcShift::new(Box::new(1u32));
@@ -3458,8 +3470,6 @@ mod simple_tests {
     #[test]
     fn simple_item_state_enum_semantics() {
         dummy_model(|| {
-
-
             assert!(!ItemStateEnum::UndisturbedUndecorated.is_locked());
             assert!(ItemStateEnum::UndisturbedGcIsActive.is_locked());
             assert!(!ItemStateEnum::UndisturbedPayloadDropped.is_locked());
@@ -3535,7 +3545,6 @@ mod simple_tests {
                 ItemStateEnum::DisturbedPayloadDroppedAndGcActive
             );
 
-
             assert_eq!(
                 ItemStateEnum::UndisturbedUndecorated.dropped(),
                 ItemStateEnum::UndisturbedPayloadDropped
@@ -3568,7 +3577,6 @@ mod simple_tests {
                 ItemStateEnum::DisturbedPayloadDroppedAndGcActive.dropped(),
                 ItemStateEnum::DisturbedPayloadDroppedAndGcActive
             );
-
         });
     }
 

@@ -386,6 +386,7 @@ fn generic_2thread_ops_d<
                 let shift2 = shift1.clone();
                 shift1.update(owner.create("B"));
                 shift1.update(owner.create("C"));
+                shift1.update(owner.create("D"));
 
                 let owner_ref1 = owner.clone();
                 let owner_ref2 = owner.clone();
@@ -720,9 +721,7 @@ fn generic_2threading2d() {
 fn generic_2threading2e() {
     generic_2thread_ops_d(
         |_owner1, _shift1, _thread| None,
-        |_owner2, mut _shift2, _thread| {
-            None
-        },
+        |_owner2, mut _shift2, _thread| None,
         None,
     );
 }
