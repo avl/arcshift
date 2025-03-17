@@ -2344,7 +2344,7 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             format_weak(prior_weak)
         );
         if get_weak_count(prior_weak) == 1 {
-            #[cfg(feature="validate")]
+            #[cfg(feature = "validate")]
             if get_weak_next(prior_weak) {
                 std::eprintln!("This case should not be possible, since it implies the 'next' object didn't increase the refcount");
                 std::process::abort();
