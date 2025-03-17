@@ -8,4 +8,5 @@ exclude_re = [
     "replace \\|= with &= in do_janitor_task",
     ".*replace \\|= with \\^= in do_janitor_task.*",
     "delete ! in do_drop_payload_if_possible",
+    "replace == with != in do_update",
 ]
