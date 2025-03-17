@@ -43,7 +43,7 @@ impl SpyOwner2 {
     }
     pub(crate) fn validate(&self) {
         let guard = self.data.lock().unwrap();
-        if guard.len() > 0 {
+        if !guard.is_empty() {
             panic!("Leaked: {:?}", &*guard);
         }
     }

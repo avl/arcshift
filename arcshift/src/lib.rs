@@ -570,6 +570,7 @@ fn get_weak_prev(count: usize) -> bool {
     (count & WEAK_HAVE_PREV) != 0
 }
 
+#[allow(unused)]
 fn get_weak_next(count: usize) -> bool {
     (count & WEAK_HAVE_NEXT) != 0
 }
@@ -3431,10 +3432,10 @@ mod simple_tests {
             assert_eq!(get_weak_count(542 | 1 << 63), 542);
             assert_eq!(get_weak_count(1 << 62), 0);
             assert_eq!(get_weak_count(1 << 63), 0);
-            assert_eq!(get_weak_next(1 << 63), true);
-            assert_eq!(get_weak_prev(1 << 63), false);
-            assert_eq!(get_weak_next(1 << 62), false);
-            assert_eq!(get_weak_prev(1 << 62), true);
+            assert!(get_weak_next(1 << 63));
+            assert!(!get_weak_prev(1 << 63));
+            assert!(!get_weak_next(1 << 62));
+            assert!(get_weak_prev(1 << 62));
         });
     }
     #[test]
