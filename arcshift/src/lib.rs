@@ -320,7 +320,7 @@ macro_rules! debug_println {
 }
 
 #[doc(hidden)]
-#[cfg(not(feature = "debug"))]
+#[cfg(any(not(feature="std"), not(feature = "debug")))]
 #[macro_export]
 macro_rules! debug_println {
     ($($x:tt)*) => {{}};
