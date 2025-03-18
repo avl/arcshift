@@ -34,7 +34,7 @@ disable_slow_tests = []
 nightly = []
 
 std = []
-default = ["std"]
+default = []
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"], optional = true}

@@ -424,6 +424,76 @@ fn generic_2thread_ops_d<
     );
 }
 
+
+fn generic_2thread_ops_e<
+    F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+    + Sync
+    + Send
+    + 'static,
+    F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
+    + Sync
+    + Send
+    + 'static,
+>(
+    f1: F1,
+    f2: F2,
+    repro: Option<&str>,
+) {
+    let f1 = std::sync::Arc::new(f1);
+    let f2 = std::sync::Arc::new(f2);
+    model2(
+        move || {
+            debug_println!("-- Seed --");
+            let f1 = f1.clone();
+            let f2 = f2.clone();
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            {
+                let mut shift1 = ArcShift::new(owner.create("orig"));
+                let shift2 = shift1.clone();
+                shift1.update(owner.create("B"));
+                shift1.update(owner.create("C"));
+                shift1.update(owner.create("D"));
+                let mut shift3 = shift1.clone();
+                shift3.update(owner.create("E"));
+                shift3.update(owner.create("F"));
+                drop(shift3);
+
+                let owner_ref1 = owner.clone();
+                let owner_ref2 = owner.clone();
+
+                let t1 = atomic::thread::Builder::new()
+                    .name("t1".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t1 =");
+                        let t = f1(&owner_ref1, shift1, "t1");
+                        debug_println!(" = thread 1 dropping =");
+                        t
+                    })
+                    .unwrap();
+
+                let t2 = atomic::thread::Builder::new()
+                    .name("t2".to_string())
+                    .stack_size(1_000_000)
+                    .spawn(move || {
+                        debug_println!(" = On thread t2 =");
+                        let t = f2(&owner_ref2, shift2, "t2");
+                        debug_println!(" = thread 2 dropping =");
+                        t
+                    })
+                    .unwrap();
+
+                debug_println!("Begin joining threads");
+                _ = t1.join().unwrap();
+                _ = t2.join().unwrap();
+                debug_println!("Joined all threads");
+            }
+            owner.validate();
+        },
+        repro,
+    );
+}
+
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_b_000() {
@@ -722,6 +792,36 @@ fn generic_2threading2e() {
     generic_2thread_ops_d(
         |_owner1, _shift1, _thread| None,
         |_owner2, mut _shift2, _thread| None,
+        None,
+    );
+}
+
+
+/// Simple race of drops, where the chain is 3 items long, and one instance points at start,
+/// and the other at end.
+#[test]
+fn generic_2threading2f() {
+    generic_2thread_ops_e(
+        |_owner1, _shift1, _thread| None,
+        |_owner2, mut _shift2, _thread| None,
+        None,
+    );
+}
+
+
+/// Simple race of drops, where the chain is 3 items long, and one instance points at start,
+/// and the other at end.
+#[test]
+fn generic_2threading2g() {
+    generic_2thread_ops_e(
+        |owner1, mut shift1, _thread| {
+            shift1.update(owner1.create("X"));
+            None
+        },
+        |owner2, mut shift2, _thread| {
+            shift2.update(owner2.create("Y"));
+            None
+        },
         None,
     );
 }
