@@ -21,12 +21,13 @@ shuttle = {version = "0.7", optional = true}
 [features]
 # Feature to enable extra validation, at a memory and performance cost.
 # Only intended for internal use, for verification.
-validate = []
+validate = ["std"]
 # Feature to enable extra debug output on stdout.
 # Only intended for internal use, for verification and troubleshooting.
-debug = []
+debug = ["std"]
 # Feature which disables the slowest tests
 disable_slow_tests = []
+shuttle = ["dep:shuttle", "std"]
 
 # Enables use of some compiler features which are not yet available on stable.
 # Doesn't actually change the function, but is more forward compatible, and more likely to work

@@ -33,3 +33,7 @@ jobs:
       run: rustup toolchain install nightly
     - name: Run tests (release, nightly-only-features)
       run: cargo +nightly test --release --features=validate,nightly --workspace
+    - name: Cargo doc
+      run: cargo +stable doc --workspace
+
+

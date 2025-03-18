@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::Duration;
 use std::vec;
+use crate::cell::ArcShiftCell;
 
 mod custom_fuzz;
 pub(crate) mod leak_detection;
@@ -1992,6 +1993,77 @@ fn simple_threading_update_twice() {
         assert!(*shift2.get() > 42);
     });
 }
+
+// Building a recursive data structure using ArcShift is possible, but unfortunately not
+// super useful. It is not possible to actually modify the contents of an ArcShift. This means,
+// if those contents include an ArcShift instance, that instance cannot be reloaded, unless
+// interior mutability is in play. And such interior mutability would have to be a mutex
+// in the multi-threaded case, calling the design into question (since ArcShift is meant to
+// be a faster alternative to mutexes). In the non-multithreaded case you could use
+// ArcShiftCell, but in that case, why even use ArcShift at all, why not just use Rc<RefCell<T>>?
+//
+// Anyway, this test case verifies that it at least does work, with no leaks.
+#[test]
+fn test_recursive_structure() {
+    model(|| {
+        use std::string::String;
+        #[derive(Clone)]
+        struct Node {
+            parent: Option<ArcShiftWeak<Node>>,
+            children: std::vec::Vec<ArcShiftCell<Node>>,
+            value: String
+        }
+
+        let mut root = ArcShift::new(Node {
+            parent: None,
+            children: vec![],
+            value: "root".into()
+        });
+
+
+        let child1 = ArcShift::new(Node {
+            parent: Some(ArcShift::downgrade(&root)),
+            children: vec![],
+            value: "child1".into()
+        });
+        let mut child2 = ArcShift::new(Node {
+            parent: Some(ArcShift::downgrade(&root)),
+            children: vec![],
+            value: "child2".into()
+        });
+
+        root.rcu(|prev| {
+            let mut new = prev.clone();
+            new.children.push(ArcShiftCell::from_arcshift(child1.clone()));
+            new.children.push(ArcShiftCell::from_arcshift(child2.clone()));
+            new
+        });
+
+        let mut child21 = ArcShift::new(Node {
+            parent: Some(ArcShift::downgrade(&child2)),
+            children: vec![],
+            value: "child21".into()
+        });
+
+        child2.rcu(|prev| {
+            let mut new = prev.clone();
+            new.children.push(ArcShiftCell::from_arcshift(child21.clone()));
+            new
+        });
+        drop(child2);
+        drop(child1);
+
+        assert_eq!(root.get().children[1].borrow().children[0].borrow().value, "child21");
+
+        child21.rcu(|prev| {
+            let mut new = prev.clone();
+            new.value = "Banana".to_string();
+            new
+        });
+        assert_eq!(root.get().children[1].borrow().children[0].borrow().value, "Banana");
+    });
+}
+
 #[test]
 fn simple_threading_update_thrice() {
     model(|| {

@@ -6,11 +6,11 @@
 
 //! # Introduction to ArcShift
 //!
-//! [`ArcShift`] is a data type similar to [`std::sync::Arc`], except that it allows updating
-//! the value pointed to. It can be used as a replacement for [`std::sync::Arc<std::sync::Mutex<T>>`], but with
+//! [`ArcShift`] is a data type similar to `std::sync::Arc`, except that it allows updating
+//! the value pointed to. It can be used as a replacement for `std::sync::Arc<std::sync::Mutex<T>>`, but with
 //! significantly smaller overhead for reads.
 //!
-//! Writing to ArcShift is significantly more expensive than for [`std::sync::RwLock`], so
+//! Writing to ArcShift is significantly more expensive than for `std::sync::RwLock`, so
 //! ArcShift is most suited to use cases where updates are infrequent.
 //!
 //! See the 'Limitations'-heading further down before using!
@@ -76,7 +76,7 @@
 //!   is accessed using a unique (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
 //!   This can be partially mitigated by using the [`ArcShiftWeak`]-type for long-lived
 //!   never-reloaded instances.
-//! * Modifying the value is approximately 15x-30x more expensive than modifying an `Arc<Mutex<T>>`.
+//! * Modifying the value is approximately 10x more expensive than modifying an `Arc<Mutex<T>>`.
 //!   That said, if you're storing anything significantly more complex than an integer, the overhead
 //!   of ArcShift may be insignificant.
 //! * When the value is modified, the next subsequent reload is slower than an `Arc<RwLock<T>>`
@@ -101,7 +101,7 @@
 //! During normal usage, assets do not change. All benchmarks and play experience will
 //! be dependent only on this baseline performance. Ideally, we therefore want to have
 //! a very small performance penalty for the case when assets are *not* updated, comparable
-//! to using regular [`std::sync::Arc`].
+//! to using regular `std::sync::Arc`.
 //!
 //! During game development, artists may update assets, and hot-reload is a very
 //! time-saving feature. A performance hit during asset-reload is acceptable though.
@@ -1101,7 +1101,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     }
 }
 
-#[cfg(all(any(loom, feature = "shuttle"), feature = "validate"))]
+#[cfg(all(feature="std", any(loom, feature = "shuttle"), feature = "validate"))]
 static MAGIC: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
 impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
