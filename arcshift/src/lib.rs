@@ -266,9 +266,7 @@ use crate::deferred_panics_helper::{DropHandler, IDropHandler, StealingDropHandl
 // local module called 'atomic', so we can easily change between using
 // types from 'std' (normal case) and types from shuttle/loom testing libraries.
 
-
 mod deferred_panics_helper;
-
 
 /// Declarations of atomic ops for using Arcshift in production
 #[cfg(all(not(loom), not(feature = "shuttle")))]
@@ -320,7 +318,7 @@ macro_rules! debug_println {
 }
 
 #[doc(hidden)]
-#[cfg(any(not(feature="std"), not(feature = "debug")))]
+#[cfg(any(not(feature = "std"), not(feature = "debug")))]
 #[macro_export]
 macro_rules! debug_println {
     ($($x:tt)*) => {{}};
@@ -1101,7 +1099,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     }
 }
 
-#[cfg(all(feature="std", any(loom, feature = "shuttle"), feature = "validate"))]
+#[cfg(all(feature = "std", any(loom, feature = "shuttle"), feature = "validate"))]
 static MAGIC: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
 impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
@@ -3260,7 +3258,6 @@ impl<T: ?Sized> ArcShift<T> {
         }
     }
 }
-
 
 // Module for tests
 #[cfg(test)]

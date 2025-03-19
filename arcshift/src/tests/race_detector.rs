@@ -424,16 +424,15 @@ fn generic_2thread_ops_d<
     );
 }
 
-
 fn generic_2thread_ops_e<
     F1: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
     F2: Fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>
-    + Sync
-    + Send
-    + 'static,
+        + Sync
+        + Send
+        + 'static,
 >(
     f1: F1,
     f2: F2,
@@ -796,7 +795,6 @@ fn generic_2threading2e() {
     );
 }
 
-
 /// Simple race of drops, where the chain is 3 items long, and one instance points at start,
 /// and the other at end.
 #[test]
@@ -807,7 +805,6 @@ fn generic_2threading2f() {
         None,
     );
 }
-
 
 /// Simple race of drops, where the chain is 3 items long, and one instance points at start,
 /// and the other at end.

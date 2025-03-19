@@ -5,6 +5,7 @@
 #![allow(clippy::unit_cmp)]
 
 use super::*;
+use crate::cell::ArcShiftCell;
 use leak_detection::{InstanceSpy, InstanceSpy2, SpyOwner2};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
@@ -20,7 +21,6 @@ use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::Duration;
 use std::vec;
-use crate::cell::ArcShiftCell;
 
 mod custom_fuzz;
 pub(crate) mod leak_detection;
@@ -90,7 +90,6 @@ mod simple {
     };
     use alloc::boxed::Box;
     use std::ptr::dangling;
-
 
     #[test]
     fn simple_get() {
@@ -1024,7 +1023,7 @@ mod simple {
     }
 
     #[test]
-    #[cfg(all(feature="std",not(any(loom, feature = "shuttle"))))]
+    #[cfg(all(feature = "std", not(any(loom, feature = "shuttle"))))]
     fn simple_threaded() {
         model(|| {
             let mut arc = ArcShift::new("Hello".to_string());
@@ -1086,10 +1085,7 @@ mod simple {
             unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shiftlight]) };
         });
     }
-
 }
-
-
 
 #[test]
 fn simple_threading2() {
@@ -2011,56 +2007,64 @@ fn test_recursive_structure() {
         struct Node {
             parent: Option<ArcShiftWeak<Node>>,
             children: std::vec::Vec<ArcShiftCell<Node>>,
-            value: String
+            value: String,
         }
 
         let mut root = ArcShift::new(Node {
             parent: None,
             children: vec![],
-            value: "root".into()
+            value: "root".into(),
         });
-
 
         let child1 = ArcShift::new(Node {
             parent: Some(ArcShift::downgrade(&root)),
             children: vec![],
-            value: "child1".into()
+            value: "child1".into(),
         });
         let mut child2 = ArcShift::new(Node {
             parent: Some(ArcShift::downgrade(&root)),
             children: vec![],
-            value: "child2".into()
+            value: "child2".into(),
         });
 
         root.rcu(|prev| {
             let mut new = prev.clone();
-            new.children.push(ArcShiftCell::from_arcshift(child1.clone()));
-            new.children.push(ArcShiftCell::from_arcshift(child2.clone()));
+            new.children
+                .push(ArcShiftCell::from_arcshift(child1.clone()));
+            new.children
+                .push(ArcShiftCell::from_arcshift(child2.clone()));
             new
         });
 
         let mut child21 = ArcShift::new(Node {
             parent: Some(ArcShift::downgrade(&child2)),
             children: vec![],
-            value: "child21".into()
+            value: "child21".into(),
         });
 
         child2.rcu(|prev| {
             let mut new = prev.clone();
-            new.children.push(ArcShiftCell::from_arcshift(child21.clone()));
+            new.children
+                .push(ArcShiftCell::from_arcshift(child21.clone()));
             new
         });
         drop(child2);
         drop(child1);
 
-        assert_eq!(root.get().children[1].borrow().children[0].borrow().value, "child21");
+        assert_eq!(
+            root.get().children[1].borrow().children[0].borrow().value,
+            "child21"
+        );
 
         child21.rcu(|prev| {
             let mut new = prev.clone();
             new.value = "Banana".to_string();
             new
         });
-        assert_eq!(root.get().children[1].borrow().children[0].borrow().value, "Banana");
+        assert_eq!(
+            root.get().children[1].borrow().children[0].borrow().value,
+            "Banana"
+        );
     });
 }
 
