@@ -35,6 +35,7 @@ shuttle = ["dep:shuttle", "std"]
 nightly = []
 
 std = []
+default = ["std"]
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"], optional = true}

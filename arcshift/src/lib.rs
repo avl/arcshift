@@ -31,9 +31,9 @@
 //!
 //!
 //! let j1 = thread::spawn(move||{
-//!     println!("Value in thread 1: '{}'", *arc); //Prints 'Hello'
+//!     println!("Value in thread 1: '{}'", arc.get()); //Prints 'Hello'
 //!     arc.update("New value".to_string());
-//!     println!("Updated value in thread 1: '{}'", *arc); //Prints 'New value'
+//!     println!("Updated value in thread 1: '{}'", arc.get()); //Prints 'New value'
 //! });
 //!
 //! let j2 = thread::spawn(move||{
@@ -120,6 +120,21 @@
 //! In the case where a reload is actually necessary, there is a significant performance impact
 //! (but still typically below 150ns for modern machines (2025)).
 //!
+//! # Panicking drop methods
+//! If a drop implementation panics, ArcShift will make sure that the internal data structures
+//! remain uncorrupted. When run without the std-library, some memory leakage will occur every
+//! time a drop method panics. With the std-library, only memory owned by the payload type
+//! will leak.
+//!
+//! # No_std
+//! ArcShift can work without the full rust std library. However, this comes at a slight performance
+//! cost. When the 'std' feature is enabled (which it is by default), `catch_unwind` is used to
+//! guard drop functions, to make sure memory structures are not corrupted if a user supplied
+//! drop method panics. However, to ensure the same guarantee when running without std, arcshift
+//! presently moves allocations to temporary boxes to be able to run drop after all memory
+//! traversal is finished. This requires multiple allocations, which makes operation without 'std'
+//! slightly slower. Panicking drop methods can also lead to memory leaks without the std. The
+//! memory structures remain intact, and no undefined behavior occurs.
 //!
 //! # Implementation
 //!
@@ -232,7 +247,7 @@
 //! ```
 //!
 
-#[cfg(any(test, feature = "std"))]
+#[cfg(feature = "std")]
 extern crate std;
 
 extern crate alloc;
@@ -241,17 +256,15 @@ use alloc::boxed::Box;
 
 use core::alloc::Layout;
 
+use crate::deferred_panics_helper::DropHandler;
+use crate::deferred_panics_helper::IDropHandler;
 use core::cell::UnsafeCell;
 use core::fmt::{Debug, Formatter};
 use core::marker::PhantomData;
 use core::mem::{transmute, ManuallyDrop};
-use core::ops::Deref;
 use core::panic::UnwindSafe;
 use core::ptr::{addr_of_mut, null, null_mut, NonNull};
 use core::sync::atomic::Ordering;
-
-use crate::deferred_panics_helper::{DropHandler, IDropHandler, StealingDropHandler};
-
 // About unsafe code in this crate:
 // Some private functions contain unsafe code, and place limitations on their
 // callers, without these private functions being marked unsafe.
@@ -273,10 +286,10 @@ mod deferred_panics_helper;
 mod atomic {
     pub use core::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
     #[allow(unused)]
-    #[cfg(any(test, feature = "std"))]
+    #[cfg(feature = "std")]
     pub use std::sync::{Arc, Mutex};
     #[allow(unused)]
-    #[cfg(any(test, feature = "std"))]
+    #[cfg(feature = "std")]
     pub use std::thread;
 }
 
@@ -462,6 +475,28 @@ fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
     }
 }
 
+#[inline]
+#[cfg(not(feature = "std"))]
+pub(crate) fn ptr_from_raw_parts_mut<T: ?Sized>(
+    data_ptr: *mut u8,
+    metadata: UnsizedMetadata<T>,
+) -> *mut T {
+    // SAFETY:
+    // This is the best I managed without using nightly-only features (August 2024).
+    // It is sound as long as the actual internal representation of fat pointers doesn't change.
+    #[cfg(not(feature = "nightly"))]
+    unsafe {
+        core::mem::transmute_copy(&FatPtr {
+            ptr: data_ptr,
+            meta: metadata,
+        })
+    }
+    #[cfg(feature = "nightly")]
+    {
+        std::ptr::from_raw_parts_mut(data_ptr, metadata.meta)
+    }
+}
+
 impl<T: ?Sized> UnsizedMetadata<T> {
     #[inline]
     #[cfg(not(feature = "nightly"))]
@@ -623,7 +658,7 @@ fn make_unsized_holder_from_box<T: ?Sized>(
         debug_println!("Layout: {:?}, meta: {:?}", layout, metadata);
         item_holder_ptr =
             // SAFETY:
-            // std::alloc::alloc requires the allocated layout to have a nonzero size. This
+            // core::alloc::alloc requires the allocated layout to have a nonzero size. This
             // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
             // The returned memory is uninitialized, but we will initialize the required parts of it
             // below.
@@ -832,7 +867,7 @@ fn get_full_ptr_raw<T: ?Sized, M: IMetadata>(
     }
 }
 
-struct SizedMetadata;
+pub(crate) struct SizedMetadata;
 trait IMetadata {}
 impl IMetadata for SizedMetadata {}
 impl<T: ?Sized> IMetadata for UnsizedMetadata<T> {}
@@ -947,8 +982,9 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
     /// Includes self
     #[allow(unused)]
     #[cfg(test)]
+    #[cfg(feature = "std")]
     fn debug_all_to_left<'a>(&self) -> std::vec::Vec<&'a ItemHolder<T, M>> {
-        let mut ret = std::vec![];
+        let mut ret = alloc::vec::Vec::new();
         let mut item_ptr = self as *const ItemHolder<T, M>;
         // Lock-free because this loop is run in debug harness, and doesn't do any synchronization
         loop {
@@ -989,6 +1025,37 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         // the accessor (ArcShift-type) that calls this remains alive.
         unsafe { transmute::<&T, &'a T>(&*(self.payload.get())) }
     }
+
+    // SAFETY:
+    // Node must be uniquely owned, and payload must never be accessed again
+    #[cfg(not(feature = "std"))]
+    unsafe fn take_boxed_payload(&self) -> Box<T> {
+        let payload = &self.payload;
+        debug_println!("boxing payload");
+
+        // SAFETY: item_ptr is now uniquely owned. We can drop it.
+        let payload_val: &mut T = unsafe { &mut **(&mut *payload.get()) };
+        let size = size_of_val(payload_val);
+        let align = align_of_val(payload_val);
+        let layout = Layout::from_size_align(size, align).unwrap();
+        let thin_dest_ptr = if size == 0 {
+            core::ptr::dangling_mut()
+        } else {
+            alloc::alloc::alloc(layout)
+        };
+
+        let fat_dest_ptr = if is_sized::<T>() {
+            core::ptr::copy_nonoverlapping(payload_val as *mut _ as *mut u8, thin_dest_ptr, size);
+            core::mem::transmute_copy(&thin_dest_ptr)
+        } else {
+            core::ptr::copy_nonoverlapping(payload_val as *mut _ as *mut u8, thin_dest_ptr, size);
+            let meta = UnsizedMetadata::new(payload_val);
+            ptr_from_raw_parts_mut(thin_dest_ptr, meta)
+        };
+
+        Box::from_raw(fat_dest_ptr)
+    }
+
     /// Returns true if the node could be atomically locked
     fn lock_node_for_gc(&self) -> bool {
         // Lock free, see comment for each 'continue' statement, which are the only statements
@@ -1393,7 +1460,7 @@ fn do_clone_weak<T: ?Sized, M: IMetadata>(
 
 fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
     item_ptr: *const ItemHolder<T, M>,
-    jobq: &mut DropHandler,
+    jobq: &mut DropHandler<T>,
 ) -> Option<*const ItemHolderDummy<T>> {
     debug_println!("executing do_upgrade_weak");
     // SAFETY:
@@ -2692,19 +2759,6 @@ pub struct NoLongerAvailableMarker {
     _priv: (),
 }
 
-impl<T: ?Sized> Deref for ArcShift<T> {
-    type Target = T;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| -> &T {
-            // SAFETY:
-            // ArcShift has a strong ref, so payload must not have been dropped.
-            unsafe { (*item).payload() }
-        })
-    }
-}
-
 impl<T: ?Sized> ArcShiftWeak<T> {
     /// Upgrade this ArcShiftWeak instance to a full ArcShift.
     /// This is required to be able to access any stored value.
@@ -2728,7 +2782,8 @@ impl<T> ArcShift<T> {
     /// Drops this ArcShift instance. If this was the last instance of the entire chain,
     /// the payload value is returned.
     pub fn try_into_inner(self) -> Option<T> {
-        let mut drop_handler = StealingDropHandler::default();
+        let mut drop_handler =
+            deferred_panics_helper::stealing_drop::StealingDropHandler::default();
         verify_item(self.item.as_ptr());
         debug_println!("executing ArcShift::into_inner({:x?})", self.item.as_ptr());
         do_drop_strong(
@@ -2780,7 +2835,7 @@ impl<T> ArcShift<T> {
     /// the final updated value will have always been calculated from the previous set value.
     pub fn rcu(&mut self, mut update: impl FnMut(&T) -> T) -> &T {
         self.rcu_maybe(|x| Some(update(x)));
-        (*self).deref()
+        (*self).shared_get()
     }
 
     /// Atomically update the value.
@@ -3020,7 +3075,11 @@ impl<T: ?Sized> ArcShift<T> {
     /// This method has the advantage that it doesn't require `&mut self` access.
     #[inline(always)]
     pub fn shared_get(&self) -> &T {
-        (*self).deref()
+        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| -> &T {
+            // SAFETY:
+            // ArcShift has a strong ref, so payload must not have been dropped.
+            unsafe { (*item).payload() }
+        })
     }
 
     /// Create an [`ArcShiftWeak<T>`] instance.
@@ -3120,6 +3179,7 @@ impl<T: ?Sized> ArcShift<T> {
     /// It is up to the caller to actually ensure this.
     #[allow(unused)]
     #[cfg(test)]
+    #[cfg(feature = "std")]
     pub(crate) unsafe fn debug_validate(
         strong_handles: &[&Self],
         weak_handles: &[&ArcShiftWeak<T>],
@@ -3135,6 +3195,7 @@ impl<T: ?Sized> ArcShift<T> {
     }
     #[allow(unused)]
     #[cfg(test)]
+    #[cfg(feature = "std")]
     fn debug_validate_impl<M: IMetadata>(
         strong_handles: &[&ArcShift<T>],
         weak_handles: &[&ArcShiftWeak<T>],
@@ -3259,6 +3320,41 @@ impl<T: ?Sized> ArcShift<T> {
     }
 }
 
-// Module for tests
 #[cfg(test)]
+#[cfg(not(any(loom, feature = "shuttle")))]
+pub(crate) mod no_std_tests {
+    use crate::ArcShift;
+    use alloc::boxed::Box;
+
+    #[test]
+    #[should_panic(expected = "panic: B")]
+    fn simple_panic() {
+        struct PanicOnDrop(char);
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                if self.0 == 'B' {
+                    panic!("panic: {}", self.0)
+                }
+            }
+        }
+        // Use a box so that T has a heap-allocation, so miri will tell us
+        // if it's dropped correctly (it should be)
+        let a = ArcShift::new(Box::new(PanicOnDrop('A')));
+        let mut b = a.clone();
+        b.update(Box::new(PanicOnDrop('B')));
+        drop(b); //This doesn't drop anything, since 'b' is kept alive by next-ref of a
+        drop(a); //This will panic, but shouldn't leak memory
+    }
+
+    #[test]
+    fn smoke_test() {
+        let mut x = ArcShift::new(45u64);
+        x.update(46);
+        x.rcu(|x| *x + 1);
+        assert_eq!(*x.get(), 47);
+    }
+}
+
+// Module for tests
+#[cfg(all(test, feature = "std"))]
 pub(crate) mod tests;

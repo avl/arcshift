@@ -255,7 +255,7 @@ mod simple {
                     let r1 = cell.borrow();
                     let r2 = cell.borrow();
                     root.update(owner.create("C"));
-                    assert_eq!(root.str(), "C");
+                    assert_eq!(root.get().str(), "C");
                     assert_eq!(r1.str(), "B");
                     assert_eq!(r2.str(), "B");
                     assert_eq!(owner.count(), 2); //Because we have two references, we can't reload.
@@ -365,8 +365,8 @@ mod simple {
     #[test]
     fn simple_deref() {
         dummy_model(|| {
-            let shift = ArcShift::new(42u32);
-            assert_eq!(*shift, 42u32);
+            let mut shift = ArcShift::new(42u32);
+            assert_eq!(*shift.get(), 42u32);
         });
     }
     #[test]
@@ -397,8 +397,8 @@ mod simple {
     fn simple_update() {
         dummy_model(|| {
             let mut shift = ArcShift::new(42);
-            let old = &*shift;
-            shift.update(*old + 4);
+            let old = *shift.get();
+            shift.update(old + 4);
             shift.reload();
         });
     }
@@ -664,10 +664,10 @@ mod simple {
     #[test]
     fn simple_create() {
         dummy_model(|| {
-            let x = ArcShift::new(Box::new(45u32));
+            let mut x = ArcShift::new(Box::new(45u32));
             assert_eq!(x.strong_count(), 1);
             assert_eq!(x.weak_count(), 1);
-            assert_eq!(**x, 45);
+            assert_eq!(**x.get(), 45);
             // SAFETY:
             // No threading involved, &x is valid.
             unsafe { ArcShift::debug_validate(&[&x], &[]) };
@@ -684,7 +684,7 @@ mod simple {
             let item = unsafe { &*crate::from_dummy::<u32, SizedMetadata>(x.item.as_ptr()) };
             let prev = item.prev.load(crate::atomic::Ordering::SeqCst);
             assert_eq!(prev, core::ptr::null_mut());
-            assert_eq!(*x, 46);
+            assert_eq!(*x.get(), 46);
         });
     }
 
@@ -692,9 +692,9 @@ mod simple {
     fn simple_create_and_update_once() {
         dummy_model(|| {
             let mut x = ArcShift::new(Box::new(45u32));
-            assert_eq!(**x, 45);
+            assert_eq!(**x.get(), 45);
             x.update(Box::new(1u32));
-            assert_eq!(**x, 1);
+            assert_eq!(**x.get(), 1);
             // SAFETY:
             // No threading involved, &x is valid.
             unsafe { ArcShift::debug_validate(&[&x], &[]) };
@@ -704,11 +704,11 @@ mod simple {
     fn simple_create_and_update_twice() {
         dummy_model(|| {
             let mut x = ArcShift::new(Box::new(45u32));
-            assert_eq!(**x, 45);
+            assert_eq!(**x.get(), 45);
             x.update(Box::new(1u32));
-            assert_eq!(**x, 1);
+            assert_eq!(**x.get(), 1);
             x.update(Box::new(21));
-            assert_eq!(**x, 21);
+            assert_eq!(**x.get(), 21);
             // SAFETY:
             // No threading involved, &x is valid.
             unsafe { ArcShift::debug_validate(&[&x], &[]) };
@@ -717,10 +717,10 @@ mod simple {
     #[test]
     fn simple_create_and_clone() {
         dummy_model(|| {
-            let x = ArcShift::new(Box::new(45u32));
-            let y = x.clone();
-            assert_eq!(**x, 45);
-            assert_eq!(**y, 45);
+            let mut x = ArcShift::new(Box::new(45u32));
+            let mut y = x.clone();
+            assert_eq!(**x.get(), 45);
+            assert_eq!(**y.get(), 45);
             // SAFETY:
             // No threading involved, &x and &y are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
@@ -729,10 +729,10 @@ mod simple {
     #[test]
     fn simple_create_and_clone_drop_other_order() {
         dummy_model(|| {
-            let x = ArcShift::new(Box::new(45u32));
-            let y = x.clone();
-            assert_eq!(**x, 45);
-            assert_eq!(**y, 45);
+            let mut x = ArcShift::new(Box::new(45u32));
+            let mut y = x.clone();
+            assert_eq!(**x.get(), 45);
+            assert_eq!(**y.get(), 45);
             // SAFETY:
             // No threading involved, &x and &y are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
@@ -801,8 +801,8 @@ mod simple {
             right.update(Box::new(2u32)); // becomes right here
             assert_eq!(right.strong_count(), 1);
             assert_eq!(right.weak_count(), 1);
-            assert_eq!(**right, 2);
-            assert_eq!(**left, 1);
+            assert_eq!(**right.get(), 2);
+            assert_eq!(**left.shared_get(), 1);
             assert_eq!(left.strong_count(), 1);
             assert_eq!(left.weak_count(), 2); //'left' and ref from right
             debug_println!("Dropping 'left'");
@@ -845,8 +845,8 @@ mod simple {
             assert_eq!(y.strong_count(), 1);
             assert_eq!(y.weak_count(), 2);
 
-            assert_eq!(**x, 2);
-            assert_eq!(**y, 1);
+            assert_eq!(**x.get(), 2);
+            assert_eq!(**y.shared_get(), 1);
 
             // SAFETY:
             // No threading involved, &x and &y are valid.
@@ -976,16 +976,16 @@ mod simple {
         dummy_model(|| {
             let mut x = ArcShift::new(Box::new(45u32));
             let mut y = x.clone();
-            assert_eq!(**x, 45);
+            assert_eq!(**x.get(), 45);
             x.update(Box::new(1u32));
-            assert_eq!(**x, 1);
+            assert_eq!(**x.get(), 1);
             x.update(Box::new(21));
-            assert_eq!(**x, 21);
+            assert_eq!(**x.get(), 21);
             // SAFETY:
             // No threading involved, &x and &y are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
             y.reload();
-            assert_eq!(**y, 21);
+            assert_eq!(**y.get(), 21);
             // SAFETY:
             // No threading involved, &x and &y are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
@@ -1000,7 +1000,7 @@ mod simple {
             // SAFETY:
             // No threading involved, &x and &y are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
-            assert_eq!(**x, 45);
+            assert_eq!(**x.get(), 45);
             x.update(Box::new(1u32));
             assert_eq!(x.weak_count(), 1);
 
@@ -1008,14 +1008,14 @@ mod simple {
             // No threading involved, &x and &y are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y], &[]) };
             let z = x.clone();
-            assert_eq!(**x, 1);
+            assert_eq!(**x.get(), 1);
             x.update(Box::new(21));
             // SAFETY:
             // No threading involved, &x, &y and &z are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };
-            assert_eq!(**x, 21);
+            assert_eq!(**x.get(), 21);
             y.reload();
-            assert_eq!(**y, 21);
+            assert_eq!(**y.get(), 21);
             // SAFETY:
             // No threading involved, &x, &y and &z are valid.
             unsafe { ArcShift::debug_validate(&[&x, &y, &z], &[]) };

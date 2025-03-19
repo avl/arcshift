@@ -25,8 +25,8 @@ jobs:
       run: cargo +stable test --release --workspace
     - name: Run tests (release)
       run: cargo +stable test --release --features=validate --workspace
-    - name: Build (no default features)
-      run: cargo +stable build --no-default-features
+    - name: Test (no default features)
+      run: cargo +stable test --no-default-features
     - name: Build (all features)
       run: cargo +stable build --all-features
     - name: Install nightly

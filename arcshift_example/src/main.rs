@@ -14,9 +14,9 @@ fn main() {
 
     black_box(show_reload(&mut ArcShift::new(black_box(32u64))));
     let j1 = thread::spawn(move || {
-        println!("Value in thread 1: '{}'", *arc); //Prints 'Hello'
+        println!("Value in thread 1: '{}'", arc.get()); //Prints 'Hello'
         arc.update("New value".to_string());
-        println!("Updated value in thread 1: '{}'", *arc); //Prints 'New value'
+        println!("Updated value in thread 1: '{}'", arc.get()); //Prints 'New value'
     });
 
     let j2 = thread::spawn(move || {
