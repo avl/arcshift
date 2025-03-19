@@ -28,7 +28,7 @@ jobs:
     - name: Test (no default features)
       run: cargo +stable test --no-default-features
     - name: Build (all features)
-      run: cargo +stable build --all-features
+      run: cargo +nightly build --all-features
     - name: Install nightly
       run: rustup toolchain install nightly
     - name: Run tests (release, nightly-only-features)
