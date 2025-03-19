@@ -65,7 +65,7 @@
 //!   at compared to regular Arc (benchmarks show identical performance to Arc).
 //! * ArcShift does not rely on thread-local variables.
 //! * ArcShift is no_std compatible (though 'alloc' is required, since ArcShift is a heap
-//!   allocating data structure).
+//!   allocating data structure). Compile with "default-features=false" to enable no_std compatibility.
 //!
 //! # Limitations
 //!

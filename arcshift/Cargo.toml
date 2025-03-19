@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 description = "Replacement for std::sync::Arc<T> that supports updating the value, with some caveats."
 readme = "../README.md"
 keywords = ["arc", "atomic"]
-categories = ["memory-management", "data-structures"]
+categories = ["memory-management", "data-structures", "no-std"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(coverage)'] }
@@ -35,7 +35,6 @@ shuttle = ["dep:shuttle", "std"]
 nightly = []
 
 std = []
-default = []
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7", features = ["checkpoint"], optional = true}

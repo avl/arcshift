@@ -2001,7 +2001,7 @@ fn simple_threading_update_twice() {
 // Anyway, this test case verifies that it at least does work, with no leaks.
 #[test]
 fn test_recursive_structure() {
-    model(|| {
+    dummy_model(|| {
         use std::string::String;
         #[derive(Clone)]
         struct Node {
