@@ -28,6 +28,7 @@ debug = ["std"]
 # Feature which disables the slowest tests
 disable_slow_tests = []
 shuttle = ["dep:shuttle", "std"]
+nostd_unchecked_panics = []
 
 # Enables use of some compiler features which are not yet available on stable.
 # Doesn't actually change the function, but is more forward compatible, and more likely to work

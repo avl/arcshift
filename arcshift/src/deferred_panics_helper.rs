@@ -15,13 +15,18 @@ pub(crate) trait IDropHandler<T: ?Sized, M: IMetadata> {
 #[cfg(feature = "std")]
 pub(crate) mod std_drop_handler;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature="nostd_unchecked_panics"), not(feature = "std")))]
 pub(crate) mod no_std_drop_handler;
+
+#[cfg(all(feature="nostd_unchecked_panics",not(feature = "std")))]
+pub(crate) mod unchecked_drop_handler;
 
 #[cfg(feature = "std")]
 pub(crate) use std_drop_handler::DropHandler;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature="nostd_unchecked_panics"), not(feature = "std")))]
 pub(crate) use no_std_drop_handler::DropHandler;
 
+#[cfg(all(feature="nostd_unchecked_panics",not(feature = "std")))]
+pub(crate) use unchecked_drop_handler::DropHandler;
 pub(crate) mod stealing_drop;

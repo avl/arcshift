@@ -3,7 +3,6 @@
 #![allow(unused_imports)]
 #![allow(clippy::bool_assert_comparison)]
 #![allow(clippy::unit_cmp)]
-
 use super::*;
 use crate::cell::ArcShiftCell;
 use leak_detection::{InstanceSpy, InstanceSpy2, SpyOwner2};

@@ -124,7 +124,7 @@
 //! If a drop implementation panics, ArcShift will make sure that the internal data structures
 //! remain uncorrupted. When run without the std-library, some memory leakage will occur every
 //! time a drop method panics. With the std-library, only memory owned by the payload type
-//! will leak.
+//! might leak.
 //!
 //! # No_std
 //! ArcShift can work without the full rust std library. However, this comes at a slight performance
@@ -135,6 +135,12 @@
 //! traversal is finished. This requires multiple allocations, which makes operation without 'std'
 //! slightly slower. Panicking drop methods can also lead to memory leaks without the std. The
 //! memory structures remain intact, and no undefined behavior occurs.
+//!
+//! If the overhead mentioned in the previous paragraph is unacceptable, and if the final binary
+//! is compiled with panic=abort, this extra cost can be mitigated. Enable the feature
+//! "nostd_unchecked_panics" to do this. This must never be done if the process will ever continue
+//! executing after a panic, since it can lead to memory reclamation essentially being disabled
+//! for any ArcShift-chain that has had a panicking drop. However, no UB will result, in any case.
 //!
 //! # Implementation
 //!
@@ -476,7 +482,7 @@ fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
 }
 
 #[inline]
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(feature = "std", feature="nostd_unchecked_panics")))]
 pub(crate) fn ptr_from_raw_parts_mut<T: ?Sized>(
     data_ptr: *mut u8,
     metadata: UnsizedMetadata<T>,
@@ -1028,7 +1034,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
 
     // SAFETY:
     // Node must be uniquely owned, and payload must never be accessed again
-    #[cfg(not(feature = "std"))]
+    #[cfg(not(any(feature = "std", feature="nostd_unchecked_panics")))]
     unsafe fn take_boxed_payload(&self) -> Box<T> {
         let payload = &self.payload;
         debug_println!("boxing payload");
@@ -3324,10 +3330,10 @@ impl<T: ?Sized> ArcShift<T> {
 #[cfg(not(any(loom, feature = "shuttle")))]
 pub(crate) mod no_std_tests {
     use crate::ArcShift;
-    use alloc::boxed::Box;
 
     #[test]
     #[should_panic(expected = "panic: B")]
+    #[cfg(not(all(miri,feature="nostd_unchecked_panics")))] // this leaks with nostd_unchecked_panics
     fn simple_panic() {
         struct PanicOnDrop(char);
         impl Drop for PanicOnDrop {
@@ -3339,9 +3345,9 @@ pub(crate) mod no_std_tests {
         }
         // Use a box so that T has a heap-allocation, so miri will tell us
         // if it's dropped correctly (it should be)
-        let a = ArcShift::new(Box::new(PanicOnDrop('A')));
+        let a = ArcShift::new(alloc::boxed::Box::new(PanicOnDrop('A')));
         let mut b = a.clone();
-        b.update(Box::new(PanicOnDrop('B')));
+        b.update(alloc::boxed::Box::new(PanicOnDrop('B')));
         drop(b); //This doesn't drop anything, since 'b' is kept alive by next-ref of a
         drop(a); //This will panic, but shouldn't leak memory
     }

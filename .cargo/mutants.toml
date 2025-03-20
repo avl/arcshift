@@ -10,3 +10,9 @@ exclude_re = [
     "delete ! in do_drop_payload_if_possible",
     "replace == with != in do_update",
 ]
+exclude_globs =  [
+    "arcshift/src/tests.rs",
+    "arcshift/src/tests/custom_fuzz.rs",
+    "arcshift/src/tests/leak_detection.rs",
+    "arcshift/src/tests/race_detector.rs",
+]
