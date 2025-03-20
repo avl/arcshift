@@ -14,7 +14,7 @@ ArcShift instances to reload them.
 You can think of ArcShift as an Arc<> over a linked list of versions, with the ability to add 
 a new version and automatically load the latest value on read (see [`ArcShift::get`]).
 
-```
+```rust
 use std::thread;
 use arcshift::ArcShift;
 
