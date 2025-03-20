@@ -127,14 +127,15 @@
 //! might leak.
 //!
 //! # No_std
-//! ArcShift can work without the full rust std library. However, this comes at a slight performance
-//! cost. When the 'std' feature is enabled (which it is by default), `catch_unwind` is used to
-//! guard drop functions, to make sure memory structures are not corrupted if a user supplied
-//! drop method panics. However, to ensure the same guarantee when running without std, arcshift
-//! presently moves allocations to temporary boxes to be able to run drop after all memory
-//! traversal is finished. This requires multiple allocations, which makes operation without 'std'
-//! slightly slower. Panicking drop methods can also lead to memory leaks without the std. The
-//! memory structures remain intact, and no undefined behavior occurs.
+//! By default, arcshift uses the rust standard library. This is enabled by the 'std' feature, which
+//! is enabled by default. ArcShift can work without the full rust std library. However, this
+//! comes at a slight performance cost. When the 'std' feature is enabled (which it is by default),
+//! `catch_unwind` is used to guard drop functions, to make sure memory structures are not corrupted
+//! if a user supplied drop method panics. However, to ensure the same guarantee when running
+//! without std, arcshift presently moves allocations to temporary boxes to be able to run drop
+//! after all memory traversal is finished. This requires multiple allocations, which makes
+//! operation without 'std' slightly slower. Panicking drop methods can also lead to memory leaks
+//! without the std. The memory structures remain intact, and no undefined behavior occurs.
 //!
 //! If the overhead mentioned in the previous paragraph is unacceptable, and if the final binary
 //! is compiled with panic=abort, this extra cost can be mitigated. Enable the feature
@@ -163,11 +164,6 @@
 //! instance only consumes `std::mem::size_of::<T>()` bytes plus 5 words of memory, when the value
 //! it points to has been dropped. When the ArcShiftWeak-instance is reloaded, or dropped, that memory
 //! is also released.
-//!
-//! # Features
-//!
-//! ArcShift has only one feature that is not only for internal use: 'std'.
-//! When 'std' is enabled asdf
 //!
 //!
 //! # Pitfall #1 - lingering memory usage
@@ -483,6 +479,7 @@ fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
 
 #[inline]
 #[cfg(not(any(feature = "std", feature="nostd_unchecked_panics")))]
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn ptr_from_raw_parts_mut<T: ?Sized>(
     data_ptr: *mut u8,
     metadata: UnsizedMetadata<T>,
