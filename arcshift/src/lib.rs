@@ -478,7 +478,7 @@ fn arc_from_raw_parts_mut<T: ?Sized, M: IMetadata>(
 }
 
 #[inline]
-#[cfg(not(any(feature = "std", feature="nostd_unchecked_panics")))]
+#[cfg(not(any(feature = "std", feature = "nostd_unchecked_panics")))]
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn ptr_from_raw_parts_mut<T: ?Sized>(
     data_ptr: *mut u8,
@@ -1031,7 +1031,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
 
     // SAFETY:
     // Node must be uniquely owned, and payload must never be accessed again
-    #[cfg(not(any(feature = "std", feature="nostd_unchecked_panics")))]
+    #[cfg(not(any(feature = "std", feature = "nostd_unchecked_panics")))]
     unsafe fn take_boxed_payload(&self) -> Box<T> {
         let payload = &self.payload;
         debug_println!("boxing payload");
@@ -3330,7 +3330,7 @@ pub(crate) mod no_std_tests {
 
     #[test]
     #[should_panic(expected = "panic: B")]
-    #[cfg(not(all(miri,feature="nostd_unchecked_panics")))] // this leaks with nostd_unchecked_panics
+    #[cfg(not(all(miri, feature = "nostd_unchecked_panics")))] // this leaks with nostd_unchecked_panics
     fn simple_panic() {
         struct PanicOnDrop(char);
         impl Drop for PanicOnDrop {
