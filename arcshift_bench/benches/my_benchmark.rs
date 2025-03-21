@@ -17,9 +17,7 @@ fn mutex_bench(c: &mut Criterion) {
     let ac = Mutex::new(42u32);
     c.bench_function("mutex", |b| {
         b.iter(|| {
-            let guard = ac.lock().unwrap();
-            let value: u32 = *guard;
-            _ = black_box(value);
+            ac.lock().unwrap()
         })
     });
 }
@@ -29,8 +27,7 @@ fn rwlock_read_bench(c: &mut Criterion) {
     c.bench_function("rwlock_read", |b| {
         b.iter(|| {
             let guard = ac.read().unwrap();
-            let value: u32 = *guard;
-            _ = black_box(value);
+            *guard
         })
     });
 }
@@ -48,8 +45,7 @@ fn arcshift_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
     c.bench_function("arcshift_get", |b| {
         b.iter(|| {
-            let value = ac.get();
-            _ = black_box(value);
+            *ac.get()
         })
     });
 }
@@ -65,19 +61,18 @@ fn arcshift_shared_bench(c: &mut Criterion) {
     let ac = ArcShift::new(42u32);
     c.bench_function("arcshift_shared_get", |b| {
         b.iter(|| {
-            let value = ac.shared_get();
-            _ = black_box(value);
+            *ac.shared_get()
         })
     });
 }
 fn arcswap_bench(c: &mut Criterion) {
-    let ac = ArcSwap::from_pointee(42u32);
+    let ac = ArcSwap::from_pointee(42);
     c.bench_function("arc_swap", |b| {
         b.iter(|| {
             let loaded = ac.load();
             let arc = loaded.deref();
-            let val = *(*arc).deref();
-            _ = black_box(val);
+            let x: i32 = *(*arc).deref();
+            x
         })
     });
 }
@@ -88,15 +83,17 @@ fn arcswap_cached_bench(c: &mut Criterion) {
     c.bench_function("arc_swap(w cache)", |b| {
         b.iter(|| {
             let arc = cache.load();
-            let val = *(*arc).deref();
-            _ = black_box(val);
+            let x: i32 = *(*arc).deref();
+            x
         })
     });
 }
 
 fn arcswap_update(c: &mut Criterion) {
     let ac = ArcSwap::from_pointee(42u32);
-    c.bench_function("arc_swap_update", |b| b.iter(|| ac.swap(Arc::new(43u32))));
+    c.bench_function("arc_swap_update", |b| b.iter(||
+        ac.swap(Arc::new(43u32)))
+    );
 }
 criterion_group!(
     benches,
