@@ -132,7 +132,10 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
     /// not cause undefined behaviour.
     pub fn borrow(&self) -> ArcShiftCellHandle<T> {
         self.recursion.set(self.recursion.get() + 1);
-        ArcShiftCellHandle { cell: self, _marker: PhantomData }
+        ArcShiftCellHandle {
+            cell: self,
+            _marker: PhantomData,
+        }
     }
 
     /// Get the value pointed to.

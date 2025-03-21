@@ -423,7 +423,7 @@ unsafe impl<T: Sync + Send + ?Sized> Send for ArcShift<T> {}
 
 /// SAFETY:
 /// If `T` is `Sync` and `Send`, `ArcShiftWeak<T>` can also be `Sync`
-unsafe impl<T: Sync + Send  + ?Sized> Sync for ArcShiftWeak<T> {}
+unsafe impl<T: Sync + Send + ?Sized> Sync for ArcShiftWeak<T> {}
 
 /// SAFETY:
 /// If `T` is `Sync` and `Send`, `ArcShiftWeak<T>` can also be `Send`
