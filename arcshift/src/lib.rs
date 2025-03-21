@@ -176,12 +176,12 @@
 //!
 //! # Pitfall #2 - reference count limitations
 //!
-//! ArcShift uses usize data type for the reference counts. However, it reserves three bits for
+//! ArcShift uses usize data type for the reference counts. However, it reserves two bits for
 //! tracking some metadata. This leaves usize::MAX/4 as the maximum usable reference count. To
 //! avoid having to check the refcount twice (once before increasing the count), we set the limit
 //! at usize::MAX/8, and check the count after the atomic operation. This has the effect that if more
 //! than usize::MAX/8 threads clone the same ArcShift instance concurrently, the unsoundness will occur.
-//! However, this is considered acceptable, because this exceeds the currently possible number
+//! However, this is considered acceptable, because this exceeds the possible number
 //! of concurrent threads by a huge safety margin. Also note that usize::MAX/8 ArcShift instances would
 //! take up usize::MAX bytes of memory, which is very much impossible in practice. By leaking
 //! ArcShift instances in a tight loop it is still possible to achieve a weak count of usize::MAX/8,
