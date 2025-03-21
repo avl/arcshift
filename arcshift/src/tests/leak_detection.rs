@@ -43,7 +43,7 @@ impl SpyOwner2 {
     }
     pub(crate) fn validate(&self) {
         let guard = self.data.lock().unwrap();
-        if guard.len() > 0 {
+        if !guard.is_empty() {
             panic!("Leaked: {:?}", &*guard);
         }
     }
@@ -89,6 +89,5 @@ impl Drop for InstanceSpy2 {
         let mut guard = self.x.lock().unwrap();
         guard.remove(self.name);
         debug_println!("-- InstanceSpy -- {:?} - removed {}", &*guard, self.name);
-        //debug_println!("Drop stacktrace: {:?}", Backtrace::capture());
     }
 }

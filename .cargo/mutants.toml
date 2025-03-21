@@ -1,4 +1,18 @@
 exclude_re = [
-    ".*replace is_superseded_by_tentative -> bool with false.*", #Because it still works, it just goes a little slower with this change, so it doesn't fail the test
-    "replace > with == in ArcShift<T>::reload" #Dead code, since we never test/achieve 35000000000000 instances.
+    ".*replace > with == in do_clone_weak.*",  #Because we need 2^63 ops to trigger this clause
+    "replace > with == in do_upgrade_weak",  #Because we need 2^63 ops to trigger this clause
+    "replace > with == in do_clone_strong",  #Because we need 2^63 ops to trigger this clause
+    "replace \\|\\| with && in do_janitor_task::delete_nodes_that_can_be_deleted", # This one is interesting. The code is correct as implemented, but it may be that this rewrite is also correct, in which case the code could be simplified.
+    "replace ItemHolder<T, M>::has_payload", # This is mostly an optimization, removing this code still gives correct behavior but the retry advance happens later
+    # Unlikely races, not findable in quick mutants run:
+    "replace \\|= with &= in do_janitor_task",
+    ".*replace \\|= with \\^= in do_janitor_task.*",
+    "delete ! in do_drop_payload_if_possible",
+    "replace == with != in do_update",
+]
+exclude_globs =  [
+    "arcshift/src/tests.rs",
+    "arcshift/src/tests/custom_fuzz.rs",
+    "arcshift/src/tests/leak_detection.rs",
+    "arcshift/src/tests/race_detector.rs",
 ]

@@ -1,0 +1,7 @@
+[package]
+name = "arcshift_nostd_example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arcshift = {path = "../arcshift", default-features = false}

@@ -25,7 +25,17 @@ jobs:
       run: cargo +stable test --release --workspace
     - name: Run tests (release)
       run: cargo +stable test --release --features=validate --workspace
+    - name: Test (no default features)
+      run: cargo +stable test --no-default-features
+    - name: Test (nostd_unchecked_panics)
+      run: cargo +stable test --no-default-features --features=nostd_unchecked_panics
+    - name: Build (all features)
+      run: cargo +nightly build --all-features
     - name: Install nightly
       run: rustup toolchain install nightly
     - name: Run tests (release, nightly-only-features)
       run: cargo +nightly test --release --features=validate,nightly --workspace
+    - name: Cargo doc
+      run: cargo +stable doc --workspace
+
+

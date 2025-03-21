@@ -1,6 +1,6 @@
 [package]
 name = "arcshift"
-version = "0.1.10"
+version = "0.2.0"
 documentation = "https://docs.rs/arcshift/"
 homepage = "https://github.com/avl/arcshift/"
 repository = "https://github.com/avl/arcshift/"
@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 description = "Replacement for std::sync::Arc<T> that supports updating the value, with some caveats."
 readme = "../README.md"
 keywords = ["arc", "atomic"]
-categories = ["memory-management", "data-structures"]
+categories = ["memory-management", "data-structures", "no-std"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(coverage)'] }
@@ -21,21 +21,25 @@ shuttle = {version = "0.7", optional = true}
 [features]
 # Feature to enable extra validation, at a memory and performance cost.
 # Only intended for internal use, for verification.
-validate = []
+validate = ["std"]
 # Feature to enable extra debug output on stdout.
 # Only intended for internal use, for verification and troubleshooting.
-debug = []
+debug = ["std"]
 # Feature which disables the slowest tests
 disable_slow_tests = []
-# Feature for internal use, for testing using the 'shuttle' framework
+shuttle = ["dep:shuttle", "std"]
+nostd_unchecked_panics = []
 
 # Enables use of some compiler features which are not yet available on stable.
-# Doesn't actually change the function, but is more forward compatible, and more guaranteed to work
+# Doesn't actually change the function, but is more forward compatible, and more likely to work
 # on future compilers.
 nightly = []
 
+std = []
+default = ["std"]
+
 [target.'cfg(loom)'.dependencies]
-loom = { version = "0.7", features = ["checkpoint"], optional = true }
+loom = { version = "0.7", features = ["checkpoint"], optional = true}
 
 [dev-dependencies]
 crossbeam-channel = "0.5"

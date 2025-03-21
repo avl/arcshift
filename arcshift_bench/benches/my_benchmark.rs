@@ -46,7 +46,7 @@ fn rwlock_write_bench(c: &mut Criterion) {
 
 fn arcshift_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
-    c.bench_function("arcshift", |b| {
+    c.bench_function("arcshift_get", |b| {
         b.iter(|| {
             let value = ac.get();
             _ = black_box(value);
@@ -57,7 +57,7 @@ fn arcshift_update_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
     c.bench_function("arcshift_update", |b| {
         b.iter(|| {
-            ac.update(42);
+            ac.update(43);
         })
     });
 }
@@ -94,6 +94,10 @@ fn arcswap_cached_bench(c: &mut Criterion) {
     });
 }
 
+fn arcswap_update(c: &mut Criterion) {
+    let ac = ArcSwap::from_pointee(42u32);
+    c.bench_function("arc_swap_update", |b| b.iter(|| ac.swap(Arc::new(43u32))));
+}
 criterion_group!(
     benches,
     arcshift_shared_bench,
@@ -104,6 +108,7 @@ criterion_group!(
     arcswap_bench,
     arcswap_cached_bench,
     mutex_bench,
-    rwlock_read_bench
+    rwlock_read_bench,
+    arcswap_update,
 );
 criterion_main!(benches);
