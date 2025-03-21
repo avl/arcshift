@@ -2,6 +2,7 @@ use crate::ArcShift;
 use core::cell::{Cell, UnsafeCell};
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
+use std::marker::PhantomData;
 
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.
@@ -26,6 +27,8 @@ pub struct ArcShiftCell<T: 'static + ?Sized> {
 /// Leaking the handle does not cause unsoundness and is not UB.
 pub struct ArcShiftCellHandle<'a, T: 'static + ?Sized> {
     cell: &'a ArcShiftCell<T>,
+    // Make sure ArcShiftCellHandle is neither Sync nor Send
+    _marker: PhantomData<*mut T>,
 }
 
 impl<T: 'static + ?Sized> Drop for ArcShiftCellHandle<'_, T> {
@@ -129,7 +132,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
     /// not cause undefined behaviour.
     pub fn borrow(&self) -> ArcShiftCellHandle<T> {
         self.recursion.set(self.recursion.get() + 1);
-        ArcShiftCellHandle { cell: self }
+        ArcShiftCellHandle { cell: self, _marker: PhantomData }
     }
 
     /// Get the value pointed to.

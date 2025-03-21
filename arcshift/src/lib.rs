@@ -414,20 +414,20 @@ const fn is_sized<T: ?Sized>() -> bool {
 }
 
 /// SAFETY:
-/// If `T` is `Sync`, `ArcShift<T>` can also be `Sync`
-unsafe impl<T: Sync + ?Sized> Sync for ArcShift<T> {}
+/// If `T` is `Sync` and `Send`, `ArcShift<T>` can also be `Sync`
+unsafe impl<T: Sync + Send + ?Sized> Sync for ArcShift<T> {}
 
 /// SAFETY:
-/// If `T` is `Send`, `ArcShift<T>` can also be `Send`
-unsafe impl<T: Send + ?Sized> Send for ArcShift<T> {}
+/// If `T` is `Sync` and `Send`, `ArcShift<T>` can also be `Send`
+unsafe impl<T: Sync + Send + ?Sized> Send for ArcShift<T> {}
 
 /// SAFETY:
-/// If `T` is `Sync`, `ArcShift<T>` can also be `Sync`
-unsafe impl<T: Sync + ?Sized> Sync for ArcShiftWeak<T> {}
+/// If `T` is `Sync` and `Send`, `ArcShiftWeak<T>` can also be `Sync`
+unsafe impl<T: Sync + Send  + ?Sized> Sync for ArcShiftWeak<T> {}
 
 /// SAFETY:
-/// If `T` is `Send`, `ArcShift<T>` can also be `Send`
-unsafe impl<T: Send + ?Sized> Send for ArcShiftWeak<T> {}
+/// If `T` is `Sync` and `Send`, `ArcShiftWeak<T>` can also be `Send`
+unsafe impl<T: Sync + Send + ?Sized> Send for ArcShiftWeak<T> {}
 
 #[repr(transparent)]
 struct UnsizedMetadata<T: ?Sized> {
