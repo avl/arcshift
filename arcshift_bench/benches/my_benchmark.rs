@@ -15,11 +15,7 @@ fn std_arc_bench(c: &mut Criterion) {
 
 fn mutex_bench(c: &mut Criterion) {
     let ac = Mutex::new(42u32);
-    c.bench_function("mutex", |b| {
-        b.iter(|| {
-            ac.lock().unwrap()
-        })
-    });
+    c.bench_function("mutex", |b| b.iter(|| ac.lock().unwrap()));
 }
 fn rwlock_read_bench(c: &mut Criterion) {
     let ac = RwLock::new(42u32);
@@ -33,10 +29,8 @@ fn rwlock_read_bench(c: &mut Criterion) {
 fn rwlock_contended_read_bench(c: &mut Criterion) {
     let ac = Arc::new(RwLock::new(42u32));
     let ac_clone = ac.clone();
-    std::thread::spawn(move||{
-        loop {
-            black_box(ac_clone.read());
-        }
+    std::thread::spawn(move || loop {
+        black_box(ac_clone.read());
     });
     c.bench_function("rwlock_contended_read", |b| {
         b.iter(|| {
@@ -56,25 +50,15 @@ fn rwlock_write_bench(c: &mut Criterion) {
 }
 fn arcshift_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
-    c.bench_function("arcshift_get", |b| {
-        b.iter(|| {
-            *ac.get()
-        })
-    });
+    c.bench_function("arcshift_get", |b| b.iter(|| *ac.get()));
 }
 fn arcshift_contended_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
     let mut ac_clone = ac.clone();
-    std::thread::spawn(move||{
-        loop {
-            black_box(ac_clone.get());
-        }
+    std::thread::spawn(move || loop {
+        black_box(ac_clone.get());
     });
-    c.bench_function("arcshift_contended_get", |b| {
-        b.iter(|| {
-            *ac.get()
-        })
-    });
+    c.bench_function("arcshift_contended_get", |b| b.iter(|| *ac.get()));
 }
 fn arcshift_update_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
@@ -86,11 +70,7 @@ fn arcshift_update_bench(c: &mut Criterion) {
 }
 fn arcshift_shared_bench(c: &mut Criterion) {
     let ac = ArcShift::new(42u32);
-    c.bench_function("arcshift_shared_get", |b| {
-        b.iter(|| {
-            *ac.shared_get()
-        })
-    });
+    c.bench_function("arcshift_shared_get", |b| b.iter(|| *ac.shared_get()));
 }
 fn arcswap_bench(c: &mut Criterion) {
     let ac = ArcSwap::from_pointee(42);
@@ -118,9 +98,7 @@ fn arcswap_cached_bench(c: &mut Criterion) {
 
 fn arcswap_update(c: &mut Criterion) {
     let ac = ArcSwap::from_pointee(42u32);
-    c.bench_function("arc_swap_update", |b| b.iter(||
-        ac.swap(Arc::new(43u32)))
-    );
+    c.bench_function("arc_swap_update", |b| b.iter(|| ac.swap(Arc::new(43u32))));
 }
 criterion_group!(
     benches,
