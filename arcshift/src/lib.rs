@@ -2484,32 +2484,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
 
         let _weak_was = item.weak_count.fetch_add(1, Ordering::Relaxed);
 
-        /*todo remove let _weak_was = loop {
-            let weak_count = item.weak_count.load(Ordering::SeqCst);
-            let new_weak_count = (weak_count | WEAK_HAVE_NEXT) + 1;
-            if item
-                .weak_count
-                .compare_exchange(
-                    weak_count,
-                    new_weak_count,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_err()
-            {
-                debug_println!(
-                    "update weak race. {:?} (to {})",
-                    item_ptr,
-                    format_weak(new_weak_count)
-                );
-                continue;
-            }
-            debug_println!("==> do_update {:x?} weak updated from {} to {}",
-                item_ptr, weak_count, new_weak_count
-            );
-            break weak_count;
-        };*/
-
         #[cfg(feature = "validate")]
         assert!(_weak_was > 0);
         debug_println!(
@@ -2782,6 +2756,17 @@ impl<T: ?Sized> ArcShiftWeak<T> {
     }
 }
 impl<T> ArcShift<T> {
+
+    /// Crate a new ArcShift instance with the given value.
+    pub fn new(val: T) -> ArcShift<T> {
+        let holder = make_sized_holder(val, null_mut());
+        ArcShift {
+            // SAFETY:
+            // The newly created holder-pointer is valid and non-null
+            item: unsafe { NonNull::new_unchecked(to_dummy(holder) as *mut _) },
+        }
+    }
+
     /// Drops this ArcShift instance. If this was the last instance of the entire chain,
     /// the payload value is returned.
     pub fn try_into_inner(self) -> Option<T> {
@@ -2795,16 +2780,6 @@ impl<T> ArcShift<T> {
         );
         core::mem::forget(self);
         drop_handler.take_stolen()
-    }
-
-    /// Crate a new ArcShift instance with the given value.
-    pub fn new(val: T) -> ArcShift<T> {
-        let holder = make_sized_holder(val, null_mut());
-        ArcShift {
-            // SAFETY:
-            // The newly created holder-pointer is valid and non-null
-            item: unsafe { NonNull::new_unchecked(to_dummy(holder) as *mut _) },
-        }
     }
 
     /// Update the value of this ArcShift instance (and all derived from it) to the given value.
@@ -3087,10 +3062,10 @@ impl<T: ?Sized> ArcShift<T> {
 
     /// Create an [`ArcShiftWeak<T>`] instance.
     ///
-    /// The weak pointer allows the value to be deallocated, if all strong references disappear.
+    /// Weak pointers do not prevent the inner from being dropped.
     ///
     /// The returned pointer can later be upgraded back to a regular ArcShift instance, if
-    /// there is at least one other strong reference (i.e, [`ArcShift<T>`] instance).
+    /// there is at least one remaining strong reference (i.e, [`ArcShift<T>`] instance).
     #[must_use = "this returns a new `ArcShiftWeak` pointer, \
                   without modifying the original `ArcShift`"]
     pub fn downgrade(this: &ArcShift<T>) -> ArcShiftWeak<T> {
@@ -3149,7 +3124,7 @@ impl<T: ?Sized> ArcShift<T> {
         }
     }
 
-    /// Update this instance to the latest value.
+    /// Reload this instance, making it point to the most recent value.
     #[inline(always)]
     pub fn reload(&mut self) {
         if is_sized::<T>() {
