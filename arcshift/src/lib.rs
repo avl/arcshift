@@ -2756,7 +2756,6 @@ impl<T: ?Sized> ArcShiftWeak<T> {
     }
 }
 impl<T> ArcShift<T> {
-
     /// Crate a new ArcShift instance with the given value.
     pub fn new(val: T) -> ArcShift<T> {
         let holder = make_sized_holder(val, null_mut());
