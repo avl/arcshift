@@ -21,10 +21,24 @@ fn mutex_bench(c: &mut Criterion) {
         })
     });
 }
-
 fn rwlock_read_bench(c: &mut Criterion) {
     let ac = RwLock::new(42u32);
     c.bench_function("rwlock_read", |b| {
+        b.iter(|| {
+            let guard = ac.read().unwrap();
+            *guard
+        })
+    });
+}
+fn rwlock_contended_read_bench(c: &mut Criterion) {
+    let ac = Arc::new(RwLock::new(42u32));
+    let ac_clone = ac.clone();
+    std::thread::spawn(move||{
+        loop {
+            black_box(ac_clone.read());
+        }
+    });
+    c.bench_function("rwlock_contended_read", |b| {
         b.iter(|| {
             let guard = ac.read().unwrap();
             *guard
@@ -40,10 +54,23 @@ fn rwlock_write_bench(c: &mut Criterion) {
         })
     });
 }
-
 fn arcshift_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
     c.bench_function("arcshift_get", |b| {
+        b.iter(|| {
+            *ac.get()
+        })
+    });
+}
+fn arcshift_contended_bench(c: &mut Criterion) {
+    let mut ac = ArcShift::new(42u32);
+    let mut ac_clone = ac.clone();
+    std::thread::spawn(move||{
+        loop {
+            black_box(ac_clone.get());
+        }
+    });
+    c.bench_function("arcshift_contended_get", |b| {
         b.iter(|| {
             *ac.get()
         })
@@ -101,11 +128,13 @@ criterion_group!(
     std_arc_bench,
     rwlock_write_bench,
     arcshift_bench,
+    arcshift_contended_bench,
     arcshift_update_bench,
     arcswap_bench,
     arcswap_cached_bench,
     mutex_bench,
     rwlock_read_bench,
+    rwlock_contended_read_bench,
     arcswap_update,
 );
 criterion_main!(benches);
