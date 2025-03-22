@@ -559,13 +559,13 @@ fn from_dummy<T: ?Sized, M: IMetadata>(ptr: *const ItemHolderDummy<T>) -> *const
 }
 
 macro_rules! with_holder {
-    ($p: expr, $t: ty, $f:expr) => {
+    ($p: expr, $t: ty, $item: ident, $f:tt) => {
         if is_sized::<$t>() {
-            let ptr = from_dummy::<$t, SizedMetadata>($p.as_ptr());
-            $f(ptr)
+            let $item = from_dummy::<$t, SizedMetadata>($p.as_ptr());
+            $f
         } else {
-            let ptr = from_dummy::<$t, UnsizedMetadata<$t>>($p.as_ptr());
-            $f(ptr)
+            let $item = from_dummy::<$t, UnsizedMetadata<$t>>($p.as_ptr());
+            $f
         }
     };
 }
@@ -955,8 +955,9 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
 }
 
 impl<T: ?Sized, M: IMetadata> PartialEq for ItemHolder<T, M> {
+    #[allow(clippy::ptr_eq)] //We actually want to use addr_eq, but it's not available on older rust versions. Let's just use this for now.
     fn eq(&self, other: &ItemHolder<T, M>) -> bool {
-        self as *const _ == other as *const _
+        self as *const _ as *const u8 == other as *const _ as *const u8
     }
 }
 
@@ -1391,7 +1392,7 @@ fn undecorate<T: ?Sized>(cand: *const ItemHolderDummy<T>) -> *const ItemHolderDu
 
 impl<T: ?Sized> Clone for ArcShift<T> {
     fn clone(&self) -> Self {
-        let t = with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
+        let t = with_holder!(self.item, T, item, {
             let mut drop_jobs = DropHandler::default();
             let result = do_clone_strong(item, &mut drop_jobs);
             drop_jobs.resume_any_panics();
@@ -1406,9 +1407,7 @@ impl<T: ?Sized> Clone for ArcShift<T> {
 }
 impl<T: ?Sized> Clone for ArcShiftWeak<T> {
     fn clone(&self) -> Self {
-        let t = with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
-            do_clone_weak(item)
-        });
+        let t = with_holder!(self.item, T, item, { do_clone_weak(item) });
         ArcShiftWeak {
             // SAFETY:
             // The pointer returned by 'do_clone_weak' is always valid and non-null.
@@ -2666,7 +2665,7 @@ impl<T: ?Sized> Drop for ArcShift<T> {
     fn drop(&mut self) {
         verify_item(self.item.as_ptr());
         debug_println!("executing ArcShift::drop({:x?})", self.item.as_ptr());
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
+        with_holder!(self.item, T, item, {
             let mut jobq = DropHandler::default();
             do_drop_strong(item, &mut jobq);
             jobq.resume_any_panics();
@@ -2683,9 +2682,7 @@ impl<T: ?Sized> Drop for ArcShiftWeak<T> {
             jobq.resume_any_panics();
         }
 
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
-            drop_weak_helper(item)
-        })
+        with_holder!(self.item, T, item, { drop_weak_helper(item) })
     }
 }
 
@@ -2705,7 +2702,7 @@ impl<T: ?Sized> ArcShiftWeak<T> {
     /// If the ArcShift instance has no value (because the last ArcShift instance
     /// had been deallocated), this method returns None.
     pub fn upgrade(&self) -> Option<ArcShift<T>> {
-        let t = with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
+        let t = with_holder!(self.item, T, item, {
             let mut drop_handler = DropHandler::default();
             let temp = do_upgrade_weak(item, &mut drop_handler);
             drop_handler.resume_any_panics();
@@ -2751,7 +2748,7 @@ impl<T> ArcShift<T> {
     pub fn update(&mut self, val: T) {
         let holder = make_sized_holder(val, self.item.as_ptr() as *const ItemHolderDummy<T>);
 
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
+        with_holder!(self.item, T, item, {
             let mut jobq = DropHandler::default();
             // SAFETY:
             // * do_update returns non-null values.
@@ -2915,7 +2912,7 @@ impl<T: ?Sized> ArcShift<T> {
     /// pointing to the same object chain.
     pub fn try_get_mut(&mut self) -> Option<&mut T> {
         self.reload();
-        with_holder!(self.item, T, |item_ptr: *const ItemHolder<T, _>| {
+        with_holder!(self.item, T, item_ptr, {
             // SAFETY:
             // self.item is always a valid pointer for shared access
             let item = unsafe { &*item_ptr };
@@ -2968,7 +2965,7 @@ impl<T: ?Sized> ArcShift<T> {
     pub fn update_box(&mut self, new_payload: Box<T>) {
         let holder = make_sized_or_unsized_holder_from_box(new_payload, self.item.as_ptr());
 
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| {
+        with_holder!(self.item, T, item, {
             let mut jobq = DropHandler::default();
             // SAFETY:
             // do_update returns a valid non-null pointer
@@ -3018,7 +3015,7 @@ impl<T: ?Sized> ArcShift<T> {
     /// This method has the advantage that it doesn't require `&mut self` access.
     #[inline(always)]
     pub fn shared_get(&self) -> &T {
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| -> &T {
+        with_holder!(self.item, T, item, {
             // SAFETY:
             // ArcShift has a strong ref, so payload must not have been dropped.
             unsafe { (*item).payload() }
@@ -3034,9 +3031,7 @@ impl<T: ?Sized> ArcShift<T> {
     #[must_use = "this returns a new `ArcShiftWeak` pointer, \
                   without modifying the original `ArcShift`"]
     pub fn downgrade(this: &ArcShift<T>) -> ArcShiftWeak<T> {
-        let t = with_holder!(this.item, T, |item: *const ItemHolder<T, _>| {
-            do_clone_weak(item)
-        });
+        let t = with_holder!(this.item, T, item, { do_clone_weak(item) });
         ArcShiftWeak {
             // SAFETY:
             // do_clone_weak returns a valid, non-null pointer
@@ -3047,7 +3042,7 @@ impl<T: ?Sized> ArcShift<T> {
     /// Note, if there is at least one strong count, these collectively hold a weak count.
     #[allow(unused)]
     pub(crate) fn weak_count(&self) -> usize {
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| -> usize {
+        with_holder!(self.item, T, item, {
             // SAFETY:
             // self.item is a valid pointer
             unsafe { get_weak_count((*item).weak_count.load(Ordering::SeqCst)) }
@@ -3055,7 +3050,7 @@ impl<T: ?Sized> ArcShift<T> {
     }
     #[allow(unused)]
     pub(crate) fn strong_count(&self) -> usize {
-        with_holder!(self.item, T, |item: *const ItemHolder<T, _>| -> usize {
+        with_holder!(self.item, T, item, {
             // SAFETY:
             // self.item is a valid pointer
             unsafe { (*item).strong_count.load(Ordering::SeqCst) }
@@ -3132,7 +3127,7 @@ impl<T: ?Sized> ArcShift<T> {
         } else {
             &weak_handles[0].item
         };
-        with_holder!(first, T, |item: *const ItemHolder<T, _>| {
+        with_holder!(first, T, item, {
             Self::debug_validate_impl(strong_handles, weak_handles, item);
         });
     }
