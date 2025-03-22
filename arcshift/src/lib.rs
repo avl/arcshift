@@ -1791,8 +1791,8 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                     // b is a valid pointer. See above.
                     let next_ptr = unsafe { (*b).next.load(Ordering::SeqCst) }; //atomic advance reload next
                     if !undecorate(next_ptr).is_null() {
-                        // Race - even though _did_ have payload prior to us grabbing the strong count, it now doesn't.
-                        // This can only happen if there's another node to the right, that _does_ have a payload.
+                        // Race - even though _did_ have payload prior to us grabbing the strong count, it now might not.
+                        // This can only happen if there's some other node to the right that _does_ have a payload.
 
                         // SAFETY:
                         // b is a valid pointer. See above.
@@ -2462,6 +2462,10 @@ fn do_update<T: ?Sized, M: IMetadata>(
         // yet linked into the chain, so no other node could free it.
         unsafe { (*val).prev = atomic::AtomicPtr::new(item_ptr as *mut _) };
 
+        // We must increment weak_count here, because this is the signal that
+        // causes the drop_weak impl to realize that it is racing with an 'update',
+        // (in contrast to perhaps racing with another drop, in which case it might
+        // win the race and might be required to deallocate, to avoid memory leaks).
         let _weak_was = item.weak_count.fetch_add(1, Ordering::Relaxed);
 
         #[cfg(feature = "validate")]
