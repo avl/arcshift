@@ -559,7 +559,7 @@ fn from_dummy<T: ?Sized, M: IMetadata>(ptr: *const ItemHolderDummy<T>) -> *const
 }
 
 macro_rules! with_holder {
-    ($p: expr, $t: ty, $item: ident, $f:tt) => {
+    ($p: expr, $t: ty, $item: ident, $f:expr) => {
         if is_sized::<$t>() {
             let $item = from_dummy::<$t, SizedMetadata>($p.as_ptr());
             $f
@@ -581,6 +581,7 @@ fn make_sized_or_unsized_holder_from_box<T: ?Sized>(
     }
 }
 
+#[allow(clippy::let_and_return)]
 fn get_weak_count(count: usize) -> usize {
     let count = count & ((1 << (usize::BITS - 2)) - 1);
     #[cfg(feature = "validate")]
@@ -1407,7 +1408,7 @@ impl<T: ?Sized> Clone for ArcShift<T> {
 }
 impl<T: ?Sized> Clone for ArcShiftWeak<T> {
     fn clone(&self) -> Self {
-        let t = with_holder!(self.item, T, item, { do_clone_weak(item) });
+        let t = with_holder!(self.item, T, item, do_clone_weak(item) );
         ArcShiftWeak {
             // SAFETY:
             // The pointer returned by 'do_clone_weak' is always valid and non-null.
@@ -2686,7 +2687,7 @@ impl<T: ?Sized> Drop for ArcShiftWeak<T> {
             jobq.resume_any_panics();
         }
 
-        with_holder!(self.item, T, item, { drop_weak_helper(item) })
+        with_holder!(self.item, T, item, drop_weak_helper(item) )
     }
 }
 
@@ -3035,7 +3036,7 @@ impl<T: ?Sized> ArcShift<T> {
     #[must_use = "this returns a new `ArcShiftWeak` pointer, \
                   without modifying the original `ArcShift`"]
     pub fn downgrade(this: &ArcShift<T>) -> ArcShiftWeak<T> {
-        let t = with_holder!(this.item, T, item, { do_clone_weak(item) });
+        let t = with_holder!(this.item, T, item,  do_clone_weak(item) );
         ArcShiftWeak {
             // SAFETY:
             // do_clone_weak returns a valid, non-null pointer
