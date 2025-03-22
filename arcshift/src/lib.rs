@@ -883,22 +883,29 @@ struct ItemHolderDummy<T: ?Sized> {
 }
 
 /*
- * ItemHolder cannot be dropped if weak-count > 0
- * ItemHolder cannot be dropped while strong-count > 0
- * The rightmost ItemHolder cannot be dropped if there are other items (to the left)
-   (But it may be possible to apply the janitor operation and remove the 'prev')
- * However, an ItemHolder can have its strong-count increased even if it is dropped,
+Invariants:
+ * ItemHolder cannot be deallocated if weak-count > 0
+ * When strong-count goes from 0->1, weak-count must be incremented by 1
+ * When strong-count goes from 1->0, weak-count must be decremented by 1
+ * The rightmost ItemHolder cannot be dropped if there are other items (to the left).
+   (But it may be possible to apply the janitor operation and drop them)
+ * An ItemHolder can have its strong-count increased even if it is dropped,
    so just because strong-count is > 0 doesn't mean the item isn't dropped.
- * If strong-count > 0, weak-count is also > 0. Always.
- * The first taken strong-count owns a weak ref on the item. When the last strong count is
-   released, the weak ref must be released.
+ * If strong-count > 0, weak-count is also > 0.
  * ItemHolder cannot be dropped if item.prev.advance_count > 0
+ * Linked list defined by prev-pointers is the nominal order of the chain
  * ItemHolder can only be dropped when holding a lock on item,
-   and a lock on item 'item.next', after having set 'next' to 'item.next' (or further to the right).
+   and a lock on item 'item.next', after having set 'item.prev.next' to 'item.next' (or further to the right).
    See do_advance_impl for details regarding 'advance_count'.
  * While dropping, the janitor process must be run. If a concurrent janitor task is detected,
    it must be marked as 'disturbed', and the disturbed task must re-run from the beginning
    after completing.
+ * The weak-count has encoded in it 2 flags: HAVE_WEAK_NEXT and HAVE_WEAK_PREV. These decide
+   if the item has an item to the right (next) and/or to the left (prev). The HAVE_WEAK_NEXT
+   means there is, or soon will be, a neighbor to the right. HAVE_WEAK_PREV there isn't,
+   or soon won't be, a neighbor to the left. When using compare_exchange to set the weak_count
+   to 0, the code will atomically ensure no prev/next exist and that count is 0, in one operation.
+
 */
 
 /// This structure represents the heap allocation in which ArcShift payloads reside.
@@ -1009,12 +1016,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
 
         ret
     }
-
-    /*
-    #[cfg(feature = "debug")]
-    fn decoration(&self) -> ItemStateEnum {
-        get_decoration(self.next.load(Ordering::SeqCst))
-    }*/
 
     fn has_payload(&self) -> bool {
         !get_decoration(self.next.load(atomic::Ordering::SeqCst)).is_dropped()
@@ -1682,10 +1683,6 @@ fn do_advance_impl<T: ?Sized, M: IMetadata>(
                 format_weak(_res - 1)
             );
 
-            //This no longer always holds, now that we set the next-flag _after_ the next compcxg
-            //#[cfg(feature = "validate")]
-            //assert!(get_weak_next(_res));
-
             // This should never reach 0 here. We _know_ that 'item' has a 'next'. Thus, this 'next'
             // must hold a reference count on this.
             #[cfg(feature = "validate")]
@@ -1806,8 +1803,6 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                             "strong count {:x?} must be >0, but was 0",
                             b
                         );
-
-                        //Error: just because b_strong > 0 doesn't mean it has a weak count.
 
                         // If b_strong was not 0, it had a weak count. Our increment of it above would have made it so that
                         // no other thread could observe it going to 0. After our decrement below, it might go to zero.
@@ -2055,13 +2050,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         // cur_ptr remains a valid pointer. Our lock on the nodes, as we traverse them backward,
         // ensures that no other janitor task can free them.
         let cur: &ItemHolder<T, M> = unsafe { &*from_dummy(cur_ptr) };
-        debug_println!(
-            "Setting next of {:x?} to {:x?}", // (weak: {} (weak of start: {})
-            cur_ptr,
-            start_ptr,
-            //format_weak(cur.weak_count.load(Ordering::SeqCst)),
-            //format_weak(start.weak_count.load(Ordering::SeqCst))
-        );
+        debug_println!("Setting next of {:x?} to {:x?}", cur_ptr, start_ptr,);
         #[cfg(feature = "validate")]
         assert_ne!(cur_ptr, start_ptr);
 
@@ -2156,9 +2145,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 item_ptr,
                 // SAFETY:
                 // item_ptr is valid
-                //unsafe{ (*from_dummy::<T,M>(item_ptr)).decoration()},
                 format_weak(item_weak_count),
-                //item.strong_count.load(Ordering::SeqCst)
             );
 
             #[cfg(feature = "validate")]
@@ -2336,7 +2323,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
 
         #[cfg(feature = "debug")]
         if get_weak_next(prior_weak) {
-            //let _next_ptr = item.next.load(Ordering::SeqCst);
             debug_println!("raced in drop weak - {:x?} was previously advanced to rightmost, but now it has a 'next' again (next is ?)", item_ptr);
         }
 
@@ -2348,7 +2334,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             // item_ptr was returned by do_advance_weak, and is thus valid.
             let o_item = unsafe { &*from_dummy::<T, M>(item_ptr) };
             let o_strong = o_item.strong_count.load(Ordering::SeqCst);
-            //let original_next = o_item.next.load(Ordering::SeqCst);
             if o_strong == 0 {
                 let can_drop_now_despite_next_check = if strong_refs
                     == NodeStrongStatus::NoStrongRefsExist
@@ -2368,12 +2353,6 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
                 }
             }
         }
-
-        /*#[cfg(feature = "debug")]
-        {
-            let _have_prev = !item.prev.load(Ordering::SeqCst).is_null();
-            debug_println!("do_drop_weak: reducing weak count of {:x?}, to {} -> {} (have next/gc: {}, have prev: {}) ", item_ptr, format_weak(prior_weak), format_weak(prior_weak.wrapping_sub(1)), false,_have_prev);
-        }*/
 
         match item.weak_count.compare_exchange(
             prior_weak,
@@ -2453,8 +2432,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
     // Lock free. This loop only loops if another thread has changed 'next', which
     // means there is system wide progress.
     loop {
-        //let new_node = val_dummy;
-
         item_ptr = do_advance_strong::<T, M>(item_ptr, drop_job_queue);
 
         // SAFETY:
@@ -2519,7 +2496,6 @@ fn do_update<T: ?Sized, M: IMetadata>(
             }
         }
 
-        //let _prev_weak = format_weak(item.weak_count.load(Ordering::SeqCst));
         let strong_count = item.strong_count.fetch_sub(1, Ordering::SeqCst);
         debug_println!(
             "do_update: strong count {:x?} is now decremented to {}",
@@ -2612,15 +2588,8 @@ fn do_drop_payload_if_possible<T: ?Sized, M: IMetadata>(
             }
         }
     }
-    debug_println!(
-        "Dropping payload {:x?} (dec: ?)",
-        item_ptr,
-        // SAFETY:
-        // item_ptr is valid
-        //unsafe { (*item_ptr).decoration() }
-    );
+    debug_println!("Dropping payload {:x?} (dec: ?)", item_ptr,);
     // SAFETY: item_ptr must be valid, guaranteed by caller.
-
     drop_queue.do_drop(item_ptr as *mut _);
 }
 
@@ -2668,16 +2637,7 @@ fn do_drop_strong<T: ?Sized, M: IMetadata>(
     full_item_ptr: *const ItemHolder<T, M>,
     drop_job_queue: &mut impl IDropHandler<T, M>,
 ) {
-    debug_println!(
-        "drop strong of {:x?}",
-        full_item_ptr,
-        // SAFETY:
-        // full_item_ptr is valid
-        //unsafe { (*full_item_ptr).strong_count.load(Ordering::SeqCst) },
-        // SAFETY:
-        // full_item_ptr is valid
-        //get_weak_count(unsafe { (*full_item_ptr).weak_count.load(Ordering::SeqCst) })
-    );
+    debug_println!("drop strong of {:x?}", full_item_ptr,);
     let mut item_ptr = to_dummy(full_item_ptr);
 
     item_ptr = do_advance_strong::<T, M>(item_ptr, drop_job_queue);
@@ -2690,7 +2650,6 @@ fn do_drop_strong<T: ?Sized, M: IMetadata>(
         item_ptr,
         prior_strong,
         prior_strong - 1,
-        //format_weak(item.weak_count.load(Ordering::SeqCst))
     );
     if prior_strong == 1 {
         // This is the only case where we actually might need to drop the rightmost node's payload
