@@ -88,7 +88,6 @@ mod simple {
         ItemStateEnum, SizedMetadata,
     };
     use alloc::boxed::Box;
-    use std::ptr::dangling;
 
     #[test]
     fn simple_get() {
@@ -751,7 +750,7 @@ mod simple {
         dummy_model(|| {
             assert_eq!(
                 get_decoration(decorate::<u32>(
-                    dangling(),
+                    1 as *mut _,
                     ItemStateEnum::UndisturbedGcIsActive
                 )),
                 ItemStateEnum::UndisturbedGcIsActive
@@ -818,8 +817,8 @@ mod simple {
         dummy_model(|| {
             assert_eq!(get_weak_count(1 << 55), 1 << 55);
             assert_eq!(get_weak_count(1), 1);
-            assert_eq!(get_weak_count(542 | 1 << 62), 542);
-            assert_eq!(get_weak_count(542 | 1 << 63), 542);
+            assert_eq!(get_weak_count(542 |( 1 << 62)), 542);
+            assert_eq!(get_weak_count(542 | (1 << 63)), 542);
             assert_eq!(get_weak_count(1 << 62), 0);
             assert_eq!(get_weak_count(1 << 63), 0);
             assert!(get_weak_next(1 << 63));
@@ -2112,5 +2111,334 @@ fn simple_threading_update_thrice() {
         unsafe { ArcShift::debug_validate(&[&shift3], &[]) };
         debug_println!("--> Main dropping");
         assert!(*shift3.get() > 42);
+    });
+}
+
+#[cfg(not(feature = "disable_slow_tests"))]
+#[test]
+fn simple_threading_update_four() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let mut shift = ArcShift::new(42u32);
+        let mut shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        let mut shift3 = shift.clone();
+        let mut shift4 = shift.clone();
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2, &shift3, &shift4], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift1.update(43);
+                debug_println!("--> t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.update(44);
+                debug_println!("--> t2 dropping");
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift3.update(45);
+                debug_println!("--> t3 dropping");
+            })
+            .unwrap();
+
+        let t4 = atomic::thread::Builder::new()
+            .name("t4".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift4.update(46);
+                debug_println!("--> t4 dropping");
+            })
+            .unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+        t4.join().unwrap();
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift], &[]) };
+        debug_println!("--> Main dropping");
+        assert!(*shift.get() >= 43 && *shift.get() <= 46);
+    });
+}
+
+#[test]
+fn simple_threading_drop_four() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(42u32);
+        let mut shift1 = shift.clone();
+        shift1.update(43);
+        let mut shift2 = shift1.clone();
+        shift2.update(44);
+        let mut shift3 = shift2.clone();
+        shift3.update(45);
+        let mut shift4 = shift3.clone();
+        shift4.update(46);
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2, &shift3, &shift4], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift1.update(42);
+                let _ = shift1;
+                debug_println!("--> t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let _ = shift2;
+                debug_println!("--> t2 dropping");
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let _ = shift3;
+                debug_println!("--> t3 dropping");
+            })
+            .unwrap();
+
+        let t4 = atomic::thread::Builder::new()
+            .name("t4".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let _ = shift4;
+                debug_println!("--> t4 dropping");
+            })
+            .unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+        t4.join().unwrap();
+    });
+}
+
+#[test]
+fn simple_threading_try_get_mut3() {
+    model(|| {
+        debug_println!("-------- loom -------------");
+        let mut shift = ArcShift::new(1);
+        let mut shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        let mut shift3 = shift.clone();
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2, &shift3], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift.try_get_mut() {
+                    assert!(*x == 1 || *x == 2);
+                    *x = 41;
+                }
+                debug_println!("--> t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift1.try_get_mut() {
+                    assert!(*x == 1 || *x == 2);
+                    *x = 42;
+                }
+                debug_println!("--> t2 dropping");
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.update(2);
+                debug_println!("--> t3 dropping");
+            })
+            .unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift3], &[]) };
+        debug_println!("--> Main dropping");
+        assert!(*shift3.get() > 1);
+    });
+}
+
+#[test]
+fn simple_threading_try_get_mut2() {
+    let saw_nonzero = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    #[allow(unused)]
+    let saw_nonzero2 = saw_nonzero.clone();
+    model(move || {
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(0);
+        let mut shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift1.try_get_mut() {
+                    assert_eq!(*x, 0);
+                    *x = 2;
+                }
+                debug_println!("--> t1 dropping");
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift2.try_get_mut() {
+                    assert_eq!(*x, 0);
+                    *x = 3;
+                }
+                debug_println!("--> t2 dropping");
+                shift2
+            })
+            .unwrap();
+        t1.join().unwrap();
+        let mut shift = t2.join().unwrap();
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift], &[]) };
+        debug_println!("--> Main dropping");
+        if *shift.get() > 0 {
+            saw_nonzero.store(true, Ordering::Relaxed);
+        }
+        assert!(*shift.get() < 4);
+    });
+
+    #[cfg(loom)]
+    assert!(saw_nonzero2.load(Ordering::Relaxed));
+}
+#[test]
+fn simple_threading_try_into_inner2() {
+    model(move || {
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(0);
+        let shift1 = shift.clone();
+        let shift2 = shift.clone();
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift1.try_into_inner() {
+                    assert_eq!(x, 0);
+                    return true;
+                }
+                debug_println!("--> t1 dropping");
+                false
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift2.try_into_inner() {
+                    assert_eq!(x, 0);
+                    return true;
+                }
+                debug_println!("--> t2 dropping");
+                false
+            })
+            .unwrap();
+        let r1 = t1.join().unwrap();
+        let r2 = t2.join().unwrap();
+        debug_println!("--> Main dropping");
+
+        assert_ne!(r1, r2);
+    });
+}
+#[test]
+fn simple_threading_try_into_inner3() {
+    model(move || {
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(0);
+        let shift1 = shift.clone();
+        let shift2 = shift.clone();
+        let shift3 = shift.clone();
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2, &shift3], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift1.try_into_inner() {
+                    assert_eq!(x, 0);
+                    return true;
+                }
+                debug_println!("--> t1 dropping");
+                false
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift2.try_into_inner() {
+                    assert_eq!(x, 0);
+                    return true;
+                }
+                debug_println!("--> t2 dropping");
+                false
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                if let Some(x) = shift3.try_into_inner() {
+                    assert_eq!(x, 0);
+                    return true;
+                }
+                debug_println!("--> t3 dropping");
+                false
+            })
+            .unwrap();
+
+        let r1 = t1.join().unwrap();
+        let r2 = t2.join().unwrap();
+        let r3 = t3.join().unwrap();
+        debug_println!("--> Main dropping");
+        assert_eq!(r1 as u32 + r2 as u32 + r3 as u32, 1);
     });
 }

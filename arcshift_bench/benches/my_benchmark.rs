@@ -30,7 +30,7 @@ fn rwlock_contended_read_bench(c: &mut Criterion) {
     let ac = Arc::new(RwLock::new(42u32));
     let ac_clone = ac.clone();
     std::thread::spawn(move || loop {
-        black_box(ac_clone.read());
+        drop(black_box(ac_clone.read()));
     });
     c.bench_function("rwlock_contended_read", |b| {
         b.iter(|| {
