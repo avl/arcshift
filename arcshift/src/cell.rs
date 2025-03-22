@@ -2,7 +2,7 @@ use crate::ArcShift;
 use core::cell::{Cell, UnsafeCell};
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.
@@ -106,8 +106,6 @@ impl Display for RecursionDetected {
         write!(f, "RecursionDetected")
     }
 }
-
-impl core::error::Error for RecursionDetected {}
 
 impl<T: 'static> ArcShiftCell<T> {
     /// Create a new ArcShiftCell with the given value.
