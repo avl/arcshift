@@ -361,6 +361,12 @@ macro_rules! debug_println {
 /// ```
 pub struct ArcShift<T: ?Sized> {
     item: NonNull<ItemHolderDummy<T>>,
+
+    // Make sure ArcShift is invariant.
+    // ArcShift instances with different lifetimes of T should not be compatible,
+    // since could lead to a short-lived value T being insert into a chain which
+    // also has long-lived ArcShift instances with long-lived T.
+    pd: PhantomData<*mut T>
 }
 impl<T> UnwindSafe for ArcShift<T> {}
 
@@ -1403,6 +1409,7 @@ impl<T: ?Sized> Clone for ArcShift<T> {
             // SAFETY:
             // The pointer returned by 'do_clone_strong' is always valid and non-null.
             item: unsafe { NonNull::new_unchecked(t as *mut _) },
+            pd: PhantomData,
         }
     }
 }
@@ -1519,7 +1526,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                     prior_strong_count,
                     prior_strong_count + 1,
                     Ordering::SeqCst, //atomic upgrade inc strong
-                    Ordering::SeqCst,
+                    Ordering::Relaxed,
                 )
                 .is_ok()
             {
@@ -1717,7 +1724,10 @@ fn do_advance_weak<T: ?Sized, M: IMetadata>(
             // SAFETY:
             // a is a valid pointer. do_advance_impl only supplies usable pointers to the callback.
             let _a_weak = unsafe { (*a).weak_count.fetch_sub(1, Ordering::SeqCst) }; //atomic advance weak dec weak_count a
-                                                                                     // We have a weak ref count on 'b' given to use by `do_advance_impl`, which we're fine with
+
+            // We have a weak ref count on 'b' given to use by `do_advance_impl`,
+            // which we're fine with this and don't need to adjust b.weak_count
+
             debug_println!(
                 "==> weak advance {:x?}, decremented weak counts to a:{:x?}={}",
                 a,
@@ -1740,14 +1750,15 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
     do_advance_impl::<_, M>(item_ptr, move |a, b| {
         // SAFETY:
         // b is a valid pointer. do_advance_impl supplies the closure with only valid pointers.
-        let mut b_strong = unsafe { (*b).strong_count.load(Ordering::SeqCst) }; //atomic advance strong load b strong_count
-                                                                                // Lock free, since we only loop when compare_exchange fails on 'strong_count', something
-                                                                                // which only occurs when 'strong_count' changes, which only occurs when there is
-                                                                                // system wide progress.
-                                                                                //
-                                                                                // Note, do_advance_strong_impl will loop if this returns false. See each
-                                                                                // such return for an argument why this only happens if there's been system side
-                                                                                // progress.
+        let mut b_strong = unsafe { (*b).strong_count.load(Ordering::SeqCst) };//atomic advance strong load b strong_count
+
+        // Lock free, since we only loop when compare_exchange fails on 'strong_count', something
+        // which only occurs when 'strong_count' changes, which only occurs when there is
+        // system wide progress.
+        //
+        // Note, do_advance_strong_impl will loop if this returns false. See each
+        // such return for an argument why this only happens if there's been system side
+        // progress.
         loop {
             debug_println!(
                 "do_advance_strong {:x?} -> {:x?} (b-count = {})",
@@ -2717,6 +2728,7 @@ impl<T: ?Sized> ArcShiftWeak<T> {
             // SAFETY:
             // do_upgrade_weak returns a valid upgraded pointer
             item: unsafe { NonNull::new_unchecked(t? as *mut _) },
+            pd: PhantomData,
         })
     }
 }
@@ -2728,6 +2740,7 @@ impl<T> ArcShift<T> {
             // SAFETY:
             // The newly created holder-pointer is valid and non-null
             item: unsafe { NonNull::new_unchecked(to_dummy(holder) as *mut _) },
+            pd: PhantomData,
         }
     }
 
@@ -2908,6 +2921,7 @@ impl<T: ?Sized> ArcShift<T> {
             // SAFETY:
             // from_box_impl never creates a null-pointer from a Box.
             item: unsafe { NonNull::new_unchecked(holder as *mut _) },
+            pd: PhantomData,
         }
     }
 
@@ -3265,38 +3279,7 @@ impl<T: ?Sized> ArcShift<T> {
 
 #[cfg(test)]
 #[cfg(not(any(loom, feature = "shuttle")))]
-pub(crate) mod no_std_tests {
-    use crate::ArcShift;
-
-    #[test]
-    #[should_panic(expected = "panic: B")]
-    #[cfg(not(all(miri, feature = "nostd_unchecked_panics")))] // this leaks with nostd_unchecked_panics
-    fn simple_panic() {
-        struct PanicOnDrop(char);
-        impl Drop for PanicOnDrop {
-            fn drop(&mut self) {
-                if self.0 == 'B' {
-                    panic!("panic: {}", self.0)
-                }
-            }
-        }
-        // Use a box so that T has a heap-allocation, so miri will tell us
-        // if it's dropped correctly (it should be)
-        let a = ArcShift::new(alloc::boxed::Box::new(PanicOnDrop('A')));
-        let mut b = a.clone();
-        b.update(alloc::boxed::Box::new(PanicOnDrop('B')));
-        drop(b); //This doesn't drop anything, since 'b' is kept alive by next-ref of a
-        drop(a); //This will panic, but shouldn't leak memory
-    }
-
-    #[test]
-    fn smoke_test() {
-        let mut x = ArcShift::new(45u64);
-        x.update(46);
-        x.rcu(|x| *x + 1);
-        assert_eq!(*x.get(), 47);
-    }
-}
+pub(crate) mod no_std_tests;
 
 // Module for tests
 #[cfg(all(test, feature = "std"))]

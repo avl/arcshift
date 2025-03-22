@@ -2442,3 +2442,41 @@ fn simple_threading_try_into_inner3() {
         assert_eq!(r1 as u32 + r2 as u32 + r3 as u32, 1);
     });
 }
+
+/*
+This does not compile, nor should it compile.
+ArcShift<T:'a> must be invariant in 'a.
+I.e, ArcShift<T:'a> and ArcShift<T:'b> are not compatible unless 'a == 'b .
+#[allow(warnings)]
+#[test]
+fn variance_test() {
+    fn inner() -> ArcShift<&'static str>{
+        let s = "Hello".to_string();
+        struct Example<'a> {
+            a: ArcShift<&'a str>
+        }
+        let global: Example<'static> = Example {
+            a: ArcShift::new("static")
+        };
+        let global_clone = global.a.clone();
+
+        let local: Example = Example {
+            a: ArcShift::new(s.as_str())
+        };
+
+        fn test<'a>(x: Example<'a>, y: Example<'a>) {
+            let Example{a:x} = x;
+            let Example{a:mut y} = y;
+            let short_lived = x.try_into_inner().unwrap();
+            y.update(short_lived);
+        }
+
+        test(local, global);
+        global_clone
+    }
+
+    let mut ohoh = inner();
+    std::println!("{}", ohoh.get());
+
+}
+*/
