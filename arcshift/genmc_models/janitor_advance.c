@@ -18,7 +18,7 @@ void *thread_1(void *unused)
     int next1_value = atomic_load_explicit(&next1, memory_order_seq_cst);
     if (next1_value==1)
     {
-        atomic_fetch_add_explicit(&weak2, 1, memory_order_release);
+        atomic_fetch_add_explicit(&weak2, 1, memory_order_relaxed);
         atomic_fetch_sub_explicit(&advance1, 1, memory_order_release);
         atomic_fetch_sub_explicit(&weak1, 1, memory_order_relaxed);
         assert(payload==1);
@@ -31,9 +31,8 @@ void *thread_1(void *unused)
 
 void *thread_2(void *unused)
 {
-    atomic_store_explicit(&next1, 2, memory_order_release);
-    atomic_thread_fence(memory_order_seq_cst);
-    if (atomic_load_explicit(&advance1, memory_order_acquire)==0) {
+    atomic_store_explicit(&next1, 2, memory_order_seq_cst);
+    if (atomic_load_explicit(&advance1, memory_order_seq_cst)==0) {
         if (atomic_load_explicit(&weak2, memory_order_acquire)==0) {
             payload=0;
         }
