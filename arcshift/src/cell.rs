@@ -1,8 +1,8 @@
 use crate::ArcShift;
 use core::cell::{Cell, UnsafeCell};
 use core::fmt::{Debug, Display, Formatter};
-use core::ops::Deref;
 use core::marker::PhantomData;
+use core::ops::Deref;
 
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.

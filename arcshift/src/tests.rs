@@ -2114,7 +2114,6 @@ fn simple_threading_update_thrice() {
     });
 }
 
-
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn simple_threading_update_four() {
@@ -2127,7 +2126,7 @@ fn simple_threading_update_four() {
         let mut shift4 = shift.clone();
         // SAFETY:
         // No threading involved
-        unsafe { ArcShift::debug_validate(&[&shift,&shift1,&shift2,&shift3,&shift4], &[]) };
+        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2, &shift3, &shift4], &[]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -2155,7 +2154,7 @@ fn simple_threading_update_four() {
             })
             .unwrap();
 
-        let t4  = atomic::thread::Builder::new()
+        let t4 = atomic::thread::Builder::new()
             .name("t4".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
@@ -2191,7 +2190,7 @@ fn simple_threading_drop_four() {
         drop(shift);
         // SAFETY:
         // No threading involved
-        unsafe { ArcShift::debug_validate(&[&shift1,&shift2,&shift3,&shift4], &[]) };
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2, &shift3, &shift4], &[]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
@@ -2220,7 +2219,7 @@ fn simple_threading_drop_four() {
             })
             .unwrap();
 
-        let t4  = atomic::thread::Builder::new()
+        let t4 = atomic::thread::Builder::new()
             .name("t4".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
@@ -2232,10 +2231,8 @@ fn simple_threading_drop_four() {
         t2.join().unwrap();
         t3.join().unwrap();
         t4.join().unwrap();
-
     });
 }
-
 
 #[test]
 fn simple_threading_try_get_mut3() {
@@ -2253,7 +2250,7 @@ fn simple_threading_try_get_mut3() {
             .stack_size(1_000_000)
             .spawn(move || {
                 if let Some(x) = shift.try_get_mut() {
-                    assert!(*x ==1 || *x == 2);
+                    assert!(*x == 1 || *x == 2);
                     *x = 41;
                 }
                 debug_println!("--> t1 dropping");
@@ -2265,7 +2262,7 @@ fn simple_threading_try_get_mut3() {
             .stack_size(1_000_000)
             .spawn(move || {
                 if let Some(x) = shift1.try_get_mut() {
-                    assert!(*x ==1 || *x == 2);
+                    assert!(*x == 1 || *x == 2);
                     *x = 42;
                 }
                 debug_println!("--> t2 dropping");
@@ -2338,7 +2335,7 @@ fn simple_threading_try_get_mut2() {
         if *shift.get() > 0 {
             saw_nonzero.store(true, Ordering::Relaxed);
         }
-        assert!(*shift.get() <4);
+        assert!(*shift.get() < 4);
     });
 
     #[cfg(loom)]
@@ -2442,6 +2439,6 @@ fn simple_threading_try_into_inner3() {
         let r2 = t2.join().unwrap();
         let r3 = t3.join().unwrap();
         debug_println!("--> Main dropping");
-        assert_eq!( r1 as u32 + r2 as u32 + r3 as u32, 1);
+        assert_eq!(r1 as u32 + r2 as u32 + r3 as u32, 1);
     });
 }

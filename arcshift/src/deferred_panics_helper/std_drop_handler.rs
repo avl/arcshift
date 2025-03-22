@@ -1,8 +1,8 @@
 use crate::deferred_panics_helper::IDropHandler;
 use crate::{debug_println, IMetadata, ItemHolder};
 use core::any::Any;
-use core::mem::ManuallyDrop;
 use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
 
 /// A drop handler that will persist the most recent panic, allowing it
 /// to be unwinded later
