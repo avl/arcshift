@@ -366,7 +366,7 @@ pub struct ArcShift<T: ?Sized> {
     // ArcShift instances with different lifetimes of T should not be compatible,
     // since could lead to a short-lived value T being insert into a chain which
     // also has long-lived ArcShift instances with long-lived T.
-    pd: PhantomData<*mut T>
+    pd: PhantomData<*mut T>,
 }
 impl<T> UnwindSafe for ArcShift<T> {}
 
@@ -1415,7 +1415,7 @@ impl<T: ?Sized> Clone for ArcShift<T> {
 }
 impl<T: ?Sized> Clone for ArcShiftWeak<T> {
     fn clone(&self) -> Self {
-        let t = with_holder!(self.item, T, item, do_clone_weak(item) );
+        let t = with_holder!(self.item, T, item, do_clone_weak(item));
         ArcShiftWeak {
             // SAFETY:
             // The pointer returned by 'do_clone_weak' is always valid and non-null.
@@ -1750,7 +1750,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
     do_advance_impl::<_, M>(item_ptr, move |a, b| {
         // SAFETY:
         // b is a valid pointer. do_advance_impl supplies the closure with only valid pointers.
-        let mut b_strong = unsafe { (*b).strong_count.load(Ordering::SeqCst) };//atomic advance strong load b strong_count
+        let mut b_strong = unsafe { (*b).strong_count.load(Ordering::SeqCst) }; //atomic advance strong load b strong_count
 
         // Lock free, since we only loop when compare_exchange fails on 'strong_count', something
         // which only occurs when 'strong_count' changes, which only occurs when there is
@@ -2698,7 +2698,7 @@ impl<T: ?Sized> Drop for ArcShiftWeak<T> {
             jobq.resume_any_panics();
         }
 
-        with_holder!(self.item, T, item, drop_weak_helper(item) )
+        with_holder!(self.item, T, item, drop_weak_helper(item))
     }
 }
 
@@ -3051,7 +3051,7 @@ impl<T: ?Sized> ArcShift<T> {
     #[must_use = "this returns a new `ArcShiftWeak` pointer, \
                   without modifying the original `ArcShift`"]
     pub fn downgrade(this: &ArcShift<T>) -> ArcShiftWeak<T> {
-        let t = with_holder!(this.item, T, item,  do_clone_weak(item) );
+        let t = with_holder!(this.item, T, item, do_clone_weak(item));
         ArcShiftWeak {
             // SAFETY:
             // do_clone_weak returns a valid, non-null pointer

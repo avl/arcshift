@@ -817,7 +817,7 @@ mod simple {
         dummy_model(|| {
             assert_eq!(get_weak_count(1 << 55), 1 << 55);
             assert_eq!(get_weak_count(1), 1);
-            assert_eq!(get_weak_count(542 |( 1 << 62)), 542);
+            assert_eq!(get_weak_count(542 | (1 << 62)), 542);
             assert_eq!(get_weak_count(542 | (1 << 63)), 542);
             assert_eq!(get_weak_count(1 << 62), 0);
             assert_eq!(get_weak_count(1 << 63), 0);
