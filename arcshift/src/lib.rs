@@ -7,13 +7,11 @@
 //! # Introduction to ArcShift
 //!
 //! [`ArcShift`] is a data type similar to `std::sync::Arc`, except that it allows updating
-//! the value pointed to. It can be used as a replacement for `std::sync::Arc<std::sync::Mutex<T>>`, but with
-//! significantly smaller overhead for reads.
+//! the value pointed to. It can be used as a faster replacement for
+//! `std::sync::Arc<std::sync::RwLock<T>>`.
 //!
 //! Writing to ArcShift is significantly more expensive than for `std::sync::RwLock`, so
 //! ArcShift is most suited to use cases where updates are infrequent.
-//!
-//! See the 'Limitations'-heading further down before using!
 //!
 //! ## Example
 //! ```
@@ -45,14 +43,6 @@
 //! j2.join().unwrap();
 //! # }
 //! ```
-//!
-//! # Implementation
-//!
-//! When ArcShift values are updated, a linked list of all updates is formed. Whenever
-//! an ArcShift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
-//! that instance advances along the linked list to the last
-//! node in the list. When no instance exists pointing at a node in the list, it is dropped.
-//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to avoid retaining unneeded values.
 //!
 //! # Strong points
 //! * Easy to use (similar to Arc)
@@ -90,6 +80,14 @@
 //! The last limitation might seem unacceptable, but for many applications it is not
 //! hard to make sure each thread/scope has its own instance of ArcShift pointing to
 //! the resource. Cloning ArcShift instances is reasonably fast.
+//!
+//! # Implementation
+//!
+//! When ArcShift values are updated, a linked list of all updates is formed. Whenever
+//! an ArcShift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
+//! that instance advances along the linked list to the last
+//! node in the list. When no instance exists pointing at a node in the list, it is dropped.
+//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to avoid retaining unneeded values.
 //!
 //! # Motivation
 //!
