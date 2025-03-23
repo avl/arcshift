@@ -2825,11 +2825,12 @@ impl<T> ArcShift<T> {
                     // We must now free any previous allocated candidate (both payload and holder).
                     if let Some(holder) = holder {
                         let mut jobq = DropHandler::default();
+                        let full_ptr = from_dummy::<T, SizedMetadata>(holder);
                         raw_do_unconditional_drop_payload_if_not_dropped(
-                            from_dummy::<T, SizedMetadata>(holder)
-                                as *mut ItemHolder<T, SizedMetadata>,
+                            full_ptr as *mut ItemHolder<T, SizedMetadata>,
                             &mut jobq,
                         );
+                        do_dealloc(full_ptr);
                         jobq.resume_any_panics();
                     }
                     cancelled = true;

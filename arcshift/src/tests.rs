@@ -1955,9 +1955,14 @@ fn simple_threading_repro2() {
 fn simple_threading_update_twice() {
     model(|| {
         debug_println!("-------- loom -------------");
-        let mut shift = ArcShift::new(42u32);
+
+        let owner = alloc::sync::Arc::new(SpyOwner2::new());
+        let owner1 = owner.clone();
+        let owner2 = owner.clone();
+
+        let mut shift = ArcShift::new(owner.create("1"));
         let mut shift1 = shift.clone();
-        let mut shift2 = shift.clone();
+        let shift2 = shift.clone();
         // SAFETY:
         // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2], &[]) };
@@ -1965,7 +1970,7 @@ fn simple_threading_update_twice() {
             .name("t1".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
-                shift.update(43);
+                shift.update(owner1.create("t1"));
                 debug_println!("--> t1 dropping");
             })
             .unwrap();
@@ -1974,7 +1979,7 @@ fn simple_threading_update_twice() {
             .name("t2".to_string())
             .stack_size(1_000_000)
             .spawn(move || {
-                shift1.update(44);
+                shift1.update(owner2.create("t2"));
                 debug_println!("--> t2 dropping");
             })
             .unwrap();
@@ -1984,7 +1989,6 @@ fn simple_threading_update_twice() {
         // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift2], &[]) };
         debug_println!("--> Main dropping");
-        assert!(*shift2.get() > 42);
     });
 }
 
