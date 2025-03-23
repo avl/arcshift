@@ -1,6 +1,6 @@
 [package]
 name = "arcshift"
-version = "0.2.2"
+version = "0.2.3"
 documentation = "https://docs.rs/arcshift/"
 homepage = "https://github.com/avl/arcshift/"
 repository = "https://github.com/avl/arcshift/"
@@ -10,6 +10,7 @@ description = "Replacement for std::sync::Arc<T> that supports updating the valu
 readme = "../README.md"
 keywords = ["arc", "atomic"]
 categories = ["memory-management", "data-structures", "no-std"]
+rust-version = "1.75.0"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(coverage)'] }

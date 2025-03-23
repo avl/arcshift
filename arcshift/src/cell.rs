@@ -1,8 +1,8 @@
 use crate::ArcShift;
 use core::cell::{Cell, UnsafeCell};
 use core::fmt::{Debug, Display, Formatter};
+use core::marker::PhantomData;
 use core::ops::Deref;
-use std::marker::PhantomData;
 
 /// ArcShiftCell is like an ArcShift, except that it can be reloaded
 /// without requiring 'mut'-access.
@@ -15,6 +15,7 @@ use std::marker::PhantomData;
 /// pointed to at that time, will forever leak also. All the linked-list nodes from
 /// that entry and onward will also leak. So make sure to not leak the handle!
 pub struct ArcShiftCell<T: 'static + ?Sized> {
+    // UnsafeCell makes ArcShiftCell invariant, which it needs to be
     inner: UnsafeCell<ArcShift<T>>,
     recursion: Cell<usize>,
 }
@@ -27,7 +28,7 @@ pub struct ArcShiftCell<T: 'static + ?Sized> {
 /// Leaking the handle does not cause unsoundness and is not UB.
 pub struct ArcShiftCellHandle<'a, T: 'static + ?Sized> {
     cell: &'a ArcShiftCell<T>,
-    // Make sure ArcShiftCellHandle is neither Sync nor Send
+    // Make sure ArcShiftCellHandle is neither Sync nor Send, and also invariant
     _marker: PhantomData<*mut T>,
 }
 
@@ -71,11 +72,11 @@ impl<T: 'static + ?Sized> Deref for ArcShiftCellHandle<'_, T> {
 /// send the cell. The object must be uniquely owned to be sent, and
 /// this is only possible if we're not in a recursive call to
 /// 'get'. And in this case, the properties of ArcShiftCell are the same
-/// as ArcShift, and ArcShift is Send.
+/// as ArcShift, and ArcShift is Send (if T is Send + Sync).
 ///
 /// Note that ArcShiftCell *cannot* be Sync, because then multiple threads
 /// could call 'get' simultaneously, corrupting the (non-atomic) refcount.
-unsafe impl<T: 'static> Send for ArcShiftCell<T> where T: Send {}
+unsafe impl<T: 'static> Send for ArcShiftCell<T> where T: Send + Sync {}
 
 impl<T: 'static + ?Sized> Clone for ArcShiftCell<T> {
     fn clone(&self) -> Self {
@@ -106,8 +107,6 @@ impl Display for RecursionDetected {
         write!(f, "RecursionDetected")
     }
 }
-
-impl core::error::Error for RecursionDetected {}
 
 impl<T: 'static> ArcShiftCell<T> {
     /// Create a new ArcShiftCell with the given value.
