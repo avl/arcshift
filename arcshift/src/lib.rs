@@ -1077,7 +1077,6 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         // Lock free, see comment for each 'continue' statement, which are the only statements
         // that lead to looping.
         loop {
-
             // This can't be 'Relaxed', because if we read it as already locked and disturbed,
             // we must make sure that this is still the case at this point in the total order.
             // When dropping, after exiting here, we won't clean up the entire chain. Our current
@@ -1090,7 +1089,12 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
             let cur_next = self.next.load(atomic::Ordering::SeqCst);
 
             let decoration = get_decoration(cur_next);
-            debug_println!("loaded  {:x?}.next, got {:?} (decoration: {:?})", self as *const ItemHolder<T, M>, cur_next, decoration);
+            debug_println!(
+                "loaded  {:x?}.next, got {:?} (decoration: {:?})",
+                self as *const ItemHolder<T, M>,
+                cur_next,
+                decoration
+            );
             if decoration.is_unlocked() {
                 let decorated = decorate(undecorate(cur_next), decoration.with_gc());
                 let success = self
@@ -1120,7 +1124,8 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
             } else {
                 debug_println!(
                     "Locking node {:x?} failed, already decorated: {:?}",
-                    self as *const ItemHolder<T, M>, decoration
+                    self as *const ItemHolder<T, M>,
+                    decoration
                 );
                 if !decoration.is_disturbed() {
                     let decorated = decorate(undecorate(cur_next), decoration.with_disturbed());
