@@ -1957,38 +1957,40 @@ fn simple_threading_update_twice() {
         debug_println!("-------- loom -------------");
 
         let owner = alloc::sync::Arc::new(SpyOwner2::new());
-        let owner1 = owner.clone();
-        let owner2 = owner.clone();
+        {
+            let owner1 = owner.clone();
+            let owner2 = owner.clone();
 
-        let mut shift = ArcShift::new(owner.create("1"));
-        let mut shift1 = shift.clone();
-        let shift2 = shift.clone();
-        // SAFETY:
-        // No threading involved
-        unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2], &[]) };
-        let t1 = atomic::thread::Builder::new()
-            .name("t1".to_string())
-            .stack_size(1_000_000)
-            .spawn(move || {
-                shift.update(owner1.create("t1"));
-                debug_println!("--> t1 dropping");
-            })
-            .unwrap();
+            let mut shift = ArcShift::new(owner.create("1"));
+            let mut shift1 = shift.clone();
+            let shift2 = shift.clone();
+            // SAFETY:
+            // No threading involved
+            unsafe { ArcShift::debug_validate(&[&shift, &shift1, &shift2], &[]) };
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    shift.update(owner1.create("t1"));
+                    debug_println!("--> t1 dropping");
+                })
+                .unwrap();
 
-        let t2 = atomic::thread::Builder::new()
-            .name("t2".to_string())
-            .stack_size(1_000_000)
-            .spawn(move || {
-                shift1.update(owner2.create("t2"));
-                debug_println!("--> t2 dropping");
-            })
-            .unwrap();
-        t1.join().unwrap();
-        t2.join().unwrap();
-        // SAFETY:
-        // No threading involved
-        unsafe { ArcShift::debug_validate(&[&shift2], &[]) };
-        debug_println!("--> Main dropping");
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    shift1.update(owner2.create("t2"));
+                    debug_println!("--> t2 dropping");
+                })
+                .unwrap();
+            t1.join().unwrap();
+            t2.join().unwrap();
+            // SAFETY:
+            // No threading involved
+            unsafe { ArcShift::debug_validate(&[&shift2], &[]) };
+            debug_println!("--> Main dropping");
+        }
         owner.validate();
     });
 }
