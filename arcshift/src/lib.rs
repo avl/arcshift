@@ -1077,8 +1077,20 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         // Lock free, see comment for each 'continue' statement, which are the only statements
         // that lead to looping.
         loop {
-            let cur_next = self.next.load(atomic::Ordering::Relaxed);
+
+            // This can't be 'Relaxed', because if we read it as already locked and disturbed,
+            // we must make sure that this is still the case at this point in the total order.
+            // When dropping, after exiting here, we won't clean up the entire chain. Our current
+            // thread is not going to stop this from occurring (we've advanced to the rightmost), but
+            // if it doesn't do it itself, we must make sure some other thread does it.
+            //
+            // If we read a stale value here, it may have been written by some other node _before_
+            // we advanced, in which case that node may have already retried the GC, and failed
+            // (since we hadn't advanced). This would then lead to a memory leak.
+            let cur_next = self.next.load(atomic::Ordering::SeqCst);
+
             let decoration = get_decoration(cur_next);
+            debug_println!("loaded  {:x?}.next, got {:?} (decoration: {:?})", self as *const ItemHolder<T, M>, cur_next, decoration);
             if decoration.is_unlocked() {
                 let decorated = decorate(undecorate(cur_next), decoration.with_gc());
                 let success = self
@@ -1107,8 +1119,8 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 return true;
             } else {
                 debug_println!(
-                    "Locking node {:x?} failed, already decorated",
-                    self as *const ItemHolder<T, M>
+                    "Locking node {:x?} failed, already decorated: {:?}",
+                    self as *const ItemHolder<T, M>, decoration
                 );
                 if !decoration.is_disturbed() {
                     let decorated = decorate(undecorate(cur_next), decoration.with_disturbed());
@@ -1170,7 +1182,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 .compare_exchange(
                     cur_next,
                     undecorated as *mut _,
-                    Ordering::AcqRel, //atomic gc unlock
+                    Ordering::SeqCst, //atomic gc unlock
                     Ordering::Relaxed,
                 )
                 .is_ok()

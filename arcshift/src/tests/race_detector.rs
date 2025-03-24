@@ -30,6 +30,7 @@ fn generic_3thread_ops_a<
     let f2 = std::sync::Arc::new(f2);
     let f3 = std::sync::Arc::new(f3);
     model(move || {
+        debug_println!("---- seed ----");
         let f1 = f1.clone();
         let f2 = f2.clone();
         let f3 = f3.clone();
@@ -588,22 +589,29 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_a_all() {
-    generic_3threading_a_all_impl(0)
+    generic_3threading_a_all_impl(0,0,0)
 }
 
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_a_3() {
-    generic_3threading_a_all_impl(3)
+    generic_3threading_a_all_impl(3,0,0)
 }
 #[cfg(not(feature = "disable_slow_tests"))]
 #[test]
 fn generic_3threading_a_5() {
-    generic_3threading_a_all_impl(5)
+    generic_3threading_a_all_impl(5,0,0)
 }
 
+#[test]
 #[cfg(not(feature = "disable_slow_tests"))]
-fn generic_3threading_a_all_impl(skip: usize) {
+fn generic_3threading_a_025() {
+    generic_3threading_a_all_impl(0,2,5)
+}
+
+
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_3threading_a_all_impl(skip0: usize, skip1: usize, skip2: usize) {
     #[allow(clippy::type_complexity)]
     let ops: Vec<
         fn(&SpyOwner2, ArcShift<InstanceSpy2>, &'static str) -> Option<ArcShift<InstanceSpy2>>,
@@ -638,14 +646,14 @@ fn generic_3threading_a_all_impl(skip: usize) {
             None
         },
     ];
-    for (n1, op1) in ops.iter().enumerate() {
-        for (n2, op2) in ops.iter().enumerate() {
-            for (n3, op3) in ops.iter().enumerate().skip(skip) {
+    for (n1, op1) in ops.iter().enumerate().skip(skip0) {
+        for (n2, op2) in ops.iter().enumerate().skip(skip1) {
+            for (n3, op3) in ops.iter().enumerate().skip(skip2) {
                 {
                     println!("========= {} {} {} ==========", n1, n2, n3);
                 }
                 generic_3thread_ops_a(*op1, *op2, *op3);
-                if skip != 0 {
+                if skip0 != 0 || skip1!=0 || skip2!=0 {
                     return;
                 }
             }

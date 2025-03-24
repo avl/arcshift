@@ -1989,6 +1989,7 @@ fn simple_threading_update_twice() {
         // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift2], &[]) };
         debug_println!("--> Main dropping");
+        owner.validate();
     });
 }
 
