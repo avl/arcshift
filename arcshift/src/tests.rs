@@ -2487,3 +2487,76 @@ fn variance_test() {
 
 }
 */
+
+#[test]
+fn simple_threading_update_downgrade_shared_get() {
+    model(|| {
+        /*
+        0: DropLight(0) DowngradeLight(0), ReadArc { arc: 0 } CloneArc { from: 0, to: 2 } DropArc(0), UpgradeLight(0)
+        1:  CloneArc { from: 1, to: 2 }, CloneArcLight { from: 1, to: 0 },  UpgradeLight(1), CloneArcLight { from: 1, to: 2 } DropLight(1), CreateUpdateArc(1
+        2: ReadArc { arc: 2 } DropArc(2) ReadArc { arc: 2 } CreateUpdateArc(1, InstanceSpy2 , name: "2" }) CloneArc { from: 2, to: 1 }, CloneArcLight { from: 2, to: 0 }, UpgradeLight(2) SharedReadArc { arc: 2 }
+        */
+
+        debug_println!("-------- loom -------------");
+        let mut shift = ArcShift::new(42u32);
+        let shift0 = shift.clone();
+        let mut shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        let weakshift0 = ArcShift::downgrade(&shift);
+        let weakshift1 = ArcShift::downgrade(&shift);
+        let weakshift2 = ArcShift::downgrade(&shift);
+        // SAFETY:
+        // No threading involved
+        unsafe {
+            ArcShift::debug_validate(
+                &[&shift, &shift0, &shift1, &shift2],
+                &[&weakshift0, &weakshift1, &weakshift2],
+            )
+        };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                drop(weakshift0);
+                let _t = shift0.clone();
+                drop(shift0);
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                let _t = shift1.clone();
+                let lt = weakshift1.clone();
+                let _new = lt.upgrade();
+                let _lt2 = lt.clone();
+                drop(weakshift1);
+                shift1.update(43);
+                debug_println!("--> t2 dropping");
+            })
+            .unwrap();
+
+        let t3 = atomic::thread::Builder::new()
+            .name("t3".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                black_box(shift2.get());
+                drop(shift2);
+                let new = weakshift2.upgrade();
+                if let Some(new) = new {
+                    new.shared_get();
+                }
+                debug_println!("--> t3 dropping");
+            })
+            .unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift], &[]) };
+        debug_println!("--> Main dropping");
+        assert_eq!(*shift.get(), 43);
+    });
+}

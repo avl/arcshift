@@ -1519,6 +1519,9 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
     // Lock free: See comment on each 'continue'
     loop {
         item_ptr = do_advance_weak::<T, M>(item_ptr);
+        // We still have one weak count on 'item_ptr' at this point. do_advance_weak
+        // decrements the weak on the original value, and gives you an advanced value with
+        // one count on.
 
         // SAFETY:
         // do_advance_weak always returns a valid non-null pointer
@@ -1550,7 +1553,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 // it is a valid pointer.
                 let item = unsafe { &*from_dummy::<T, M>(item_ptr) };
                 let item_next = item.next.load(Ordering::SeqCst); //atomic upgrade check next drop
-                if get_decoration(item_next).is_dropped() {
+                if !undecorate(item_next).is_null() {
                     let new_prior_strong = item.strong_count.fetch_sub(1, Ordering::SeqCst); //atomic upgrade fail dropped
                     if new_prior_strong == 1 {
                         let _prior_weak_count = item.weak_count.fetch_sub(1, Ordering::SeqCst); //atomic upgrade fail dec last strong
@@ -1562,7 +1565,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                             get_weak_count(_prior_weak_count - 1)
                         );
                     }
-                    // Lock free. We only get here if some other node has dropped 'item_next'
+                    // Lock free. We only get here if some other node has added a new node,
                     // which is considered progress.
                     continue;
                 }
@@ -2493,7 +2496,7 @@ fn do_update<T: ?Sized, M: IMetadata>(
         // causes the drop_weak impl to realize that it is racing with an 'update',
         // (in contrast to perhaps racing with another drop, in which case it might
         // win the race and might be required to deallocate, to avoid memory leaks).
-        let _weak_was = item.weak_count.fetch_add(1, Ordering::Relaxed);
+        let _weak_was = item.weak_count.fetch_add(1, Ordering::SeqCst);
 
         #[cfg(feature = "validate")]
         assert!(_weak_was > 0);
@@ -2633,7 +2636,7 @@ fn raw_do_unconditional_drop_payload_if_not_dropped<T: ?Sized, M: IMetadata>(
     drop_job_queue: &mut impl IDropHandler<T, M>,
 ) {
     debug_println!("Unconditional drop of payload {:x?}", item_ptr);
-    // SAFETY: Caller must guarantee poiner is uniquely owned
+    // SAFETY: Caller must guarantee pointer is uniquely owned
     let item = unsafe { &*(item_ptr) };
     let next_ptr = item.next.load(Ordering::SeqCst); //atomic drop check dropped
     let decoration = get_decoration(next_ptr);

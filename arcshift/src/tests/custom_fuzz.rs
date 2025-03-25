@@ -32,6 +32,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
         }
     }
     debug_println!("Cmds: {:?}", cmds);
+
     let mut batches = Vec::new();
     let mut senders = vec![];
     let mut receivers = vec![];
@@ -346,7 +347,7 @@ fn generic_thread_fuzzing_57() {
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_all() {
-    #[cfg(not(any(loom, miri, feature = "shuttle", coverage)))]
+    #[cfg(not(any(loom, miri, feature = "shuttle", debug_assertions, coverage)))]
     {
         const THREADS: usize = 20;
         #[cfg(debug_assertions)]
@@ -373,7 +374,7 @@ fn generic_thread_fuzzing_all() {
             jh.join().unwrap();
         }
     }
-    #[cfg(any(loom, miri, feature = "shuttle", coverage))]
+    #[cfg(any(loom, miri, debug_assertions, feature = "shuttle", coverage))]
     generic_thread_fuzzing_all_impl(None, None)
 }
 
@@ -389,6 +390,7 @@ fn generic_thread_fuzzing_repro2() {
 }
 
 fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
+    println!("--- generic_thread_fuzzing_all_impl started ---");
     #[cfg(miri)]
     const COUNT: u64 = 30;
     #[cfg(loom)]
@@ -409,7 +411,7 @@ fn generic_thread_fuzzing_all_impl(seed: Option<u64>, repro: Option<&str>) {
     for i in range {
         model2(
             move || {
-                //println!("--- Seed {} ---", i);
+                println!("--- Seed {} ---", i);
                 let mut rng = StdRng::seed_from_u64(i);
                 let mut counter = 0usize;
                 let owner = std::sync::Arc::new(SpyOwner2::new());
@@ -465,6 +467,28 @@ fn generic_thread_fuzzing_21() {
         });
     }
 }
+#[test]
+#[cfg(not(feature = "disable_slow_tests"))]
+fn generic_thread_fuzzing_2_only() {
+    {
+        let i = 2;
+
+        let statics = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+        println!("--- Seed {} ---", i);
+        model(move || {
+            let mut rng = StdRng::seed_from_u64(i);
+            let mut counter = 0usize;
+            let owner = std::sync::Arc::new(SpyOwner2::new());
+            let owner_ref = owner.clone();
+            run_multi_fuzz(&mut rng, move || -> InstanceSpy2 {
+                counter += 1;
+                owner_ref.create(statics[counter % 10])
+            });
+            owner.validate();
+        });
+    }
+}
+
 #[test]
 #[cfg(not(feature = "disable_slow_tests"))]
 fn generic_thread_fuzzing_8() {
