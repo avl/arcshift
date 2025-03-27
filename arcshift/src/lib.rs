@@ -1528,6 +1528,12 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
         let item = unsafe { &*from_dummy::<T, M>(item_ptr) };
         let prior_strong_count = item.strong_count.load(Ordering::SeqCst); //atomic upgrade read strong
         let item_next = item.next.load(Ordering::SeqCst); //atomic upgrade read next
+
+        if undecorate(item_next).is_null() {
+            // Race, there's a new node we need to advance to.
+            continue;
+        }
+
         if !get_decoration(item_next).is_dropped() {
             if prior_strong_count == 0 {
                 let _prior_weak_count = item.weak_count.fetch_add(1, Ordering::SeqCst); //atomic upgrade inc weak
