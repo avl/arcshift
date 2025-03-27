@@ -1529,7 +1529,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
         let prior_strong_count = item.strong_count.load(Ordering::SeqCst); //atomic upgrade read strong
         let item_next = item.next.load(Ordering::SeqCst); //atomic upgrade read next
 
-        if undecorate(item_next).is_null() {
+        if !undecorate(item_next).is_null() {
             // Race, there's a new node we need to advance to.
             continue;
         }
