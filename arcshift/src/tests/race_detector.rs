@@ -560,7 +560,7 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
         },
         |_owner, shift, _thread| {
             debug_println!("====> shift.shared_get()");
-            std::hint::black_box(shift.shared_get());
+            std::hint::black_box(shift.shared_non_reloading_get());
             Some(shift)
         },
         |_owner, mut shift, _thread| {
@@ -632,7 +632,7 @@ fn generic_3threading_a_all_impl(skip0: usize, skip1: usize, skip2: usize) {
         },
         |_owner, shift, _thread| {
             debug_println!("====> shift.shared_get()");
-            std::hint::black_box(shift.shared_get());
+            std::hint::black_box(shift.shared_non_reloading_get());
             Some(shift)
         },
         |_owner, mut shift, _thread| {
