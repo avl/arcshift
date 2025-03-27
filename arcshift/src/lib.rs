@@ -2906,7 +2906,7 @@ pub enum SharedGetGuard<'a, T: ?Sized> {
     Cloned(ArcShift<T>),
 }
 
-impl<'a, T> core::ops::Deref for SharedGetGuard<'a, T> {
+impl<T> core::ops::Deref for SharedGetGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
