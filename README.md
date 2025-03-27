@@ -61,17 +61,9 @@ of live ArcShift instances. Payload values only stay in memory if they are activ
 ArcShift instance. This means arcshift no longer requires that all instances are periodically reloaded
 in order to avoid excessive memory consumption.
 
-Worst case memory consumption is now:
-
-* Number of unique refs multiplied by `size_of<T>`
-
-plus
-
-* Sum of memory owned by strongly referenced T 
-
-Shared references to ArcShift can no longer provide the most up-to-date value. You should make sure to 
-always have owned (mutable) ArcShift objects. The reason for this change is that this is what allows
-intermediary values from being dropped quickly.
+Shared references to ArcShift, now have a larger performance penalty if writes have occurred.
+(You should make sure to always have owned (mutable) ArcShift objects). The reason for this change 
+is that this is what allows intermediary values from being dropped quickly.
 
 The API for RCU has been cleaned up. RCU is now always lock-free, and there is no fallible variant.
 
@@ -90,7 +82,7 @@ rarely updated, paying mutex overhead on each access is undesirable.
 
 ### ArcSwap
 
-ArcShift to some extent solves the same problem as ArcSwap (see: <https://docs.rs/arc-swap/> ).
+ArcShift (to some extent) solves the same problem as ArcSwap (see: <https://docs.rs/arc-swap/> ).
 
 ArcSwap is a container for `Arc<T>`-objects, which allows swapping out the contained
 Arc-object without requiring a &mut-reference.
@@ -106,7 +98,7 @@ The requirements for ArcShift are:
  * Regular shared read access should be approximately as fast as for `Arc<T>`, as long as 
    writes have not occurred.
  * Writes can be expensive (but of course not slower than necessary)
- * It is okay if reads become slightly slower after a write has occurred.
+ * It is okay if reads become slower after a write has occurred.
  * The implementation should be lock free (so we never have to suspend a thread)
  * The API must be 100% safe and sound.
  * When values are updated, previous values should be dropped as soon as possible. 

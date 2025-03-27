@@ -52,17 +52,18 @@
 //! * Modifying values is reasonably fast (think, 50-150 nanoseconds), but much slower than Mutex or
 //!   RwLock.
 //! * The function [`ArcShift::shared_non_reloading_get`] allows access without any overhead
-//!   at compared to regular Arc (benchmarks show identical performance to Arc).
+//!   compared to regular Arc (benchmarks show identical performance to Arc).
 //! * ArcShift does not rely on thread-local variables.
 //! * ArcShift is no_std compatible (though 'alloc' is required, since ArcShift is a heap
-//!   allocating data structure). Compile with "default-features=false" to enable no_std compatibility.
+//!   allocating data structure). Compile with "default-features=false" to enable no_std
+//!   compatibility.
 //!
 //! # Limitations
 //!
 //! ArcShift achieves its performance at the expense of the following disadvantages:
 //!
 //! * When modifying the value, the old version of the value lingers in memory until
-//!   the last ArcShift that uses it has updated. Such an update only happens when the ArcShift
+//!   the last ArcShift that uses it has reloaded. Such a reload only happens when the ArcShift
 //!   is accessed using a unique (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
 //!   This can be partially mitigated by using the [`ArcShiftWeak`]-type for long-lived
 //!   never-reloaded instances.
@@ -87,7 +88,8 @@
 //! an ArcShift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
 //! that instance advances along the linked list to the last
 //! node in the list. When no instance exists pointing at a node in the list, it is dropped.
-//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to avoid retaining unneeded values.
+//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to
+//! avoid retaining unneeded values.
 //!
 //! # Motivation
 //!
@@ -95,7 +97,7 @@
 //! modifying the stored value, with very little overhead over regular Arc for read heavy
 //! loads.
 //!
-//! The motivating use-case for ArcShift is hot-reloadable assets in computer games.
+//! One such motivating use-case for ArcShift is hot-reloadable assets in computer games.
 //! During normal usage, assets do not change. All benchmarks and play experience will
 //! be dependent only on this baseline performance. Ideally, we therefore want to have
 //! a very small performance penalty for the case when assets are *not* updated, comparable
@@ -129,11 +131,12 @@
 //! is enabled by default. ArcShift can work without the full rust std library. However, this
 //! comes at a slight performance cost. When the 'std' feature is enabled (which it is by default),
 //! `catch_unwind` is used to guard drop functions, to make sure memory structures are not corrupted
-//! if a user supplied drop method panics. However, to ensure the same guarantee when running
+//! if a user-supplied drop method panics. However, to ensure the same guarantee when running
 //! without std, arcshift presently moves allocations to temporary boxes to be able to run drop
 //! after all memory traversal is finished. This requires multiple allocations, which makes
-//! operation without 'std' slightly slower. Panicking drop methods can also lead to memory leaks
+//! operation without 'std' slower. Panicking drop methods can also lead to memory leaks
 //! without the std. The memory structures remain intact, and no undefined behavior occurs.
+//! The performance penalty is only present during updates.
 //!
 //! If the overhead mentioned in the previous paragraph is unacceptable, and if the final binary
 //! is compiled with panic=abort, this extra cost can be mitigated. Enable the feature
