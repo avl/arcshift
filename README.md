@@ -43,10 +43,10 @@ fn main () {
 
 For docs, see <https://docs.rs/arcshift/> .
 
-# Upgrading from 0.2.6
+# Upgrading from 0.2.x
 
-0.2.7 reworks how `shared_get` works. Previously, this method would simply return stale values, in case the
-ArcShift instance was stale. With 0.2.7, stale values will be detected, the arcshift will be cloned and reloaded,
+0.3 reworks how `shared_get` works. Previously, this method would simply return stale values, in case the
+ArcShift instance was stale. With 0.3, stale values will be detected, the arcshift will be cloned and reloaded,
 and a guard will be returned with a possibly reloaded clone.
 
 This is still pretty fast in the case that the self instance is _not_ stale. However, there is a severe
