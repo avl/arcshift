@@ -95,7 +95,7 @@ fn run_multi_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
                     }
                     FuzzerCommand::SharedReadArc { .. } => {
                         if let Some(curval) = curval.as_mut() {
-                            let actual = curval.shared_get();
+                            let actual = curval.shared_non_reloading_get();
                             if !thread_all_possible.contains(actual) {
                                 panic!("Unexpected value in thread {}, got {:?} which is not in {:?}", threadnr, actual, thread_all_possible);
                             }
@@ -213,7 +213,7 @@ fn run_fuzz<T: Clone + Hash + Eq + 'static + Debug + Send + Sync>(
             }
             FuzzerCommand::SharedReadArc { arc } => {
                 if let Some(actual) = &mut arcs[arc as usize] {
-                    let actual_val = actual.shared_get();
+                    let actual_val = actual.shared_non_reloading_get();
 
                     std::hint::black_box(actual_val);
                 }

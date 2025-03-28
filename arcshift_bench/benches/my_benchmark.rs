@@ -72,6 +72,21 @@ fn arcshift_shared_bench(c: &mut Criterion) {
     let ac = ArcShift::new(42u32);
     c.bench_function("arcshift_shared_get", |b| b.iter(|| *ac.shared_get()));
 }
+
+fn arcshift_shared_stale_bench(c: &mut Criterion) {
+    let mut ac_base = ArcShift::new(42u32);
+    let ac = ac_base.clone();
+    ac_base.update(43);
+    c.bench_function("arcshift_shared_stale_get", |b| b.iter(|| *ac.shared_get()));
+}
+
+fn arcshift_shared_non_reloading_bench(c: &mut Criterion) {
+    let ac = ArcShift::new(42u32);
+    c.bench_function("arcshift_shared_non_reloading_get", |b| {
+        b.iter(|| *ac.shared_non_reloading_get())
+    });
+}
+
 fn arcswap_bench(c: &mut Criterion) {
     let ac = ArcSwap::from_pointee(42);
     c.bench_function("arc_swap", |b| {
@@ -103,6 +118,8 @@ fn arcswap_update(c: &mut Criterion) {
 criterion_group!(
     benches,
     arcshift_shared_bench,
+    arcshift_shared_stale_bench,
+    arcshift_shared_non_reloading_bench,
     std_arc_bench,
     rwlock_write_bench,
     arcshift_bench,

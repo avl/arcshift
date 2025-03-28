@@ -51,18 +51,19 @@
 //!   better than RwLock or Mutex).
 //! * Modifying values is reasonably fast (think, 50-150 nanoseconds), but much slower than Mutex or
 //!   RwLock.
-//! * The function [`ArcShift::shared_get`] allows access without any overhead
-//!   at compared to regular Arc (benchmarks show identical performance to Arc).
+//! * The function [`ArcShift::shared_non_reloading_get`] allows access without any overhead
+//!   compared to regular Arc (benchmarks show identical performance to Arc).
 //! * ArcShift does not rely on thread-local variables.
 //! * ArcShift is no_std compatible (though 'alloc' is required, since ArcShift is a heap
-//!   allocating data structure). Compile with "default-features=false" to enable no_std compatibility.
+//!   allocating data structure). Compile with "default-features=false" to enable no_std
+//!   compatibility.
 //!
 //! # Limitations
 //!
 //! ArcShift achieves its performance at the expense of the following disadvantages:
 //!
 //! * When modifying the value, the old version of the value lingers in memory until
-//!   the last ArcShift that uses it has updated. Such an update only happens when the ArcShift
+//!   the last ArcShift that uses it has reloaded. Such a reload only happens when the ArcShift
 //!   is accessed using a unique (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
 //!   This can be partially mitigated by using the [`ArcShiftWeak`]-type for long-lived
 //!   never-reloaded instances.
@@ -87,7 +88,8 @@
 //! an ArcShift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
 //! that instance advances along the linked list to the last
 //! node in the list. When no instance exists pointing at a node in the list, it is dropped.
-//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to avoid retaining unneeded values.
+//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to
+//! avoid retaining unneeded values.
 //!
 //! # Motivation
 //!
@@ -95,7 +97,7 @@
 //! modifying the stored value, with very little overhead over regular Arc for read heavy
 //! loads.
 //!
-//! The motivating use-case for ArcShift is hot-reloadable assets in computer games.
+//! One such motivating use-case for ArcShift is hot-reloadable assets in computer games.
 //! During normal usage, assets do not change. All benchmarks and play experience will
 //! be dependent only on this baseline performance. Ideally, we therefore want to have
 //! a very small performance penalty for the case when assets are *not* updated, comparable
@@ -129,11 +131,12 @@
 //! is enabled by default. ArcShift can work without the full rust std library. However, this
 //! comes at a slight performance cost. When the 'std' feature is enabled (which it is by default),
 //! `catch_unwind` is used to guard drop functions, to make sure memory structures are not corrupted
-//! if a user supplied drop method panics. However, to ensure the same guarantee when running
+//! if a user-supplied drop method panics. However, to ensure the same guarantee when running
 //! without std, arcshift presently moves allocations to temporary boxes to be able to run drop
 //! after all memory traversal is finished. This requires multiple allocations, which makes
-//! operation without 'std' slightly slower. Panicking drop methods can also lead to memory leaks
+//! operation without 'std' slower. Panicking drop methods can also lead to memory leaks
 //! without the std. The memory structures remain intact, and no undefined behavior occurs.
+//! The performance penalty is only present during updates.
 //!
 //! If the overhead mentioned in the previous paragraph is unacceptable, and if the final binary
 //! is compiled with panic=abort, this extra cost can be mitigated. Enable the feature
@@ -373,7 +376,7 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ArcShift({:?})", self.shared_get())
+        write!(f, "ArcShift({:?})", self.shared_non_reloading_get())
     }
 }
 
@@ -2814,7 +2817,7 @@ impl<T> ArcShift<T> {
     /// the final updated value will have always been calculated from the previous set value.
     pub fn rcu(&mut self, mut update: impl FnMut(&T) -> T) -> &T {
         self.rcu_maybe(|x| Some(update(x)));
-        (*self).shared_get()
+        (*self).shared_non_reloading_get()
     }
 
     /// Atomically update the value.
@@ -2898,6 +2901,25 @@ impl<T> ArcShift<T> {
 #[deprecated = "ArcShiftLight has been removed. Please consider using ArcShiftWeak. It is similar, though not a direct replacement."]
 pub struct ArcShiftLight {}
 
+/// Return value of [`ArcShift::shared_get`]
+pub enum SharedGetGuard<'a, T: ?Sized> {
+    /// The pointer already referenced the most recent value
+    Raw(&'a T),
+    /// We had to advance, and to do this we unfortunately had to clone
+    Cloned(ArcShift<T>),
+}
+
+impl<T> core::ops::Deref for SharedGetGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            SharedGetGuard::Raw(r) => r,
+            SharedGetGuard::Cloned(c) => c.shared_non_reloading_get(),
+        }
+    }
+}
+
 impl<T: ?Sized> ArcShift<T> {
     #[doc(hidden)]
     #[cfg_attr(test, mutants::skip)]
@@ -2929,12 +2951,6 @@ impl<T: ?Sized> ArcShift<T> {
     #[deprecated = "make_light was completely removed in ArcShift 0.2. Please use ArcShift::downgrade(&item) instead."]
     pub fn make_light(&mut self, _marker: NoLongerAvailableMarker) {
         unreachable!("method cannot be called")
-    }
-    #[doc(hidden)]
-    #[cfg_attr(test, mutants::skip)]
-    #[deprecated = "shared_non_reloading_get now does the same thing as 'shared_get', please use the latter instead."]
-    pub fn shared_non_reloading_get(&self) -> &T {
-        self.shared_get()
     }
 
     /// Basically the same as doing [`ArcShift::new`], but avoids copying the contents of 'input'
@@ -3035,7 +3051,7 @@ impl<T: ?Sized> ArcShift<T> {
                 // self.item is always a valid pointer
                 return unsafe { item.payload() };
             }
-            Self::advance_strong_helper2::<SizedMetadata>(&mut self.item)
+            Self::advance_strong_helper2::<SizedMetadata>(&mut self.item, true)
         } else {
             let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
             // SAFETY:
@@ -3047,7 +3063,49 @@ impl<T: ?Sized> ArcShift<T> {
                 // self.item is always a valid pointer
                 return unsafe { item.payload() };
             }
-            Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item)
+            Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item, true)
+        }
+    }
+
+    /// Get the current value of this ArcShift instance.
+    ///
+    /// WARNING!
+    /// Note, this method is fast if the ArcShift is already up to date. If a more recent
+    /// value exists, this more recent value will be returned, but at a severe
+    /// performance penalty (i.e, 'shared_get' on stale values is significantly slower than
+    /// RwLock). This method is still lock-free.  The performance penalty will be even more
+    /// severe if there is also contention.
+    ///
+    /// This method has the advantage that it doesn't require `&mut self` access,
+    /// but is otherwise inferior to [`ArcShift::get`].
+    #[inline(always)]
+    pub fn shared_get(&self) -> SharedGetGuard<T> {
+        if is_sized::<T>() {
+            let ptr = from_dummy::<T, SizedMetadata>(self.item.as_ptr());
+            // SAFETY:
+            // self.item is always a valid pointer
+            let item = unsafe { &*ptr };
+            let next = item.next.load(Ordering::Relaxed);
+            if next.is_null() {
+                // SAFETY:
+                // self.item is always a valid pointer
+                return SharedGetGuard::Raw(unsafe { item.payload() });
+            }
+            let cloned = self.clone();
+            SharedGetGuard::Cloned(cloned)
+        } else {
+            let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
+            // SAFETY:
+            // self.item is always a valid pointer
+            let item = unsafe { &*ptr };
+            let next = item.next.load(Ordering::Relaxed);
+            if next.is_null() {
+                // SAFETY:
+                // self.item is always a valid pointer
+                return SharedGetGuard::Raw(unsafe { item.payload() });
+            }
+            let cloned = self.clone();
+            SharedGetGuard::Cloned(cloned)
         }
     }
 
@@ -3056,9 +3114,10 @@ impl<T: ?Sized> ArcShift<T> {
     /// WARNING! This does not reload the pointer. Use [`ArcShift::reload()`] to reload
     /// the value, or [`ArcShift::get()`] to always get the newest value.
     ///
-    /// This method has the advantage that it doesn't require `&mut self` access.
+    /// This method has the advantage that it doesn't require `&mut self` access, and is very
+    /// fast.
     #[inline(always)]
-    pub fn shared_get(&self) -> &T {
+    pub fn shared_non_reloading_get(&self) -> &T {
         with_holder!(self.item, T, item, {
             // SAFETY:
             // ArcShift has a strong ref, so payload must not have been dropped.
@@ -3102,18 +3161,24 @@ impl<T: ?Sized> ArcShift<T> {
     }
     #[inline(never)]
     #[cold]
-    fn advance_strong_helper2<M: IMetadata>(old_item_ptr: &mut NonNull<ItemHolderDummy<T>>) -> &T {
+    fn advance_strong_helper2<M: IMetadata>(
+        old_item_ptr: &mut NonNull<ItemHolderDummy<T>>,
+        gc: bool,
+    ) -> &T {
         let mut jobq = DropHandler::default();
         let mut item_ptr = old_item_ptr.as_ptr() as *const _;
         // Lock free. Only loops if disturb-flag was set, meaning other thread
         // has offloaded work on us, and it has made progress.
         loop {
             item_ptr = do_advance_strong::<T, M>(item_ptr, &mut jobq);
-            let (need_rerun, _strong_refs) =
-                do_janitor_task(from_dummy::<T, M>(item_ptr), &mut jobq);
-            if need_rerun {
-                debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
-                continue;
+
+            if gc {
+                let (need_rerun, _strong_refs) =
+                    do_janitor_task(from_dummy::<T, M>(item_ptr), &mut jobq);
+                if need_rerun {
+                    debug_println!("Janitor {:?} was disturbed. Need rerun", item_ptr);
+                    continue;
+                }
             }
             jobq.resume_any_panics();
             // SAFETY:
@@ -3140,7 +3205,7 @@ impl<T: ?Sized> ArcShift<T> {
             if next.is_null() {
                 return;
             }
-            Self::advance_strong_helper2::<SizedMetadata>(&mut self.item);
+            Self::advance_strong_helper2::<SizedMetadata>(&mut self.item, true);
         } else {
             let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
             // SAFETY:
@@ -3150,7 +3215,7 @@ impl<T: ?Sized> ArcShift<T> {
             if next.is_null() {
                 return;
             }
-            Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item);
+            Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item, true);
         }
     }
 

@@ -371,9 +371,20 @@ mod simple {
     fn simple_get4() {
         dummy_model(|| {
             let shift = ArcShift::new(42u32);
-            assert_eq!(*shift.shared_get(), 42u32);
+            assert_eq!(*shift.shared_non_reloading_get(), 42u32);
         });
     }
+    #[test]
+    fn simple_get5() {
+        dummy_model(|| {
+            let mut shift = ArcShift::new(42u32);
+            let shift2 = shift.clone();
+            shift.update(43);
+
+            assert_eq!(*shift2.shared_get(), 43u32);
+        });
+    }
+
     #[test]
     fn simple_get_mut() {
         dummy_model(|| {
@@ -800,7 +811,7 @@ mod simple {
             assert_eq!(right.strong_count(), 1);
             assert_eq!(right.weak_count(), 1);
             assert_eq!(**right.get(), 2);
-            assert_eq!(**left.shared_get(), 1);
+            assert_eq!(**left.shared_non_reloading_get(), 1);
             assert_eq!(left.strong_count(), 1);
             assert_eq!(left.weak_count(), 2); //'left' and ref from right
             debug_println!("Dropping 'left'");
@@ -844,7 +855,7 @@ mod simple {
             assert_eq!(y.weak_count(), 2);
 
             assert_eq!(**x.get(), 2);
-            assert_eq!(**y.shared_get(), 1);
+            assert_eq!(**y.shared_non_reloading_get(), 1);
 
             // SAFETY:
             // No threading involved, &x and &y are valid.
@@ -1744,7 +1755,7 @@ fn simple_threading4d() {
                     debug_println!(" = On thread t3 =");
                     let mut temp = (*shift3).clone();
                     temp.update(count3.create("t3val"));
-                    let _t = std::hint::black_box(shift3.shared_get());
+                    let _t = std::hint::black_box(shift3.shared_non_reloading_get());
                     debug_println!(" = drop t3 =");
                 })
                 .unwrap();
@@ -2348,6 +2359,77 @@ fn simple_threading_try_get_mut2() {
     #[cfg(loom)]
     assert!(saw_nonzero2.load(Ordering::Relaxed));
 }
+
+#[test]
+fn simple_threading_shared_get_update() {
+    let seen_values = alloc::sync::Arc::new(core::sync::atomic::AtomicU8::new(0));
+    let _seen_values2 = seen_values.clone();
+    model(move || {
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(0u32);
+        let shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || *shift1.shared_get())
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.update(1);
+            })
+            .unwrap();
+        let r1 = t1.join().unwrap();
+        t2.join().unwrap();
+        debug_println!("--> Main dropping");
+
+        assert!(r1 == 0 || r1 == 1);
+        seen_values.fetch_or(1 << r1, Ordering::Relaxed);
+    });
+    #[cfg(loom)]
+    {
+        assert_eq!(_seen_values2.load(Ordering::Relaxed), 3);
+    }
+}
+#[test]
+fn simple_threading_shared_get_drop() {
+    model(move || {
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(0u32);
+        let shift1 = shift.clone();
+        let shift2 = shift.clone();
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || *shift1.shared_get())
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                drop(shift2);
+            })
+            .unwrap();
+        let r1 = t1.join().unwrap();
+        t2.join().unwrap();
+        debug_println!("--> Main dropping");
+
+        assert!(r1 == 0);
+    });
+}
+
 #[test]
 fn simple_threading_try_into_inner2() {
     model(move || {
@@ -2545,7 +2627,7 @@ fn simple_threading_update_downgrade_shared_get() {
                 drop(shift2);
                 let new = weakshift2.upgrade();
                 if let Some(new) = new {
-                    new.shared_get();
+                    new.shared_non_reloading_get();
                 }
                 debug_println!("--> t3 dropping");
             })

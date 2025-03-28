@@ -61,7 +61,7 @@ impl<T: 'static + ?Sized> Deref for ArcShiftCellHandle<'_, T> {
             // Actual mutable references to the 'inner' never live long enough
             // to be visible by the user of this module.
             let inner: &ArcShift<T> = unsafe { &*self.cell.inner.get() };
-            inner.shared_get()
+            inner.shared_non_reloading_get()
         }
     }
 }
@@ -155,7 +155,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
         } else {
             // SAFETY:
             // Getting the inner value is safe, no other thread can be accessing it now
-            unsafe { &*self.inner.get() }.shared_get()
+            unsafe { &*self.inner.get() }.shared_non_reloading_get()
         };
         f(val);
         self.recursion.set(self.recursion.get() - 1);
