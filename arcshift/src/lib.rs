@@ -558,9 +558,12 @@ fn get_holder_layout<T: ?Sized>(ptr: *const T) -> Layout {
     }
 }
 
+#[inline(always)]
 fn to_dummy<T: ?Sized, M: IMetadata>(ptr: *const ItemHolder<T, M>) -> *const ItemHolderDummy<T> {
     ptr as *mut ItemHolderDummy<T>
 }
+
+#[inline(always)]
 fn from_dummy<T: ?Sized, M: IMetadata>(ptr: *const ItemHolderDummy<T>) -> *const ItemHolder<T, M> {
     get_full_ptr_raw::<T, M>(ptr)
 }
@@ -888,8 +891,9 @@ trait IMetadata {}
 impl IMetadata for SizedMetadata {}
 impl<T: ?Sized> IMetadata for UnsizedMetadata<T> {}
 
+#[doc(hidden)]
 #[repr(transparent)]
-struct ItemHolderDummy<T: ?Sized> {
+pub struct ItemHolderDummy<T: ?Sized> {
     // void pointers should point to u8
     _dummy: u8,
     _phantom_data: PhantomData<T>,
@@ -2906,18 +2910,75 @@ pub enum SharedGetGuard<'a, T: ?Sized> {
     /// The pointer already referenced the most recent value
     Raw(&'a T),
     /// We had to advance, and to do this we unfortunately had to clone
-    Cloned(ArcShift<T>),
+    Cloned{
+        #[doc(hidden)]
+        next:*const ItemHolderDummy<T>
+    },
 }
 
-impl<T> core::ops::Deref for SharedGetGuard<'_, T> {
+
+impl<'a, T:?Sized> Drop for SharedGetGuard<'a, T> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        match self {
+            SharedGetGuard::Raw(_) => {}
+            SharedGetGuard::Cloned{next}=> {
+                if is_sized::<T>() {
+                    let item_ptr = from_dummy::<_,SizedMetadata>(*next);
+                    let item = unsafe{&*item_ptr};
+                    item.strong_count.fetch_sub(1, Ordering::SeqCst);
+
+                } else {
+                    let item_ptr = from_dummy::<_,UnsizedMetadata<T>>(*next);
+                    let item = unsafe{&*item_ptr};
+                    item.strong_count.fetch_sub(1, Ordering::SeqCst);
+
+                }
+            }
+        }
+    }
+}
+
+impl<T:?Sized> core::ops::Deref for SharedGetGuard<'_, T> {
     type Target = T;
 
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         match self {
             SharedGetGuard::Raw(r) => r,
-            SharedGetGuard::Cloned(c) => c.shared_non_reloading_get(),
+            SharedGetGuard::Cloned{next} => {
+                if is_sized::<T>() {
+                    unsafe{(*from_dummy::<_,SizedMetadata>(*next)).payload()}
+                } else {
+                    unsafe{(*from_dummy::<_,UnsizedMetadata<T>>(*next)).payload()}
+                }
+            },
+
         }
     }
+}
+
+fn slow_shared_get<'a, T:?Sized, M:IMetadata>(item: &'a ItemHolder<T,M>) -> SharedGetGuard<'a, T> {
+    item.advance_count.fetch_add(1, Ordering::SeqCst);
+    let next = item.next.load(Ordering::SeqCst);
+
+    let next_val = from_dummy::<_,SizedMetadata>(undecorate(next));
+    let sc = unsafe { (*next_val).strong_count.fetch_add(1, Ordering::SeqCst) };
+    if sc == 0 {
+        unsafe { (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst) };
+        item.advance_count.fetch_sub(1, Ordering::SeqCst);
+        return SharedGetGuard::Raw(unsafe { item.payload() });
+    }
+
+    let next_next = unsafe { (*next_val).next.load(Ordering::SeqCst) };
+    if get_decoration(next_next).is_dropped() {
+        unsafe { (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst) };
+        item.advance_count.fetch_sub(1, Ordering::SeqCst);
+        return SharedGetGuard::Raw(unsafe { item.payload() });
+    }
+    item.advance_count.fetch_sub(1, Ordering::SeqCst);
+
+    SharedGetGuard::Cloned{ next }
 }
 
 impl<T: ?Sized> ArcShift<T> {
@@ -3091,8 +3152,9 @@ impl<T: ?Sized> ArcShift<T> {
                 // self.item is always a valid pointer
                 return SharedGetGuard::Raw(unsafe { item.payload() });
             }
-            let cloned = self.clone();
-            SharedGetGuard::Cloned(cloned)
+
+            slow_shared_get(item)
+
         } else {
             let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
             // SAFETY:
@@ -3104,8 +3166,20 @@ impl<T: ?Sized> ArcShift<T> {
                 // self.item is always a valid pointer
                 return SharedGetGuard::Raw(unsafe { item.payload() });
             }
-            let cloned = self.clone();
-            SharedGetGuard::Cloned(cloned)
+
+            item.advance_count.fetch_add(1, Ordering::SeqCst);
+            let next = item.next.load(Ordering::SeqCst);
+
+            let next_val = from_dummy::<_,UnsizedMetadata<T>>(undecorate(next));
+            unsafe { (*next_val).strong_count.fetch_add(1, Ordering::SeqCst) };
+            item.advance_count.fetch_sub(1, Ordering::SeqCst);
+            let next_next = unsafe { (*next_val).next.load(Ordering::SeqCst) };
+            if get_decoration(next_next).is_dropped() {
+                unsafe { (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst) };
+                return SharedGetGuard::Raw(unsafe { item.payload() });
+            }
+
+            slow_shared_get(item)
         }
     }
 

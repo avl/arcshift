@@ -88,7 +88,7 @@ fn arcshift_shared_non_reloading_bench(c: &mut Criterion) {
 }
 
 fn arcswap_bench(c: &mut Criterion) {
-    let ac = ArcSwap::from_pointee(42);
+    let ac = Arc::new(ArcSwap::from_pointee(42));
     c.bench_function("arc_swap", |b| {
         b.iter(|| {
             let loaded = ac.load();
@@ -98,6 +98,24 @@ fn arcswap_bench(c: &mut Criterion) {
         })
     });
 }
+fn arcswap_stale_bench(c: &mut Criterion) {
+    let shared = Arc::new(ArcSwap::from_pointee(42));
+    let shared2 = shared.clone();
+
+    let jh = std::thread::spawn(move || {
+        shared2.store(Arc::new(43));
+    });
+    jh.join().unwrap();
+
+    c.bench_function("arc_swap_stale", |b| {
+        b.iter(|| {
+            let arc = shared.load();
+            let x: i32 = *(*arc).deref();
+            black_box(x)
+        })
+    });
+}
+
 fn arcswap_cached_bench(c: &mut Criterion) {
     let shared = Arc::new(ArcSwap::from_pointee(42));
     let mut cache = Cache::new(Arc::clone(&shared));
@@ -126,7 +144,7 @@ criterion_group!(
     arcshift_contended_bench,
     arcshift_update_bench,
     arcswap_bench,
-    arcswap_cached_bench,
+    arcswap_stale_bench,
     mutex_bench,
     rwlock_read_bench,
     rwlock_contended_read_bench,
