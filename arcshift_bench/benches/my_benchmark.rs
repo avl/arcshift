@@ -145,6 +145,7 @@ criterion_group!(
     arcshift_update_bench,
     arcswap_bench,
     arcswap_stale_bench,
+    arcswap_cached_bench,
     mutex_bench,
     rwlock_read_bench,
     rwlock_contended_read_bench,
