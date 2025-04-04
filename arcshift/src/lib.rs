@@ -2935,13 +2935,17 @@ impl<'a, T: ?Sized> Drop for SharedGetGuard<'a, T> {
                     // SAFETY:
                     // The 'next' pointer of a SharedGetGuard::Cloned is always valid
                     let item = unsafe { &*item_ptr };
-                    item.strong_count.fetch_sub(1, Ordering::SeqCst);
+                    let mut dropq = DropHandler::default();
+                    do_drop_strong(item, &mut dropq);
+                    dropq.resume_any_panics();
                 } else {
                     let item_ptr = from_dummy::<_, UnsizedMetadata<T>>(*next);
                     // SAFETY:
                     // The 'next' pointer of a SharedGetGuard::Cloned is always valid
                     let item = unsafe { &*item_ptr };
-                    item.strong_count.fetch_sub(1, Ordering::SeqCst);
+                    let mut dropq = DropHandler::default();
+                    do_drop_strong(item, &mut dropq);
+                    dropq.resume_any_panics();
                 }
             }
         }
@@ -2984,24 +2988,28 @@ fn slow_shared_get<'a, T:?Sized, M:IMetadata>(item: &'a ItemHolder<T,M>) -> Opti
     // SAFETY:
     // The 'item.next' pointer is not null as per method precondition, and since we have
     // incremented advance_count, 'item.next' is a valid pointer.
-    let _wk = unsafe { (*next_val).weak_count.fetch_add(1, Ordering::SeqCst) };
+    //let _wk = unsafe { (*next_val).weak_count.fetch_add(1, Ordering::SeqCst) };
     // SAFETY:
     // The 'item.next' pointer is not null as per method precondition, and since we have
     // incremented advance_count, 'item.next' is a valid pointer.
-    let sc = unsafe { (*next_val).strong_count.fetch_add(1, Ordering::SeqCst) };
+    let sc = unsafe { (*next_val).strong_count.load( Ordering::Relaxed) };
     if sc == 0 {
-        debug_println!("slow_shared_get: {:?}, sc == 0", item as *const _);
-        // SAFETY:
-        // The 'item.next' pointer is not null as per method precondition, and since we have
-        // incremented advance_count, 'item.next' is a valid pointer.
-        unsafe {
-            (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst);
-            (*next_val).weak_count.fetch_sub(1, Ordering::SeqCst);
-        };
         item.advance_count.fetch_sub(1, Ordering::SeqCst);
         // SAFETY:
         // The 'item.next' pointer is not null as per method precondition, and since we have
         // incremented advance_count, 'item.next' is a valid pointer.
+        return None;
+    }
+    // SAFETY:
+    // The 'item.next' pointer is not null as per method precondition, and since we have
+    // incremented advance_count, 'item.next' is a valid pointer.
+    let exc = unsafe { (*next_val).strong_count.compare_exchange(sc, sc+1, Ordering::SeqCst, Ordering::SeqCst) };
+    if exc.is_err() {
+        debug_println!("slow_shared_get: {:?}, sc == 0", item as *const _);
+        // SAFETY:
+        // The 'item.next' pointer is not null as per method precondition, and since we have
+        // incremented advance_count, 'item.next' is a valid pointer.
+        item.advance_count.fetch_sub(1, Ordering::SeqCst);
         return None;
     }
 
@@ -3014,22 +3022,21 @@ fn slow_shared_get<'a, T:?Sized, M:IMetadata>(item: &'a ItemHolder<T,M>) -> Opti
         // SAFETY:
         // The 'item.next' pointer is not null as per method precondition, and since we have
         // incremented advance_count, 'item.next' is a valid pointer.
-        unsafe {
-            (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst);
-            (*next_val).weak_count.fetch_sub(1, Ordering::SeqCst);
-        };
+        let mut dropq = DropHandler::default();
+        do_drop_strong(next_val, &mut dropq);
         item.advance_count.fetch_sub(1, Ordering::SeqCst);
         // SAFETY:
         // item is owned by the caller of slow_shared_get
+        dropq.resume_any_panics();
         return None;
     }
     item.advance_count.fetch_sub(1, Ordering::SeqCst);
     // SAFETY:
     // The 'item.next' pointer is not null as per method precondition, and since we have
     // incremented advance_count, 'item.next' is a valid pointer.
-    unsafe {
+    /*unsafe {
         (*next_val).weak_count.fetch_sub(1, Ordering::SeqCst);
-    }
+    }*/
     debug_println!("slow_shared_get: {:?}, advanced to {:?}", item as *const _, next);
 
     Some(SharedGetGuard::LightCloned { next: undecorate(next) })
