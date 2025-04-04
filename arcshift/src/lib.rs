@@ -421,6 +421,7 @@ pub struct ArcShiftWeak<T: ?Sized> {
 /// However, it does not implement `Sync`.
 pub mod cell;
 
+#[inline(always)]
 const fn is_sized<T: ?Sized>() -> bool {
     size_of::<&T>() == size_of::<&()>()
 }
@@ -1414,6 +1415,7 @@ fn assert_is_undecorated<T: ?Sized, M: IMetadata>(_ptr: *const ItemHolderDummy<T
 /// Return an undecorated version of the given pointer.
 /// Supplying an already undecorated pointer is not an error, and returns
 /// the value unmodified.
+#[inline(always)]
 fn undecorate<T: ?Sized>(cand: *const ItemHolderDummy<T>) -> *const ItemHolderDummy<T> {
     let raw = cand as usize & 7;
     (cand as *const u8).wrapping_offset(-(raw as isize)) as *const ItemHolderDummy<T>
@@ -2910,10 +2912,15 @@ pub enum SharedGetGuard<'a, T: ?Sized> {
     /// The pointer already referenced the most recent value
     Raw(&'a T),
     /// We had to advance, and to do this we unfortunately had to clone
-    Cloned {
+    LightCloned {
         #[doc(hidden)]
         next: *const ItemHolderDummy<T>,
     },
+    /// Most expensive case, only used in some rare race-cases
+    FullClone {
+        #[doc(hidden)]
+        cloned: ArcShift<T>
+    }
 }
 
 impl<'a, T: ?Sized> Drop for SharedGetGuard<'a, T> {
@@ -2921,7 +2928,8 @@ impl<'a, T: ?Sized> Drop for SharedGetGuard<'a, T> {
     fn drop(&mut self) {
         match self {
             SharedGetGuard::Raw(_) => {}
-            SharedGetGuard::Cloned { next } => {
+            SharedGetGuard::FullClone{..} => {}
+            SharedGetGuard::LightCloned { next } => {
                 if is_sized::<T>() {
                     let item_ptr = from_dummy::<_, SizedMetadata>(*next);
                     // SAFETY:
@@ -2947,7 +2955,7 @@ impl<T: ?Sized> core::ops::Deref for SharedGetGuard<'_, T> {
     fn deref(&self) -> &Self::Target {
         match self {
             SharedGetGuard::Raw(r) => r,
-            SharedGetGuard::Cloned { next } => {
+            SharedGetGuard::LightCloned { next } => {
                 if is_sized::<T>() {
                     // SAFETY:
                     // The 'next' pointer of a SharedGetGuard::Cloned is always valid
@@ -2958,33 +2966,43 @@ impl<T: ?Sized> core::ops::Deref for SharedGetGuard<'_, T> {
                     unsafe { (*from_dummy::<_, UnsizedMetadata<T>>(*next)).payload() }
                 }
             }
+            SharedGetGuard::FullClone { cloned } => {
+                cloned.shared_non_reloading_get()
+            }
         }
     }
 }
 
-// Precondition: undecorated 'item.next' must not be null
-fn slow_shared_get<'a, T: ?Sized, M: IMetadata>(
-    item: &'a ItemHolder<T, M>,
-) -> SharedGetGuard<'a, T> {
+fn slow_shared_get<'a, T:?Sized, M:IMetadata>(item: &'a ItemHolder<T,M>) -> Option<SharedGetGuard<'a, T>> {
+    debug_println!("slow_shared_get: {:?}", item as *const _);
     item.advance_count.fetch_add(1, Ordering::SeqCst);
     let next = item.next.load(Ordering::SeqCst);
+    assert!(!undecorate(next).is_null());
+    debug_println!("slow_shared_get: {:?}, next = {:?}", item as *const _, next);
 
-    let next_val = from_dummy::<_, SizedMetadata>(undecorate(next));
+    let next_val = from_dummy::<_,SizedMetadata>(undecorate(next));
+    // SAFETY:
+    // The 'item.next' pointer is not null as per method precondition, and since we have
+    // incremented advance_count, 'item.next' is a valid pointer.
+    let _wk = unsafe { (*next_val).weak_count.fetch_add(1, Ordering::SeqCst) };
     // SAFETY:
     // The 'item.next' pointer is not null as per method precondition, and since we have
     // incremented advance_count, 'item.next' is a valid pointer.
     let sc = unsafe { (*next_val).strong_count.fetch_add(1, Ordering::SeqCst) };
-
     if sc == 0 {
-        std::println!("debug, sc == 0");
-        //
-
+        debug_println!("slow_shared_get: {:?}, sc == 0", item as *const _);
         // SAFETY:
         // The 'item.next' pointer is not null as per method precondition, and since we have
         // incremented advance_count, 'item.next' is a valid pointer.
-        /*unsafe { (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst) };
+        unsafe {
+            (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst);
+            (*next_val).weak_count.fetch_sub(1, Ordering::SeqCst);
+        };
         item.advance_count.fetch_sub(1, Ordering::SeqCst);
-        return SharedGetGuard::Raw(unsafe { item.payload() });*/
+        // SAFETY:
+        // The 'item.next' pointer is not null as per method precondition, and since we have
+        // incremented advance_count, 'item.next' is a valid pointer.
+        return None;
     }
 
     // SAFETY:
@@ -2992,20 +3010,29 @@ fn slow_shared_get<'a, T: ?Sized, M: IMetadata>(
     // incremented advance_count, 'item.next' is a valid pointer.
     let next_next = unsafe { (*next_val).next.load(Ordering::SeqCst) };
     if !undecorate(next_next).is_null() {
+        debug_println!("slow_shared_get: {:?}, was dropped", item as *const _);
         // SAFETY:
         // The 'item.next' pointer is not null as per method precondition, and since we have
         // incremented advance_count, 'item.next' is a valid pointer.
-        let ret = slow_shared_get(unsafe { &(*next_val) });
-        // SAFETY:
-        // The 'item.next' pointer is not null as per method precondition, and since we have
-        // incremented advance_count, 'item.next' is a valid pointer.
-        unsafe { (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst) };
+        unsafe {
+            (*next_val).strong_count.fetch_sub(1, Ordering::SeqCst);
+            (*next_val).weak_count.fetch_sub(1, Ordering::SeqCst);
+        };
         item.advance_count.fetch_sub(1, Ordering::SeqCst);
-        return ret;
+        // SAFETY:
+        // item is owned by the caller of slow_shared_get
+        return None;
     }
     item.advance_count.fetch_sub(1, Ordering::SeqCst);
+    // SAFETY:
+    // The 'item.next' pointer is not null as per method precondition, and since we have
+    // incremented advance_count, 'item.next' is a valid pointer.
+    unsafe {
+        (*next_val).weak_count.fetch_sub(1, Ordering::SeqCst);
+    }
+    debug_println!("slow_shared_get: {:?}, advanced to {:?}", item as *const _, next);
 
-    SharedGetGuard::Cloned { next }
+    Some(SharedGetGuard::LightCloned { next: undecorate(next) })
 }
 
 impl<T: ?Sized> ArcShift<T> {
@@ -3126,7 +3153,7 @@ impl<T: ?Sized> ArcShift<T> {
     }
 
     /// Reload this ArcShift instance, and return the latest value.
-    #[inline(always)]
+    #[inline]
     pub fn get(&mut self) -> &T {
         if is_sized::<T>() {
             let ptr = from_dummy::<T, SizedMetadata>(self.item.as_ptr());
@@ -3134,24 +3161,24 @@ impl<T: ?Sized> ArcShift<T> {
             // self.item is always a valid pointer
             let item = unsafe { &*ptr };
             let next = item.next.load(Ordering::Relaxed);
-            if next.is_null() {
-                // SAFETY:
-                // self.item is always a valid pointer
-                return unsafe { item.payload() };
+            if !undecorate(next).is_null() {
+                return Self::advance_strong_helper2::<SizedMetadata>(&mut self.item, true);
             }
-            Self::advance_strong_helper2::<SizedMetadata>(&mut self.item, true)
+            // SAFETY:
+            // self.item is always a valid pointer
+            unsafe { &*(item.payload.get() as *const T) }
         } else {
             let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
             // SAFETY:
             // self.item is always a valid pointer
             let item = unsafe { &*ptr };
             let next = item.next.load(Ordering::Relaxed);
-            if next.is_null() {
-                // SAFETY:
-                // self.item is always a valid pointer
-                return unsafe { item.payload() };
+            if !undecorate(next).is_null() {
+                return Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item, true)
             }
-            Self::advance_strong_helper2::<UnsizedMetadata<T>>(&mut self.item, true)
+            // SAFETY:
+            // self.item is always a valid pointer
+            unsafe { item.payload() }
         }
     }
 
@@ -3174,26 +3201,26 @@ impl<T: ?Sized> ArcShift<T> {
             // self.item is always a valid pointer
             let item = unsafe { &*ptr };
             let next = item.next.load(Ordering::Relaxed);
-            if next.is_null() {
+            if undecorate(next).is_null() {
                 // SAFETY:
                 // self.item is always a valid pointer
                 return SharedGetGuard::Raw(unsafe { item.payload() });
             }
 
-            slow_shared_get(item)
+            slow_shared_get(item).unwrap_or_else(||SharedGetGuard::FullClone {cloned: self.clone()})
         } else {
             let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
             // SAFETY:
             // self.item is always a valid pointer
             let item = unsafe { &*ptr };
             let next = item.next.load(Ordering::Relaxed);
-            if next.is_null() {
+            if undecorate(next).is_null() {
                 // SAFETY:
                 // self.item is always a valid pointer
                 return SharedGetGuard::Raw(unsafe { item.payload() });
             }
 
-            slow_shared_get(item)
+            slow_shared_get(item).unwrap_or_else(||SharedGetGuard::FullClone {cloned: self.clone()})
         }
     }
 
@@ -3247,8 +3274,7 @@ impl<T: ?Sized> ArcShift<T> {
             unsafe { (*item).strong_count.load(Ordering::SeqCst) }
         })
     }
-    #[inline(never)]
-    #[cold]
+    
     fn advance_strong_helper2<M: IMetadata>(
         old_item_ptr: &mut NonNull<ItemHolderDummy<T>>,
         gc: bool,

@@ -2399,6 +2399,47 @@ fn simple_threading_shared_get_update() {
     }
 }
 #[test]
+fn simple_threading_shared_get_twice_update() {
+    let seen_values = alloc::sync::Arc::new(core::sync::atomic::AtomicU8::new(0));
+    let _seen_values2 = seen_values.clone();
+    model(move || {
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(0u32);
+        let shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || *shift1.shared_get())
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.update(1);
+                shift2.update(2);
+            })
+            .unwrap();
+        let r1 = t1.join().unwrap();
+        t2.join().unwrap();
+        debug_println!("--> Main dropping");
+
+        assert!(r1 == 0 || r1 == 1 || r1 == 2);
+        seen_values.fetch_or(1 << r1, Ordering::Relaxed);
+    });
+    #[cfg(loom)]
+    {
+        assert_eq!(_seen_values2.load(Ordering::Relaxed), 7);
+    }
+}
+
+
+#[test]
 fn simple_threading_shared_get_drop() {
     model(move || {
         debug_println!("-------- loom -------------");
