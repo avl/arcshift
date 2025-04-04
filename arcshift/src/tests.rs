@@ -2438,7 +2438,6 @@ fn simple_threading_shared_get_twice_update() {
     }
 }
 
-
 #[test]
 fn simple_threading_shared_get_drop() {
     model(move || {
