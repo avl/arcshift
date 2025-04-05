@@ -7,11 +7,11 @@
 //! # Introduction to ArcShift
 //!
 //! [`ArcShift`] is a data type similar to `std::sync::Arc`, except that it allows updating
-//! the value pointed to. It can be used as a faster replacement for
-//! `std::sync::Arc<std::sync::RwLock<T>>`.
+//! the value pointed to. It can be used as a replacement for
+//! `std::sync::Arc<std::sync::RwLock<T>>`, giving much faster read access.
 //!
-//! Writing to ArcShift is significantly more expensive than for `std::sync::RwLock`, so
-//! ArcShift is most suited to use cases where updates are infrequent.
+//! Updating the value in ArcShift is significantly more expensive than writing `std::sync::RwLock`,
+//! so ArcShift is most suited to cases where updates are infrequent.
 //!
 //! ## Example
 //! ```
@@ -46,22 +46,30 @@
 //!
 //! # Strong points
 //! * Easy to use (similar to Arc)
-//! * All functions are lock free (see <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
-//! * For use cases where no modification of values occurs, performance is very good (much
+//! * All functions are lock free ( <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
+//! * For use cases where no updates occur, performance is very good (much
 //!   better than RwLock or Mutex).
-//! * Modifying values is reasonably fast (think, 50-150 nanoseconds), but much slower than Mutex or
-//!   RwLock.
+//! * Updates are reasonably fast (think, 15-100 nanoseconds), but much slower than Mutex- or
+//!   RwLock-writes.
 //! * The function [`ArcShift::shared_non_reloading_get`] allows access without any overhead
 //!   compared to regular Arc (benchmarks show identical performance to Arc).
 //! * ArcShift does not rely on thread-local variables.
 //! * ArcShift is no_std compatible (though 'alloc' is required, since ArcShift is a heap
-//!   allocating data structure). Compile with "default-features=false" to enable no_std
+//!   data structure). Compile with "default-features=false" to enable no_std
 //!   compatibility.
 //!
 //! # Limitations
 //!
 //! ArcShift achieves its performance at the expense of the following disadvantages:
 //!
+//! * ArcShift's performance relies on being able to update its pointer when
+//!   new values are detected. This means that ArcShift is most efficient when each
+//!   thread has a mutable ArcShift instance. This can often be achieved by cloning the ArcShift,
+//!   and distributing one owned copy to every thread (these clones all point to the same
+//!   inner value). ArcShift can still be used with only shared access ([`ArcShift::shared_get`]),
+//!   and performance is still very good as long as the pointer is current. However, if
+//!   the ArcShift instance is stale (needs reloading, because an update has occurred), reads will
+//!   be approximately twice as costly as for RwLock.
 //! * When modifying the value, the old version of the value lingers in memory until
 //!   the last ArcShift that uses it has reloaded. Such a reload only happens when the ArcShift
 //!   is accessed using a unique (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
@@ -75,26 +83,55 @@
 //! * ArcShift is its own datatype. It is in no way compatible with `Arc<T>`.
 //! * At most usize::MAX/8 instances of ArcShift or ArcShiftWeak can be created for each value.
 //!   (this is because it uses some bits of its weak refcount to store metadata).
-//! * ArcShift instances should ideally be owned (or be mutably accessible). This is because
-//!   reloading ArcShift requires mutable access to the ArcShift object itself.
 //!
-//! The last limitation might seem unacceptable, but for many applications it is not
-//! hard to make sure each thread/scope has its own instance of ArcShift pointing to
-//! the resource. Cloning ArcShift instances is reasonably fast.
+//! # Detailed performance characteristics
 //!
-//! # Implementation
 //!
-//! When ArcShift values are updated, a linked list of all updates is formed. Whenever
-//! an ArcShift-instance is reloaded (using [`ArcShift::reload`], [`ArcShift::get`],
-//! that instance advances along the linked list to the last
-//! node in the list. When no instance exists pointing at a node in the list, it is dropped.
-//! It is thus important to periodically call [`ArcShift::reload`] or [`ArcShift::get`] to
-//! avoid retaining unneeded values.
+//! * [`ArcShift::get`] - Very good average performance.
+//!   Checking for new values requires a single atomic operation, of the least expensive kind
+//!   (Ordering::Relaxed). On x86_64, this is the exact same machine operation as a regular
+//!   memory access, and also on arm it is not an expensive operation. The cost of such access
+//!   is much smaller than a mutex access, even an uncontended one. In the case where a reload
+//!   is actually necessary, there is a significant performance impact (but still typically
+//!   below 150ns for modern machines (2025)).
+//!
+//!   If other instances have made updates, the subsequent access will have a penalty. This
+//!   penalty can be significant, because previous values may have to be dropped.  However,
+//!   when any updates have been processed, subsequent accesses will be fast again. It is
+//!   guaranteed that any update that completed before the execution of [`ArcShift::get`]
+//!   started, will be visible.
+//!
+//! * [`ArcShift::shared_get`] - Good performance as long as the value is not stale.
+//!   If self points to a previous value, each call to `shared_get` will traverse the
+//!   memory structures to find the most recent value.
+//!
+//!   There are three cases:
+//!   * The value is up-to-date. In this case, execution is very fast.
+//!   * The value is stale, but no write is in progress. Expect a penalty equal to
+//!     twice the cost of an RwLock write, approximately.
+//!   * The value is stale, and there is a write in progress. This is a rare race condition.
+//!     Expect a severe performance penalty (~10-20x the cost of an RwLock write).
+//!
+//!   `shared_get` also guarantees that any updates that completed before it was called,
+//!   will be visible.
+//!
+//! * [`ArcShift::shared_non_reloading_get`] - No overhead compared to plain Arc.
+//!   Will not reload, even if the ArcShift instance is stale. May thus return an old
+//!   value.
+//!
+//! * [`ArcShift::reload`] - Similar cost to [`ArcShift::get`].
+//!
+//! * [`ArcShift::clone`] - Fast. Requires a single atomic increment, and an atomic read.
+//!   If the current instance is stale, the cloned value will be reloaded, with identical
+//!   cost to [`ArcShift::get`].
+//!
+//! * Drop - Can be slow. The last remaining owner of a value will drop said value.
+//!
 //!
 //! # Motivation
 //!
 //! The primary raison d'être for [`ArcShift`] is to be a version of Arc which allows
-//! modifying the stored value, with very little overhead over regular Arc for read heavy
+//! updating the stored value, with very little overhead over regular Arc for read heavy
 //! loads.
 //!
 //! One such motivating use-case for ArcShift is hot-reloadable assets in computer games.
@@ -109,16 +146,6 @@
 //!
 //! ArcShift can, of course, be useful in other domains than computer games.
 //!
-//! # Performance properties
-//!
-//! Accessing the value stored in an ArcShift instance only requires a regular memory access,
-//! not any form of atomic operation. Checking for new values requires a single
-//! atomic operation, of the least expensive kind (Ordering::Relaxed). On x86_64,
-//! this is the exact same machine operation as a regular memory access, and also
-//! on arm it is not an expensive operation.
-//! The cost of such access is much smaller than a mutex access, even an uncontended one.
-//! In the case where a reload is actually necessary, there is a significant performance impact
-//! (but still typically below 150ns for modern machines (2025)).
 //!
 //! # Panicking drop methods
 //! If a drop implementation panics, ArcShift will make sure that the internal data structures
@@ -151,7 +178,7 @@
 //! The 'next'-pointer starts out as null, but when the value in an ArcShift is updated, the
 //! 'next'-pointer is set to point to the updated value.
 //!
-//! This means that each ArcShift-instance always points at valid value of type T. No locking
+//! This means that each ArcShift-instance always points at a valid value of type T. No locking
 //! or synchronization is required to get at this value. This is why ArcShift instances are fast
 //! to use. There is the drawback that as long as an ArcShift-instance exists, whatever value
 //! it points to must be kept alive. Each time an ArcShift instance is accessed mutably, we have
@@ -160,11 +187,11 @@
 //!
 //! When the last ArcShift-instance releases a particular value, it will be dropped.
 //!
-//! ArcShiftWeak-instances also keep pointers to the heap blocks mentioned above, but value T
+//! ArcShiftWeak-instances also keep pointers to the heap blocks mentioned above, but the value T
 //! in the block can be dropped while being held by an ArcShiftWeak. This means that an ArcShiftWeak-
 //! instance only consumes `std::mem::size_of::<T>()` bytes plus 5 words of memory, when the value
-//! it points to has been dropped. When the ArcShiftWeak-instance is reloaded, or dropped, that memory
-//! is also released.
+//! it points to has been dropped. When the ArcShiftWeak-instance is reloaded, or dropped, that
+//! memory is also released.
 //!
 //!
 //! # Pitfall #1 - lingering memory usage
@@ -280,7 +307,7 @@ use core::sync::atomic::Ordering;
 // assigning null to a pointer, that could cause UB in unsafe code in this crate.
 // This crate is inherently dependent on all the code in it being correct. Therefore,
 // marking more functions unsafe buys us very little.
-// Note! The API of this crate is 100% safe and UB should be impossible to trigger by using it.
+// Note! The API of this crate is 100% safe and UB should be impossible to trigger through the API.
 // All public methods are 100% sound, this argument only concerns private methods.
 
 // All atomic primitives are reexported from a
