@@ -2440,6 +2440,7 @@ fn simple_threading_shared_get_twice_update() {
 
 #[test]
 fn simple_threading_shared_get_thrice_update() {
+    compile_error!("This test shows an error in this branch (not in master)")
     let seen_values = alloc::sync::Arc::new(core::sync::atomic::AtomicU8::new(0));
     let _seen_values2 = seen_values.clone();
     model(move || {
