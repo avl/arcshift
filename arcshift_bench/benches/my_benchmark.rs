@@ -1,9 +1,9 @@
 use arc_swap::{ArcSwap, Cache};
+use arcshift::cell::ArcShiftCell;
 use arcshift::ArcShift;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
-use arcshift::cell::ArcShiftCell;
 
 fn std_arc_bench(c: &mut Criterion) {
     let ac = Arc::new(42u32);
@@ -56,15 +56,14 @@ fn arcshift_bench(c: &mut Criterion) {
 fn arcshift_cell_bench(c: &mut Criterion) {
     let ac = ArcShift::new(42u32);
     let cell = ArcShiftCell::from_arcshift(ac);
-    c.bench_function("arcshift_cell_get", |b| b.iter(||
-        black_box(cell.get(|x|*x))));
+    c.bench_function("arcshift_cell_get", |b| {
+        b.iter(|| black_box(cell.get(|x| *x)))
+    });
 }
 fn arcshift_cell_borrow_bench(c: &mut Criterion) {
     let ac = ArcShift::new(42u32);
     let cell = ArcShiftCell::from_arcshift(ac);
-    c.bench_function("arcshift_cell_borrow", |b| b.iter(||
-        *cell.borrow()
-    ));
+    c.bench_function("arcshift_cell_borrow", |b| b.iter(|| *cell.borrow()));
 }
 fn arcshift_contended_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);

@@ -2923,7 +2923,7 @@ pub enum SharedGetGuard<'a, T: ?Sized> {
     },
 }
 
-impl<'a, T: ?Sized> Drop for SharedGetGuard<'a, T> {
+impl<T: ?Sized> Drop for SharedGetGuard<'_, T> {
     #[inline(always)]
     fn drop(&mut self) {
         match self {
@@ -2975,9 +2975,9 @@ impl<T: ?Sized> core::ops::Deref for SharedGetGuard<'_, T> {
     }
 }
 
-fn slow_shared_get<'a, T: ?Sized, M: IMetadata>(
-    item: &'a ItemHolder<T, M>,
-) -> Option<SharedGetGuard<'a, T>> {
+fn slow_shared_get<T: ?Sized, M: IMetadata>(
+    item: &ItemHolder<T, M>,
+) -> Option<SharedGetGuard<'_, T>> {
     debug_println!("slow_shared_get: {:?}", item as *const _);
     item.advance_count.fetch_add(1, Ordering::SeqCst);
     let next = item.next.load(Ordering::SeqCst);
