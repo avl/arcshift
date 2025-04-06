@@ -2440,7 +2440,6 @@ fn simple_threading_shared_get_twice_update() {
 
 #[test]
 fn simple_threading_shared_get_thrice_update() {
-    compile_error!("This test shows an error in this branch (not in master)")
     let seen_values = alloc::sync::Arc::new(core::sync::atomic::AtomicU8::new(0));
     let _seen_values2 = seen_values.clone();
     model(move || {
@@ -2448,19 +2447,17 @@ fn simple_threading_shared_get_thrice_update() {
         let owner2 = owner.clone();
 
         debug_println!("-------- loom -------------");
-        let shift = ArcShift::new(owner.create("0"));
-        let shift1 = shift.clone();
-        let mut shift2 = shift.clone();
-        drop(shift);
+        let shift1 = ArcShift::new(owner.create("0"));
+
+        let mut shift2 = shift1.clone();
+
         // SAFETY:
         // No threading involved
         unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
-            .spawn(move || {
-                shift1.shared_get().str().parse::<u32>().unwrap()
-            })
+            .spawn(move || shift1.shared_get().str().parse::<u32>().unwrap())
             .unwrap();
 
         let t2 = atomic::thread::Builder::new()
@@ -2485,7 +2482,6 @@ fn simple_threading_shared_get_thrice_update() {
         assert_eq!(_seen_values2.load(Ordering::Relaxed), 15);
     }
 }
-
 
 #[test]
 fn simple_threading_shared_get_drop() {

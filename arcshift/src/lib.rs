@@ -3005,8 +3005,13 @@ impl<T: ?Sized> core::ops::Deref for SharedGetGuard<'_, T> {
 fn slow_shared_get<T: ?Sized, M: IMetadata>(
     item: &ItemHolder<T, M>,
 ) -> Option<SharedGetGuard<'_, T>> {
-    debug_println!("slow_shared_get: {:?}", item as *const _);
+    debug_println!("slow_shared_get: {:?} (advancing count)", item as *const _);
     item.advance_count.fetch_add(1, Ordering::SeqCst);
+
+    #[cfg(loom)]
+    atomic::fence(Ordering::SeqCst);
+
+    debug_println!("advanced count");
     let next = item.next.load(Ordering::SeqCst);
     assert!(!undecorate(next).is_null());
     debug_println!("slow_shared_get: {:?}, next = {:?}", item as *const _, next);
@@ -3017,9 +3022,11 @@ fn slow_shared_get<T: ?Sized, M: IMetadata>(
     // incremented advance_count, 'item.next' is a valid pointer.
     let sc = unsafe { (*next_val).strong_count.load(Ordering::Relaxed) };
     if sc == 0 {
+        debug_println!("slow_shared sc == 0");
         item.advance_count.fetch_sub(1, Ordering::SeqCst);
         return None;
     }
+    debug_println!("slow_shared sc #1 for {:?}", next_val);
     // SAFETY:
     // The 'item.next' pointer is not null as per method precondition, and since we have
     // incremented advance_count, 'item.next' is a valid pointer.
@@ -3028,11 +3035,14 @@ fn slow_shared_get<T: ?Sized, M: IMetadata>(
             .strong_count
             .compare_exchange(sc, sc + 1, Ordering::SeqCst, Ordering::SeqCst)
     };
+    debug_println!("slow_shared sc #1.5");
     if exc.is_err() {
+        debug_println!("slow_shared sc race");
         debug_println!("slow_shared_get: {:?}, sc == 0", item as *const _);
         item.advance_count.fetch_sub(1, Ordering::SeqCst);
         return None;
     }
+    debug_println!("slow_shared sc #2");
 
     // SAFETY:
     // The 'item.next' pointer is not null as per method precondition, and since we have
@@ -3046,6 +3056,7 @@ fn slow_shared_get<T: ?Sized, M: IMetadata>(
         dropq.resume_any_panics();
         return None;
     }
+    debug_println!("slow_shared sc #3");
     item.advance_count.fetch_sub(1, Ordering::SeqCst);
 
     debug_println!(
