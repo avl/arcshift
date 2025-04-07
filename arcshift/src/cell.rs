@@ -67,15 +67,16 @@ impl<T: 'static + ?Sized> Deref for ArcShiftCellHandle<'_, T> {
 }
 
 /// ArcShiftCell cannot be Sync, but there's nothing stopping it from being Send.
-/// SAFETY:
-/// As long as the contents of the cell are not !Send, it is safe to
-/// send the cell. The object must be uniquely owned to be sent, and
-/// this is only possible if we're not in a recursive call to
-/// 'get'. And in this case, the properties of ArcShiftCell are the same
-/// as ArcShift, and ArcShift is Send (if T is Send + Sync).
 ///
 /// Note that ArcShiftCell *cannot* be Sync, because then multiple threads
 /// could call 'get' simultaneously, corrupting the (non-atomic) refcount.
+// SAFETY:
+// As long as the contents of the cell are not !Send, it is safe to
+// send the cell. The object must be uniquely owned to be sent, and
+// this is only possible if we're not in a recursive call to
+// 'get'. And in this case, the properties of ArcShiftCell are the same
+// as ArcShift, and ArcShift is Send (if T is Send + Sync).
+//
 unsafe impl<T: 'static> Send for ArcShiftCell<T> where T: Send + Sync {}
 
 impl<T: 'static + ?Sized> Clone for ArcShiftCell<T> {
@@ -182,7 +183,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
         }
     }
     /// Reload this ArcShiftCell-instance.
-    /// This allows dropping heap blocks kept alive by this instance of
+    /// This allows heap blocks kept alive by this instance of
     /// ArcShiftCell to be dropped.
     /// Note, this method only works when not called from within a closure
     /// supplied to the 'get' method. If such recursion occurs, this method
@@ -201,7 +202,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
     /// Create an ArcShift-instance pointing to the same data
     pub fn make_arcshift(&self) -> ArcShift<T> {
         // SAFETY:
-        // ArcShiftCell is not Sync, and 'reload' does not recursively call into user
+        // ArcShiftCell is not Sync, and 'make_arcshift' does not recursively call into user
         // code, so we know no other operation can be ongoing.
         unsafe { &mut *self.inner.get() }.clone()
     }

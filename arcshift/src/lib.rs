@@ -54,6 +54,7 @@
 //! * The function [`ArcShift::shared_non_reloading_get`] allows access without any overhead
 //!   compared to regular Arc (benchmarks show identical performance to Arc).
 //! * ArcShift does not rely on thread-local variables.
+//! * Supports unsized types (i.e, you can use `ArcShift<[u8]>`)
 //! * ArcShift is no_std compatible (though 'alloc' is required, since ArcShift is a heap
 //!   data structure). Compile with "default-features=false" to enable no_std
 //!   compatibility.
@@ -95,7 +96,7 @@
 //!   is actually necessary, there is a significant performance impact (but still typically
 //!   below 150ns for modern machines (2025)).
 //!
-//!   If other instances have made updates, the subsequent access will have a penalty. This
+//!   If other instances have made updates, subsequent accesses will have a penalty. This
 //!   penalty can be significant, because previous values may have to be dropped.  However,
 //!   when any updates have been processed, subsequent accesses will be fast again. It is
 //!   guaranteed that any update that completed before the execution of [`ArcShift::get`]
@@ -117,7 +118,8 @@
 //!
 //! * [`ArcShift::shared_non_reloading_get`] - No overhead compared to plain Arc.
 //!   Will not reload, even if the ArcShift instance is stale. May thus return an old
-//!   value.
+//!   value. If shared_get has been used previously, this method may return an older
+//!   value than what the shared_get returned.
 //!
 //! * [`ArcShift::reload`] - Similar cost to [`ArcShift::get`].
 //!
@@ -192,6 +194,12 @@
 //! instance only consumes `std::mem::size_of::<T>()` bytes plus 5 words of memory, when the value
 //! it points to has been dropped. When the ArcShiftWeak-instance is reloaded, or dropped, that
 //! memory is also released.
+//!
+//! # Prior Art
+//!
+//! ArcShift is very much inspired by arc-swap. The two crates can be used for similar problems.
+//!
+//! Arc
 //!
 //!
 //! # Pitfall #1 - lingering memory usage
@@ -444,8 +452,8 @@ pub struct ArcShiftWeak<T: ?Sized> {
     item: NonNull<ItemHolderDummy<T>>,
 }
 
-/// A handle that allows reloading an ArcShift instance without having 'mut' access.
-/// However, it does not implement `Sync`.
+/// Module with a convenient cell-like data structure for reloading ArcShift instances
+/// despite only having shared access.
 pub mod cell;
 
 #[inline(always)]
