@@ -46,6 +46,7 @@
 //!
 //! # Strong points
 //! * Easy to use (similar to Arc)
+//! * Extensively tested
 //! * All functions are lock free ( <https://en.wikipedia.org/wiki/Non-blocking_algorithm> )
 //! * For use cases where no updates occur, performance is very good (much
 //!   better than RwLock or Mutex).
@@ -198,8 +199,8 @@
 //! # Prior Art
 //!
 //! ArcShift is very much inspired by arc-swap. The two crates can be used for similar problems.
-//!
-//! Arc
+//! They have slightly different APIs, one or the other may be a more natural fit depending on
+//! the problem. ArcShift may be faster for some problems, slower for others.
 //!
 //!
 //! # Pitfall #1 - lingering memory usage
