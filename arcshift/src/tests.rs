@@ -2766,3 +2766,50 @@ fn simple_threading_update_downgrade_shared_get() {
         assert_eq!(*shift.get(), 43);
     });
 }
+
+#[test]
+fn simple_threading_shared_get_thrice_update() {
+    let seen_values = alloc::sync::Arc::new(core::sync::atomic::AtomicU8::new(0));
+    let _seen_values2 = seen_values.clone();
+    model(move || {
+        let owner = alloc::sync::Arc::new(SpyOwner2::new());
+        let owner2 = owner.clone();
+
+        debug_println!("-------- loom -------------");
+        let shift = ArcShift::new(owner.create("0"));
+        let shift1 = shift.clone();
+        let mut shift2 = shift.clone();
+        drop(shift);
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift1.shared_get().str().parse::<u32>().unwrap()
+            })
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.update(owner2.create("1"));
+                shift2.update(owner2.create("2"));
+                shift2.update(owner2.create("3"));
+            })
+            .unwrap();
+        let r1 = t1.join().unwrap();
+        t2.join().unwrap();
+        debug_println!("--> Main dropping");
+
+        assert!((0..=3).contains(&r1));
+        seen_values.fetch_or(1 << r1, Ordering::Relaxed);
+        owner.validate();
+    });
+    #[cfg(loom)]
+    {
+        assert_eq!(_seen_values2.load(Ordering::Relaxed), 15);
+    }
+}
