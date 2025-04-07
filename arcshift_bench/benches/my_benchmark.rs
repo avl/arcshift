@@ -1,4 +1,5 @@
 use arc_swap::{ArcSwap, Cache};
+use arcshift::cell::ArcShiftCell;
 use arcshift::ArcShift;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::ops::Deref;
@@ -52,6 +53,18 @@ fn arcshift_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
     c.bench_function("arcshift_get", |b| b.iter(|| *ac.get()));
 }
+fn arcshift_cell_bench(c: &mut Criterion) {
+    let ac = ArcShift::new(42u32);
+    let cell = ArcShiftCell::from_arcshift(ac);
+    c.bench_function("arcshift_cell_get", |b| {
+        b.iter(|| black_box(cell.get(|x| *x)))
+    });
+}
+fn arcshift_cell_borrow_bench(c: &mut Criterion) {
+    let ac = ArcShift::new(42u32);
+    let cell = ArcShiftCell::from_arcshift(ac);
+    c.bench_function("arcshift_cell_borrow", |b| b.iter(|| *cell.borrow()));
+}
 fn arcshift_contended_bench(c: &mut Criterion) {
     let mut ac = ArcShift::new(42u32);
     let mut ac_clone = ac.clone();
@@ -88,7 +101,7 @@ fn arcshift_shared_non_reloading_bench(c: &mut Criterion) {
 }
 
 fn arcswap_bench(c: &mut Criterion) {
-    let ac = ArcSwap::from_pointee(42);
+    let ac = Arc::new(ArcSwap::from_pointee(42));
     c.bench_function("arc_swap", |b| {
         b.iter(|| {
             let loaded = ac.load();
@@ -98,6 +111,24 @@ fn arcswap_bench(c: &mut Criterion) {
         })
     });
 }
+fn arcswap_stale_bench(c: &mut Criterion) {
+    let shared = Arc::new(ArcSwap::from_pointee(42));
+    let shared2 = shared.clone();
+
+    let jh = std::thread::spawn(move || {
+        shared2.store(Arc::new(43));
+    });
+    jh.join().unwrap();
+
+    c.bench_function("arc_swap_stale", |b| {
+        b.iter(|| {
+            let arc = shared.load();
+            let x: i32 = *(*arc).deref();
+            black_box(x)
+        })
+    });
+}
+
 fn arcswap_cached_bench(c: &mut Criterion) {
     let shared = Arc::new(ArcSwap::from_pointee(42));
     let mut cache = Cache::new(Arc::clone(&shared));
@@ -117,7 +148,9 @@ fn arcswap_update(c: &mut Criterion) {
 }
 criterion_group!(
     benches,
+    arcshift_cell_borrow_bench,
     arcshift_shared_bench,
+    arcshift_cell_bench,
     arcshift_shared_stale_bench,
     arcshift_shared_non_reloading_bench,
     std_arc_bench,
@@ -126,6 +159,7 @@ criterion_group!(
     arcshift_contended_bench,
     arcshift_update_bench,
     arcswap_bench,
+    arcswap_stale_bench,
     arcswap_cached_bench,
     mutex_bench,
     rwlock_read_bench,

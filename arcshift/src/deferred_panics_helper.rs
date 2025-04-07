@@ -1,9 +1,10 @@
-//! This module contains routines to help defer panics to outside of the critical sections
-//! handling the lock free data structure. Instead, unwinding is deferred to after
-//! the lock free structures have been updated. This avoids potential memory leaks, when
-//! multiple objects need to be dropped simultaneously, and the first drop impl
-//! panics. In this case we still wish to call other drop handlers and not resume unwind
-//! until all drops have occurred.
+//! This module contains routines to help ensure that panicking drop-implementations
+//! do not cause corruption in the heap data-structures. The strategy to achieve
+//! this differs depending on if we run in `no_std` case or not.
+//! While running in `no_std`, dropping is deferred until after all lock-free memory
+//! structures have been updated, at some extra cost.
+//! When not using `no_std`, `catch_unwind` is used to catch panics and resume them
+//! when it is safe.
 use crate::{IMetadata, ItemHolder};
 
 pub(crate) trait IDropHandler<T: ?Sized, M: IMetadata> {

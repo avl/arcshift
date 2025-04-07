@@ -67,15 +67,16 @@ impl<T: 'static + ?Sized> Deref for ArcShiftCellHandle<'_, T> {
 }
 
 /// ArcShiftCell cannot be Sync, but there's nothing stopping it from being Send.
-/// SAFETY:
-/// As long as the contents of the cell are not !Send, it is safe to
-/// send the cell. The object must be uniquely owned to be sent, and
-/// this is only possible if we're not in a recursive call to
-/// 'get'. And in this case, the properties of ArcShiftCell are the same
-/// as ArcShift, and ArcShift is Send (if T is Send + Sync).
 ///
 /// Note that ArcShiftCell *cannot* be Sync, because then multiple threads
 /// could call 'get' simultaneously, corrupting the (non-atomic) refcount.
+// SAFETY:
+// As long as the contents of the cell are not !Send, it is safe to
+// send the cell. The object must be uniquely owned to be sent, and
+// this is only possible if we're not in a recursive call to
+// 'get'. And in this case, the properties of ArcShiftCell are the same
+// as ArcShift, and ArcShift is Send (if T is Send + Sync).
+//
 unsafe impl<T: 'static> Send for ArcShiftCell<T> where T: Send + Sync {}
 
 impl<T: 'static + ?Sized> Clone for ArcShiftCell<T> {
@@ -129,6 +130,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
     /// Make sure not to leak this handle: See further documentation on
     /// [`ArcShiftCellHandle`]. Leaking the handle will leak resources, but
     /// not cause undefined behaviour.
+    #[inline]
     pub fn borrow(&self) -> ArcShiftCellHandle<T> {
         self.recursion.set(self.recursion.get() + 1);
         ArcShiftCellHandle {
@@ -146,7 +148,8 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
     ///
     /// This method is reentrant - you are allowed to call it from within the closure 'f'.
     /// However, only the outermost invocation will cause a reload.
-    pub fn get(&self, f: impl FnOnce(&T)) {
+    #[inline]
+    pub fn get<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.recursion.set(self.recursion.get() + 1);
         let val = if self.recursion.get() == 1 {
             // SAFETY:
@@ -157,8 +160,9 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
             // Getting the inner value is safe, no other thread can be accessing it now
             unsafe { &*self.inner.get() }.shared_non_reloading_get()
         };
-        f(val);
+        let t = f(val);
         self.recursion.set(self.recursion.get() - 1);
+        t
     }
 
     /// Assign the given ArcShift to this instance.
@@ -179,7 +183,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
         }
     }
     /// Reload this ArcShiftCell-instance.
-    /// This allows dropping heap blocks kept alive by this instance of
+    /// This allows heap blocks kept alive by this instance of
     /// ArcShiftCell to be dropped.
     /// Note, this method only works when not called from within a closure
     /// supplied to the 'get' method. If such recursion occurs, this method
@@ -198,7 +202,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
     /// Create an ArcShift-instance pointing to the same data
     pub fn make_arcshift(&self) -> ArcShift<T> {
         // SAFETY:
-        // ArcShiftCell is not Sync, and 'reload' does not recursively call into user
+        // ArcShiftCell is not Sync, and 'make_arcshift' does not recursively call into user
         // code, so we know no other operation can be ongoing.
         unsafe { &mut *self.inner.get() }.clone()
     }
