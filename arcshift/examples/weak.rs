@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use arcshift::{ArcShift, ArcShiftWeak};
+use std::cell::RefCell;
 
 fn main() {
     #[allow(dead_code)]
@@ -22,4 +22,3 @@ fn main() {
 
     // Both root and child will be dropped here, there will be no memory-leak
 }
-

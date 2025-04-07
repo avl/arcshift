@@ -2483,7 +2483,6 @@ fn simple_threading_shared_get_thrice_update() {
     }
 }
 
-
 #[test]
 fn simple_threading_drop_four_times_update() {
     model(move || {
@@ -2501,7 +2500,9 @@ fn simple_threading_drop_four_times_update() {
         let t1 = atomic::thread::Builder::new()
             .name("t1".to_string())
             .stack_size(1_000_000)
-            .spawn(move || {let _t = shift1;})
+            .spawn(move || {
+                let _t = shift1;
+            })
             .unwrap();
 
         let t2 = atomic::thread::Builder::new()
