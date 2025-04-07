@@ -2483,6 +2483,44 @@ fn simple_threading_shared_get_thrice_update() {
     }
 }
 
+
+#[test]
+fn simple_threading_drop_four_times_update() {
+    model(move || {
+        let owner = alloc::sync::Arc::new(SpyOwner2::new());
+        let owner2 = owner.clone();
+
+        debug_println!("-------- loom -------------");
+        let shift1 = ArcShift::new(owner.create("0"));
+
+        let mut shift2 = shift1.clone();
+
+        // SAFETY:
+        // No threading involved
+        unsafe { ArcShift::debug_validate(&[&shift1, &shift2], &[]) };
+        let t1 = atomic::thread::Builder::new()
+            .name("t1".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {let _t = shift1;})
+            .unwrap();
+
+        let t2 = atomic::thread::Builder::new()
+            .name("t2".to_string())
+            .stack_size(1_000_000)
+            .spawn(move || {
+                shift2.update(owner2.create("1"));
+                shift2.update(owner2.create("2"));
+                shift2.update(owner2.create("3"));
+                shift2.update(owner2.create("4"));
+            })
+            .unwrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        debug_println!("--> Main dropping");
+        owner.validate();
+    });
+}
+
 #[test]
 fn simple_threading_shared_get_drop() {
     model(move || {
