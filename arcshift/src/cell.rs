@@ -12,8 +12,7 @@ use core::ops::Deref;
 /// a non-threadsafe `ArcShiftCellHandle<T>`. This handle implements Deref, giving access
 /// to the pointed to &T. This handle should not be leaked,
 /// but if it is leaked, the effect is that whatever value the ArcShiftCell-instance
-/// pointed to at that time, will forever leak also. All the linked-list nodes from
-/// that entry and onward will also leak. So make sure to not leak the handle!
+/// pointed to at that time, will forever leak also.
 pub struct ArcShiftCell<T: 'static + ?Sized> {
     // UnsafeCell makes ArcShiftCell invariant, which it needs to be
     inner: UnsafeCell<ArcShift<T>>,

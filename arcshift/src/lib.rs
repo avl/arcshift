@@ -71,7 +71,8 @@
 //!   inner value). ArcShift can still be used with only shared access ([`ArcShift::shared_get`]),
 //!   and performance is still very good as long as the pointer is current. However, if
 //!   the ArcShift instance is stale (needs reloading, because an update has occurred), reads will
-//!   be approximately twice as costly as for RwLock.
+//!   be approximately twice as costly as for RwLock. One mitigation for this is to use
+//!   [`cell::ArcShiftCell`]. However, this type is not `Sync`, only `Send`.
 //! * When modifying the value, the old version of the value lingers in memory until
 //!   the last ArcShift that uses it has reloaded. Such a reload only happens when the ArcShift
 //!   is accessed using a unique (`&mut`) access (like [`ArcShift::get`] or [`ArcShift::reload`]).
@@ -413,6 +414,12 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "ArcShift({:?})", self.shared_non_reloading_get())
+    }
+}
+
+impl<T:?Sized+Default> Default for ArcShift<T> {
+    fn default() -> Self {
+        ArcShift::new(Default::default())
     }
 }
 
