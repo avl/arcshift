@@ -417,7 +417,7 @@ where
     }
 }
 
-impl<T:?Sized+Default> Default for ArcShift<T> {
+impl<T: ?Sized + Default> Default for ArcShift<T> {
     fn default() -> Self {
         ArcShift::new(Default::default())
     }
