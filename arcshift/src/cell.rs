@@ -130,7 +130,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
     /// [`ArcShiftCellHandle`]. Leaking the handle will leak resources, but
     /// not cause undefined behaviour.
     #[inline]
-    pub fn borrow(&self) -> ArcShiftCellHandle<T> {
+    pub fn borrow(&self) -> ArcShiftCellHandle<'_, T> {
         self.recursion.set(self.recursion.get() + 1);
         ArcShiftCellHandle {
             cell: self,

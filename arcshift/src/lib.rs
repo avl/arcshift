@@ -417,7 +417,7 @@ where
     }
 }
 
-impl<T:?Sized+Default> Default for ArcShift<T> {
+impl<T: ?Sized + Default> Default for ArcShift<T> {
     fn default() -> Self {
         ArcShift::new(Default::default())
     }
@@ -3245,7 +3245,7 @@ impl<T: ?Sized> ArcShift<T> {
     /// This method has the advantage that it doesn't require `&mut self` access,
     /// but is otherwise inferior to [`ArcShift::get`].
     #[inline(always)]
-    pub fn shared_get(&self) -> SharedGetGuard<T> {
+    pub fn shared_get(&self) -> SharedGetGuard<'_, T> {
         if is_sized::<T>() {
             let ptr = from_dummy::<T, SizedMetadata>(self.item.as_ptr());
             // SAFETY:
