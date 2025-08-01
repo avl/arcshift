@@ -589,13 +589,13 @@ fn get_holder_layout<T: ?Sized>(ptr: *const T) -> Layout {
     // The pointer 'ptr' is a valid pointer
     let payload_layout = Layout::for_value(unsafe { &*ptr });
     if is_sized::<T>() {
-        let layout = Layout::new::<ItemHolder<(), SizedMetadata>>();
+        let layout = get_holder_base_layout::<ItemHolder<(), SizedMetadata>>();
         let (layout, _) = layout.extend(payload_layout).unwrap();
         layout.pad_to_align()
     } else {
         let layout = Layout::new::<UnsizedMetadata<T>>();
         let (layout, _) = layout
-            .extend(Layout::new::<ItemHolder<(), UnsizedMetadata<T>>>())
+            .extend(get_holder_base_layout::<ItemHolder<(), UnsizedMetadata<T>>>())
             .unwrap();
         let (layout, _) = layout.extend(payload_layout).unwrap();
         layout.pad_to_align()
@@ -773,7 +773,7 @@ fn make_unsized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic1)
-            .write(std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111));
+            .write(std::sync::atomic::AtomicUsize::new(0xbeef8111));
     }
 
     // SAFETY:
@@ -781,7 +781,7 @@ fn make_unsized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic2)
-            .write(std::sync::atomic::AtomicU64::new(0x1234123412348111));
+            .write(std::sync::atomic::AtomicUsize::new(0x12348111));
     }
 
     // SAFETY:
@@ -801,14 +801,14 @@ fn make_sized_holder<T>(
     let holder = ItemHolder {
         the_meta: SizedMetadata,
         #[cfg(feature = "validate")]
-        magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+        magic1: std::sync::atomic::AtomicUsize::new(0xbeef8111),
         next: Default::default(),
         prev: atomic::AtomicPtr::new(prev as *mut _),
         strong_count: atomic::AtomicUsize::new(1),
         weak_count: atomic::AtomicUsize::new(initial_weak_count::<T>(prev)),
         advance_count: atomic::AtomicUsize::new(0),
         #[cfg(feature = "validate")]
-        magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+        magic2: std::sync::atomic::AtomicUsize::new(0x12348111),
         payload: UnsafeCell::new(ManuallyDrop::new(payload)),
     };
 
@@ -878,7 +878,7 @@ fn make_sized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic1)
-            .write(std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111));
+            .write(std::sync::atomic::AtomicUsize::new(0xbeef8111));
     }
 
     // SAFETY:
@@ -886,7 +886,7 @@ fn make_sized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic2)
-            .write(std::sync::atomic::AtomicU64::new(0x1234123412348111));
+            .write(std::sync::atomic::AtomicUsize::new(0x12348111));
     }
 
     // SAFETY:
@@ -977,7 +977,7 @@ Invariants:
 struct ItemHolder<T: ?Sized, M: IMetadata> {
     the_meta: M,
     #[cfg(feature = "validate")]
-    magic1: std::sync::atomic::AtomicU64,
+    magic1: std::sync::atomic::AtomicUsize,
     /// Can be incremented to keep the 'next' value alive. If 'next' is set to a new value, and
     /// 'advance_count' is read as 0 after, then this node is definitely not going to advance to
     /// some node *before* 'next'.
@@ -998,7 +998,7 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     /// that this won't be the last ever.
     weak_count: atomic::AtomicUsize,
     #[cfg(feature = "validate")]
-    magic2: std::sync::atomic::AtomicU64,
+    magic2: std::sync::atomic::AtomicUsize,
 
     /// Pointer to the next value or null. Possibly decorated (i.e, least significant bit set)
     /// The decoration determines:
@@ -1008,6 +1008,49 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     ///    do its job because it encountered the lock, and set the disturbed flag).
     next: atomic::AtomicPtr<ItemHolderDummy<T>>,
     pub(crate) payload: UnsafeCell<ManuallyDrop<T>>,
+}
+
+// T is SizedMetadata or UnsizedMetadata
+const fn get_holder_base_layout<T:Sized>() -> Layout {
+    const {
+        if !size_of::<atomic::AtomicUsize>().is_multiple_of(size_of::<usize>())
+        {
+            panic!("platform had unsupported size of atomic usize")
+        }
+        if !size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>().is_multiple_of(size_of::<usize>())
+        {
+            panic!("platform had unsupported size of atomic pointers")
+        }
+        if align_of::<atomic::AtomicUsize>() != size_of::<usize>()
+        {
+            panic!("platform had unsupported size of atomic usize")
+        }
+        if align_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() != size_of::<usize>()
+        {
+            panic!("platform had unsupported size of atomic pointers")
+        }
+    }
+
+    let base_size = 3*size_of::<atomic::AtomicUsize>()
+        +2*size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>();
+
+    #[cfg(not(feature = "validate"))]
+    const EXTRA_WORDS: usize = 0;
+    #[cfg(feature = "validate")]
+    const EXTRA_WORDS: usize = 2;
+
+    // SAFETY:
+    // repr(C) ignores zero sized types, and
+    // since all items have the same size and padding,
+    // the resulting size is just the number of elements
+    // times the size of each element.
+    unsafe {
+
+        Layout::from_size_align_unchecked(
+            EXTRA_WORDS *size_of::<usize>() + base_size,
+            align_of::<usize>()
+        )
+    }
 }
 
 impl<T: ?Sized, M: IMetadata> PartialEq for ItemHolder<T, M> {
@@ -1270,7 +1313,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
 
             let magic1 = atomic_magic1.load(Ordering::Relaxed);
             let magic2 = atomic_magic2.load(Ordering::Relaxed);
-            if magic1 >> 16 != 0xbeefbeefbeef {
+            if magic1 >> 16 != 0xbeef {
                 debug_println!(
                     "Internal error - bad magic1 in {:?}: {} ({:x})",
                     ptr,
@@ -1280,7 +1323,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 debug_println!("Backtrace: {}", std::backtrace::Backtrace::capture());
                 std::process::abort();
             }
-            if magic2 >> 16 != 0x123412341234 {
+            if magic2 >> 16 != 0x1234 {
                 debug_println!(
                     "Internal error - bad magic2 in {:?}: {} ({:x})",
                     ptr,
@@ -1315,9 +1358,9 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                     panic!();
                 }
                 let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
-                let magic = magic as i64 as u64;
-                atomic_magic1.fetch_and(0xffff_ffff_ffff_0000, Ordering::Relaxed);
-                atomic_magic2.fetch_and(0xffff_ffff_ffff_0000, Ordering::Relaxed);
+                let magic = magic as isize as usize;
+                atomic_magic1.fetch_and(0xffff_0000, Ordering::Relaxed);
+                atomic_magic2.fetch_and(0xffff_0000, Ordering::Relaxed);
                 atomic_magic1.fetch_or(magic, Ordering::Relaxed);
                 atomic_magic2.fetch_or(magic, Ordering::Relaxed);
             }
