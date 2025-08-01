@@ -589,13 +589,13 @@ fn get_holder_layout<T: ?Sized>(ptr: *const T) -> Layout {
     // The pointer 'ptr' is a valid pointer
     let payload_layout = Layout::for_value(unsafe { &*ptr });
     if is_sized::<T>() {
-        let layout = Layout::new::<ItemHolder<(), SizedMetadata>>();
+        let layout = get_holder_base_layout::<ItemHolder<(), SizedMetadata>>();
         let (layout, _) = layout.extend(payload_layout).unwrap();
         layout.pad_to_align()
     } else {
         let layout = Layout::new::<UnsizedMetadata<T>>();
         let (layout, _) = layout
-            .extend(Layout::new::<ItemHolder<(), UnsizedMetadata<T>>>())
+            .extend(get_holder_base_layout::<ItemHolder<(), UnsizedMetadata<T>>>())
             .unwrap();
         let (layout, _) = layout.extend(payload_layout).unwrap();
         layout.pad_to_align()
@@ -694,7 +694,7 @@ fn format_weak(weak: usize) -> std::string::String {
     let count = weak & ((1 << (usize::BITS - 2)) - 1);
     let have_next = (weak & WEAK_HAVE_NEXT) != 0;
     let have_prev = (weak & WEAK_HAVE_PREV) != 0;
-    std::format!("(weak: {} prev: {} next: {})", count, have_prev, have_next)
+    std::format!("(weak: {count} prev: {have_prev} next: {have_next})")
 }
 
 #[allow(unused)]
@@ -773,7 +773,7 @@ fn make_unsized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic1)
-            .write(std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111));
+            .write(std::sync::atomic::AtomicUsize::new(0xbeef8111));
     }
 
     // SAFETY:
@@ -781,7 +781,7 @@ fn make_unsized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic2)
-            .write(std::sync::atomic::AtomicU64::new(0x1234123412348111));
+            .write(std::sync::atomic::AtomicUsize::new(0x12348111));
     }
 
     // SAFETY:
@@ -801,14 +801,14 @@ fn make_sized_holder<T>(
     let holder = ItemHolder {
         the_meta: SizedMetadata,
         #[cfg(feature = "validate")]
-        magic1: std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111),
+        magic1: std::sync::atomic::AtomicUsize::new(0xbeef8111),
         next: Default::default(),
         prev: atomic::AtomicPtr::new(prev as *mut _),
         strong_count: atomic::AtomicUsize::new(1),
         weak_count: atomic::AtomicUsize::new(initial_weak_count::<T>(prev)),
         advance_count: atomic::AtomicUsize::new(0),
         #[cfg(feature = "validate")]
-        magic2: std::sync::atomic::AtomicU64::new(0x1234123412348111),
+        magic2: std::sync::atomic::AtomicUsize::new(0x12348111),
         payload: UnsafeCell::new(ManuallyDrop::new(payload)),
     };
 
@@ -878,7 +878,7 @@ fn make_sized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic1)
-            .write(std::sync::atomic::AtomicU64::new(0xbeefbeefbeef8111));
+            .write(std::sync::atomic::AtomicUsize::new(0xbeef8111));
     }
 
     // SAFETY:
@@ -886,7 +886,7 @@ fn make_sized_holder_from_box<T: ?Sized>(
     #[cfg(feature = "validate")]
     unsafe {
         addr_of_mut!((*item_holder_ptr).magic2)
-            .write(std::sync::atomic::AtomicU64::new(0x1234123412348111));
+            .write(std::sync::atomic::AtomicUsize::new(0x12348111));
     }
 
     // SAFETY:
@@ -977,7 +977,7 @@ Invariants:
 struct ItemHolder<T: ?Sized, M: IMetadata> {
     the_meta: M,
     #[cfg(feature = "validate")]
-    magic1: std::sync::atomic::AtomicU64,
+    magic1: std::sync::atomic::AtomicUsize,
     /// Can be incremented to keep the 'next' value alive. If 'next' is set to a new value, and
     /// 'advance_count' is read as 0 after, then this node is definitely not going to advance to
     /// some node *before* 'next'.
@@ -998,7 +998,7 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     /// that this won't be the last ever.
     weak_count: atomic::AtomicUsize,
     #[cfg(feature = "validate")]
-    magic2: std::sync::atomic::AtomicU64,
+    magic2: std::sync::atomic::AtomicUsize,
 
     /// Pointer to the next value or null. Possibly decorated (i.e, least significant bit set)
     /// The decoration determines:
@@ -1008,6 +1008,47 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     ///    do its job because it encountered the lock, and set the disturbed flag).
     next: atomic::AtomicPtr<ItemHolderDummy<T>>,
     pub(crate) payload: UnsafeCell<ManuallyDrop<T>>,
+}
+
+// T is SizedMetadata or UnsizedMetadata
+const fn get_holder_base_layout<T: Sized>() -> Layout {
+    if core::mem::size_of::<atomic::AtomicUsize>() % (core::mem::size_of::<usize>()) != 0 {
+        panic!("platform had unsupported size of atomic usize")
+    }
+    if core::mem::size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>()
+        % (core::mem::size_of::<usize>())
+        != 0
+    {
+        panic!("platform had unsupported size of atomic pointers")
+    }
+    if core::mem::align_of::<atomic::AtomicUsize>() != core::mem::size_of::<usize>() {
+        panic!("platform had unsupported size of atomic usize")
+    }
+    if core::mem::align_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>()
+        != core::mem::size_of::<usize>()
+    {
+        panic!("platform had unsupported size of atomic pointers")
+    }
+
+    let base_size = 3 * size_of::<atomic::AtomicUsize>()
+        + 2 * size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>();
+
+    #[cfg(not(feature = "validate"))]
+    const EXTRA_WORDS: usize = 0;
+    #[cfg(feature = "validate")]
+    const EXTRA_WORDS: usize = 2;
+
+    // SAFETY:
+    // repr(C) ignores zero sized types, and
+    // since all items have the same size and padding,
+    // the resulting size is just the number of elements
+    // times the size of each element.
+    unsafe {
+        Layout::from_size_align_unchecked(
+            EXTRA_WORDS * size_of::<usize>() + base_size,
+            core::mem::align_of::<usize>(),
+        )
+    }
 }
 
 impl<T: ?Sized, M: IMetadata> PartialEq for ItemHolder<T, M> {
@@ -1270,7 +1311,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
 
             let magic1 = atomic_magic1.load(Ordering::Relaxed);
             let magic2 = atomic_magic2.load(Ordering::Relaxed);
-            if magic1 >> 16 != 0xbeefbeefbeef {
+            if magic1 >> 16 != 0xbeef {
                 debug_println!(
                     "Internal error - bad magic1 in {:?}: {} ({:x})",
                     ptr,
@@ -1280,7 +1321,7 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                 debug_println!("Backtrace: {}", std::backtrace::Backtrace::capture());
                 std::process::abort();
             }
-            if magic2 >> 16 != 0x123412341234 {
+            if magic2 >> 16 != 0x1234 {
                 debug_println!(
                     "Internal error - bad magic2 in {:?}: {} ({:x})",
                     ptr,
@@ -1315,9 +1356,9 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
                     panic!();
                 }
                 let magic = MAGIC.fetch_add(1, Ordering::Relaxed);
-                let magic = magic as i64 as u64;
-                atomic_magic1.fetch_and(0xffff_ffff_ffff_0000, Ordering::Relaxed);
-                atomic_magic2.fetch_and(0xffff_ffff_ffff_0000, Ordering::Relaxed);
+                let magic = magic as isize as usize;
+                atomic_magic1.fetch_and(0xffff_0000, Ordering::Relaxed);
+                atomic_magic2.fetch_and(0xffff_0000, Ordering::Relaxed);
                 atomic_magic1.fetch_or(magic, Ordering::Relaxed);
                 atomic_magic2.fetch_or(magic, Ordering::Relaxed);
             }
@@ -1637,8 +1678,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 #[cfg(feature = "validate")]
                 assert!(
                     get_weak_count(_reduce_weak) > 1,
-                    "assertion failed: in do_upgrade_weak(1), reduced weak {:x?} to 0",
-                    item_ptr
+                    "assertion failed: in do_upgrade_weak(1), reduced weak {item_ptr:x?} to 0"
                 );
 
                 return Some(item_ptr);
@@ -1890,8 +1930,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         #[cfg(feature = "validate")]
                         assert!(
                             prior_strong > 0,
-                            "strong count {:x?} must be >0, but was 0",
-                            b
+                            "strong count {b:x?} must be >0, but was 0"
                         );
 
                         // If b_strong was not 0, it had a weak count. Our increment of it above would have made it so that
@@ -1982,8 +2021,7 @@ fn raw_deallocate_node<T: ?Sized, M: IMetadata>(
         // item_ptr is guaranteed valid by caller
         unsafe { (*item_ptr).strong_count.load(Ordering::SeqCst) },
         0,
-        "{:x?} strong count must be 0 when deallocating",
-        item_ptr
+        "{item_ptr:x?} strong count must be 0 when deallocating"
     );
 
     #[cfg(feature = "validate")]
@@ -2246,8 +2284,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 assert_eq!(
                     get_weak_count(prior_item_weak_count),
                     1,
-                    "{:x?} weak_count should still be 1, and we decrement it to 0",
-                    item_ptr
+                    "{item_ptr:x?} weak_count should still be 1, and we decrement it to 0"
                 );
             }
 
@@ -2325,8 +2362,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             assert_ne!(
                 new_predecessor_ptr as *const _,
                 null(),
-                "assert failed, {:?} was endptr",
-                new_predecessor_ptr
+                "assert failed, {new_predecessor_ptr:?} was endptr"
             );
             do_unlock(Some(new_predecessor));
             debug_println!("New candidate advanced to {:x?}", cur_ptr);
