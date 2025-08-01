@@ -1013,11 +1013,11 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
 // T is SizedMetadata or UnsizedMetadata
 const fn get_holder_base_layout<T:Sized>() -> Layout {
     const {
-        if !size_of::<atomic::AtomicUsize>().is_multiple_of(size_of::<usize>())
+        if size_of::<atomic::AtomicUsize>() % (size_of::<usize>()) != 0
         {
             panic!("platform had unsupported size of atomic usize")
         }
-        if !size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>().is_multiple_of(size_of::<usize>())
+        if size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() % (size_of::<usize>()) != 0
         {
             panic!("platform had unsupported size of atomic pointers")
         }

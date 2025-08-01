@@ -576,8 +576,7 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
                 {
                     println!("\n");
                     println!(
-                        " ===================== {} {} {} ======================",
-                        _n1, _n2, _n3
+                        " ===================== {_n1} {_n2} {_n3} ======================"
                     );
                     println!("\n");
                 }
@@ -649,7 +648,7 @@ fn generic_3threading_a_all_impl(skip0: usize, skip1: usize, skip2: usize) {
         for (n2, op2) in ops.iter().enumerate().skip(skip1) {
             for (n3, op3) in ops.iter().enumerate().skip(skip2) {
                 {
-                    println!("========= {} {} {} ==========", n1, n2, n3);
+                    println!("========= {n1} {n2} {n3} ==========");
                 }
                 generic_3thread_ops_a(*op1, *op2, *op3);
                 if skip0 != 0 || skip1 != 0 || skip2 != 0 {
