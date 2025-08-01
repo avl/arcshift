@@ -575,9 +575,7 @@ fn generic_3threading_b_all_impl(skip1: usize, skip2: usize, skip3: usize, repro
             for (_n3, op3) in ops23.iter().enumerate().skip(skip3).take(limit) {
                 {
                     println!("\n");
-                    println!(
-                        " ===================== {_n1} {_n2} {_n3} ======================"
-                    );
+                    println!(" ===================== {_n1} {_n2} {_n3} ======================");
                     println!("\n");
                 }
                 generic_3thread_ops_b(*op1, *op2, *op3, repro)

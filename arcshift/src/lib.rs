@@ -1011,28 +1011,24 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
 }
 
 // T is SizedMetadata or UnsizedMetadata
-const fn get_holder_base_layout<T:Sized>() -> Layout {
+const fn get_holder_base_layout<T: Sized>() -> Layout {
     const {
-        if size_of::<atomic::AtomicUsize>() % (size_of::<usize>()) != 0
-        {
+        if size_of::<atomic::AtomicUsize>() % (size_of::<usize>()) != 0 {
             panic!("platform had unsupported size of atomic usize")
         }
-        if size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() % (size_of::<usize>()) != 0
-        {
+        if size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() % (size_of::<usize>()) != 0 {
             panic!("platform had unsupported size of atomic pointers")
         }
-        if align_of::<atomic::AtomicUsize>() != size_of::<usize>()
-        {
+        if align_of::<atomic::AtomicUsize>() != size_of::<usize>() {
             panic!("platform had unsupported size of atomic usize")
         }
-        if align_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() != size_of::<usize>()
-        {
+        if align_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() != size_of::<usize>() {
             panic!("platform had unsupported size of atomic pointers")
         }
     }
 
-    let base_size = 3*size_of::<atomic::AtomicUsize>()
-        +2*size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>();
+    let base_size = 3 * size_of::<atomic::AtomicUsize>()
+        + 2 * size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>();
 
     #[cfg(not(feature = "validate"))]
     const EXTRA_WORDS: usize = 0;
@@ -1045,10 +1041,9 @@ const fn get_holder_base_layout<T:Sized>() -> Layout {
     // the resulting size is just the number of elements
     // times the size of each element.
     unsafe {
-
         Layout::from_size_align_unchecked(
-            EXTRA_WORDS *size_of::<usize>() + base_size,
-            align_of::<usize>()
+            EXTRA_WORDS * size_of::<usize>() + base_size,
+            align_of::<usize>(),
         )
     }
 }
