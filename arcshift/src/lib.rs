@@ -1012,19 +1012,22 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
 
 // T is SizedMetadata or UnsizedMetadata
 const fn get_holder_base_layout<T: Sized>() -> Layout {
-    const {
-        if size_of::<atomic::AtomicUsize>() % (size_of::<usize>()) != 0 {
-            panic!("platform had unsupported size of atomic usize")
-        }
-        if size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() % (size_of::<usize>()) != 0 {
-            panic!("platform had unsupported size of atomic pointers")
-        }
-        if align_of::<atomic::AtomicUsize>() != size_of::<usize>() {
-            panic!("platform had unsupported size of atomic usize")
-        }
-        if align_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>() != size_of::<usize>() {
-            panic!("platform had unsupported size of atomic pointers")
-        }
+    if core::mem::size_of::<atomic::AtomicUsize>() % (core::mem::size_of::<usize>()) != 0 {
+        panic!("platform had unsupported size of atomic usize")
+    }
+    if core::mem::size_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>()
+        % (core::mem::size_of::<usize>())
+        != 0
+    {
+        panic!("platform had unsupported size of atomic pointers")
+    }
+    if core::mem::align_of::<atomic::AtomicUsize>() != core::mem::size_of::<usize>() {
+        panic!("platform had unsupported size of atomic usize")
+    }
+    if core::mem::align_of::<atomic::AtomicPtr<ItemHolderDummy<T>>>()
+        != core::mem::size_of::<usize>()
+    {
+        panic!("platform had unsupported size of atomic pointers")
     }
 
     let base_size = 3 * size_of::<atomic::AtomicUsize>()
@@ -1043,7 +1046,7 @@ const fn get_holder_base_layout<T: Sized>() -> Layout {
     unsafe {
         Layout::from_size_align_unchecked(
             EXTRA_WORDS * size_of::<usize>() + base_size,
-            align_of::<usize>(),
+            core::mem::align_of::<usize>(),
         )
     }
 }
