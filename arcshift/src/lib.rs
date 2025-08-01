@@ -694,7 +694,7 @@ fn format_weak(weak: usize) -> std::string::String {
     let count = weak & ((1 << (usize::BITS - 2)) - 1);
     let have_next = (weak & WEAK_HAVE_NEXT) != 0;
     let have_prev = (weak & WEAK_HAVE_PREV) != 0;
-    std::format!("(weak: {} prev: {} next: {})", count, have_prev, have_next)
+    std::format!("(weak: {count} prev: {have_prev} next: {have_next})")
 }
 
 #[allow(unused)]
@@ -1675,8 +1675,7 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 #[cfg(feature = "validate")]
                 assert!(
                     get_weak_count(_reduce_weak) > 1,
-                    "assertion failed: in do_upgrade_weak(1), reduced weak {:x?} to 0",
-                    item_ptr
+                    "assertion failed: in do_upgrade_weak(1), reduced weak {item_ptr:x?} to 0"
                 );
 
                 return Some(item_ptr);
@@ -1928,8 +1927,7 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
                         #[cfg(feature = "validate")]
                         assert!(
                             prior_strong > 0,
-                            "strong count {:x?} must be >0, but was 0",
-                            b
+                            "strong count {b:x?} must be >0, but was 0"
                         );
 
                         // If b_strong was not 0, it had a weak count. Our increment of it above would have made it so that
@@ -2020,8 +2018,7 @@ fn raw_deallocate_node<T: ?Sized, M: IMetadata>(
         // item_ptr is guaranteed valid by caller
         unsafe { (*item_ptr).strong_count.load(Ordering::SeqCst) },
         0,
-        "{:x?} strong count must be 0 when deallocating",
-        item_ptr
+        "{item_ptr:x?} strong count must be 0 when deallocating"
     );
 
     #[cfg(feature = "validate")]
@@ -2284,8 +2281,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
                 assert_eq!(
                     get_weak_count(prior_item_weak_count),
                     1,
-                    "{:x?} weak_count should still be 1, and we decrement it to 0",
-                    item_ptr
+                    "{item_ptr:x?} weak_count should still be 1, and we decrement it to 0"
                 );
             }
 
@@ -2363,8 +2359,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
             assert_ne!(
                 new_predecessor_ptr as *const _,
                 null(),
-                "assert failed, {:?} was endptr",
-                new_predecessor_ptr
+                "assert failed, {new_predecessor_ptr:?} was endptr"
             );
             do_unlock(Some(new_predecessor));
             debug_println!("New candidate advanced to {:x?}", cur_ptr);
