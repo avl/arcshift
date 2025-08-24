@@ -7,7 +7,12 @@ edition = "2021"
 
 
 [dev-dependencies]
-criterion = "0.3"
+# Expliclitly choose older versions, since newer versions don't support rust 1.75.
+# Running these old versions in test should be fine. This code does not end up
+# in the final library.
+criterion = "0.3.6"
+rayon-core = "=1.11.0"
+half = "=2.4"
 
 [dependencies]
 arcshift = {path = "../arcshift"}
