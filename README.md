@@ -9,7 +9,7 @@
 ArcShift is smart pointer type similar to Arc, with the distinction that it allows updating
 the value pointed to, with some caveats. Basically, ArcShift is only a good fit if updates
 are infrequent, and if it is possible to obtain mutable access to ArcShift instances to reload 
-them. For the cases where it fits, ArcShift works like faster `Arc<RwLock<T>>`. 
+them. For the cases where it fits, ArcShift works like a faster `Arc<RwLock<T>>`. 
 
 You can think of ArcShift as an Arc<> over a linked list of versions, with the ability to add 
 a new version and automatically load the latest value on read (see [`ArcShift::get`]).
