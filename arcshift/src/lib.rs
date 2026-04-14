@@ -2903,6 +2903,8 @@ impl<T> ArcShift<T> {
     /// concurrently, it may take multiple retries for the update to succeed. The closure
     /// will be called once for every attempt, until an attempt is successful. This means that
     /// the final updated value will have always been calculated from the previous set value.
+    ///
+    /// Returns a reference to the newly-set value.
     pub fn rcu(&mut self, mut update: impl FnMut(&T) -> T) -> &T {
         self.rcu_maybe(|x| Some(update(x)));
         (*self).shared_non_reloading_get()
@@ -2917,7 +2919,7 @@ impl<T> ArcShift<T> {
     /// will be called once for every attempt, until an attempt is successful. This means that
     /// the final updated value will have always been calculated from the previous set value.
     ///
-    /// If the closure returns None, the update is cancelled, and this method returns false.
+    /// If the closure returns None, the update is canceled, and this method returns false.
     pub fn rcu_maybe(&mut self, mut update: impl FnMut(&T) -> Option<T>) -> bool {
         let mut holder: Option<*const ItemHolderDummy<T>> = None;
 
@@ -2991,14 +2993,14 @@ pub struct ArcShiftLight {}
 
 /// Return value of [`ArcShift::shared_get`]
 pub enum SharedGetGuard<'a, T: ?Sized> {
-    /// The pointer already referenced the most recent value
+    #[doc(hidden)]
     Raw(&'a T),
-    /// We had to advance, and to do this we unfortunately had to clone
+    #[doc(hidden)]
     LightCloned {
         #[doc(hidden)]
         next: *const ItemHolderDummy<T>,
     },
-    /// Most expensive case, only used in some rare race-cases
+    #[doc(hidden)]
     FullClone {
         #[doc(hidden)]
         cloned: ArcShift<T>,
@@ -3223,10 +3225,10 @@ impl<T: ?Sized> ArcShift<T> {
         })
     }
 
-    /// See [`ArcShift::update`] .
+    /// Like [`ArcShift::update`], but takes a `Box<T>`.
     ///
-    /// This method allows converting from [`Box<T>`]. This can be useful since it means it's
-    /// possible to use unsized types, such as [`str`] or [`[u8]`].
+    /// This is the only way to update unsized types (e.g. `str`, `[u8]`), since
+    /// [`ArcShift::update`] requires `T: Sized`. Also avoids a stack copy for large `T`.
     pub fn update_box(&mut self, new_payload: Box<T>) {
         let holder = make_sized_or_unsized_holder_from_box(new_payload, self.item.as_ptr());
 
@@ -3242,7 +3244,10 @@ impl<T: ?Sized> ArcShift<T> {
         });
     }
 
-    /// Reload this ArcShift instance, and return the latest value.
+    /// Advance this instance to the most recent value and return a reference to it.
+    ///
+    /// Guarantees that any update completed before this call is visible in the returned
+    /// reference. Old values that are no longer referenced by any instance are freed.
     #[inline]
     pub fn get(&mut self) -> &T {
         if is_sized::<T>() {
@@ -3323,6 +3328,9 @@ impl<T: ?Sized> ArcShift<T> {
     /// WARNING! This does not reload the pointer. Use [`ArcShift::reload()`] to reload
     /// the value, or [`ArcShift::get()`] to always get the newest value.
     ///
+    /// May return a value older than what other instances currently observe if an
+    /// update has occurred since this instance last reloaded.
+    ///
     /// This method has the advantage that it doesn't require `&mut self` access, and is very
     /// fast.
     #[inline(always)]
@@ -3401,7 +3409,8 @@ impl<T: ?Sized> ArcShift<T> {
         }
     }
 
-    /// Reload this instance, making it point to the most recent value.
+    /// Advance this instance to the most recent value, freeing any superseded values
+    /// that are no longer referenced by other instances.
     #[inline(always)]
     pub fn reload(&mut self) {
         if is_sized::<T>() {

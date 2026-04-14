@@ -124,7 +124,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
         }
     }
 
-    /// Get a handle to the pointed to T.
+    /// Get a handle to the pointed-to T.
     ///
     /// Make sure not to leak this handle: See further documentation on
     /// [`ArcShiftCellHandle`]. Leaking the handle will leak resources, but
@@ -198,7 +198,7 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
             unsafe { &mut *self.inner.get() }.reload()
         }
     }
-    /// Create an ArcShift-instance pointing to the same data
+    /// Create an ArcShift-instance pointing to the same value as this cell.
     pub fn make_arcshift(&self) -> ArcShift<T> {
         // SAFETY:
         // ArcShiftCell is not Sync, and 'make_arcshift' does not recursively call into user
