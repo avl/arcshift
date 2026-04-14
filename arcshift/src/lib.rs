@@ -987,7 +987,8 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     prev: atomic::AtomicPtr<ItemHolderDummy<T>>,
     /// Strong count. When 0, the item is dropped.
     /// Count must never be incremented from 0. This means increment must be done with
-    /// compare-exchange, not fetch_add.
+    /// compare-exchange, not fetch_add, unless it can be proven that the value cannot
+    /// be 0 (because a strong reference is known to exist, for example).
     strong_count: atomic::AtomicUsize,
     /// Weak count. When reaches 0, the 'janitor' task may deallocate the node, iff
     /// there are no previous nodes with 'advance_count' > 0.
@@ -1543,6 +1544,8 @@ fn do_clone_strong<T: ?Sized, M: IMetadata>(
         "Strong clone, about to access strong count of {:x?}",
         item_ptr
     );
+    // It's safe to use `fetch_add` here. Since we already have a strong ref,
+    // the strong count must be > 0.
     let strong_count = item.strong_count.fetch_add(1, Ordering::Relaxed);
 
     if strong_count > MAX_REF_COUNT {
