@@ -17,7 +17,7 @@ use std::hint::black_box;
 use std::mem::MaybeUninit;
 use std::string::ToString;
 use std::sync::atomic::AtomicUsize;
-use std::thread;
+use std::{format, thread};
 use std::time::Duration;
 use std::vec;
 
@@ -2654,6 +2654,26 @@ fn simple_threading_try_into_inner3() {
         debug_println!("--> Main dropping");
         assert_eq!(r1 as u32 + r2 as u32 + r3 as u32, 1);
     });
+}
+
+#[test]
+fn check_debug_impls() {
+    #[derive(Debug)]
+    struct Sample {
+        x: u32,
+        y: bool
+    }
+
+    let x = ArcShift::new(Sample {
+        x: 42,
+        y: false
+    });
+    let weak = ArcShift::downgrade(&x);
+
+    assert_eq!(format!("{:?}", x), "ArcShift(Sample { x: 42, y: false })");
+    assert_eq!(format!("{:?}", weak), "ArcShiftWeak(..)");
+    assert_eq!(format!("{:#?}", x), "ArcShift(\n    Sample {\n        x: 42,\n        y: false,\n    },\n)");
+    assert_eq!(format!("{:#?}", weak), "ArcShiftWeak(..)");
 }
 
 /*

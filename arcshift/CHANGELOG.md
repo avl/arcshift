@@ -1,3 +1,7 @@
+## 0.4.3
+
+Fix Debug impl of ArcShift, so that it honors "{:#?}" format strings.
+
 ## 0.4.2
 
 Support rust 1.75 (0.4.1 regressed to require newer rust).
