@@ -413,7 +413,9 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ArcShift({:?})", self.shared_non_reloading_get())
+        f.debug_tuple("ArcShift")
+            .field(&self.shared_non_reloading_get())
+            .finish()
     }
 }
 
