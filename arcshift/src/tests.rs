@@ -2658,22 +2658,24 @@ fn simple_threading_try_into_inner3() {
 
 #[test]
 fn check_debug_impls() {
-    #[derive(Debug)]
-    struct Sample {
-        x: u32,
-        y: bool,
-    }
+    model(move || {
+        #[derive(Debug)]
+        struct Sample {
+            x: u32,
+            y: bool,
+        }
 
-    let x = ArcShift::new(Sample { x: 42, y: false });
-    let weak = ArcShift::downgrade(&x);
+        let x = ArcShift::new(Sample { x: 42, y: false });
+        let weak = ArcShift::downgrade(&x);
 
-    assert_eq!(format!("{:?}", x), "ArcShift(Sample { x: 42, y: false })");
-    assert_eq!(format!("{:?}", weak), "ArcShiftWeak(..)");
-    assert_eq!(
-        format!("{:#?}", x),
-        "ArcShift(\n    Sample {\n        x: 42,\n        y: false,\n    },\n)"
-    );
-    assert_eq!(format!("{:#?}", weak), "ArcShiftWeak(..)");
+        assert_eq!(format!("{:?}", x), "ArcShift(Sample { x: 42, y: false })");
+        assert_eq!(format!("{:?}", weak), "ArcShiftWeak(..)");
+        assert_eq!(
+            format!("{:#?}", x),
+            "ArcShift(\n    Sample {\n        x: 42,\n        y: false,\n    },\n)"
+        );
+        assert_eq!(format!("{:#?}", weak), "ArcShiftWeak(..)");
+    });
 }
 
 /*
