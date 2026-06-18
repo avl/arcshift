@@ -17,9 +17,9 @@ use std::hint::black_box;
 use std::mem::MaybeUninit;
 use std::string::ToString;
 use std::sync::atomic::AtomicUsize;
-use std::{format, thread};
 use std::time::Duration;
 use std::vec;
+use std::{format, thread};
 
 mod custom_fuzz;
 pub(crate) mod leak_detection;
