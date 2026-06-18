@@ -430,7 +430,7 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("ArcShiftWeak").finish_non_exhaustive()
+        write!(f, "ArcShiftWeak(..)")
     }
 }
 
