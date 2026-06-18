@@ -1,5 +1,5 @@
 ## 0.4.4
-Fix silly error in test suite, formatting test wasn't run correctly in loom.
+Fix error in test suite, formatting test wasn't run correctly in loom.
 
 ## 0.4.3
 
