@@ -1,3 +1,6 @@
+## 0.4.4
+Fix silly error in test suite, formatting test wasn't run correctly in loom.
+
 ## 0.4.3
 
 Fix Debug impl of ArcShift, so that it honors "{:#?}" format strings.
