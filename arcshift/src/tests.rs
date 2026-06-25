@@ -2655,8 +2655,8 @@ fn simple_threading_try_into_inner3() {
         assert_eq!(r1 as u32 + r2 as u32 + r3 as u32, 1);
     });
 }
-
 #[test]
+#[cfg(all(not(loom), not(feature = "shuttle")))]
 fn check_debug_impls() {
     model(move || {
         #[derive(Debug)]
