@@ -460,6 +460,9 @@ where
 /// or possibly using a different crate.
 pub struct ArcShiftWeak<T: ?Sized> {
     item: NonNull<ItemHolderDummy<T>>,
+
+    // Make sure ArcShiftWeak is invariant, for the same reason ArcShift is (see ArcShift::pd).
+    pd: PhantomData<*mut T>,
 }
 
 /// Module with a convenient cell-like data structure for reloading ArcShift instances
@@ -670,6 +673,28 @@ const WEAK_HAVE_PREV: usize = 1 << (usize::BITS - 2);
 /// alive on a 64-bit machine is impossible, since this would require usize::MAX/2 bytes of memory,
 /// orders of magnitude larger than any existing machine (in 2025).
 const MAX_REF_COUNT: usize = usize::MAX / 8;
+
+/// Sentinel value for `strong_count`, meaning "the last strong reference has been dropped and
+/// the teardown has claimed the payload for dropping; this node can never be resurrected".
+///
+/// A teardown installs this via `compare_exchange(0 -> STRONG_DROPPED)` on the rightmost node's
+/// `strong_count`, and only drops the payload if that succeeds. Every strong-count resurrection
+/// (`do_upgrade_weak`) uses `compare_exchange(observed -> observed+1)`, which necessarily fails
+/// against this sentinel. This makes teardown and resurrection mutually exclusive with a single
+/// winner, on a single atomic. The value is far above `MAX_REF_COUNT`, so no legitimate count
+/// can reach it.
+const STRONG_DROPPED: usize = usize::MAX;
+
+/// Interpret a raw `strong_count` value as a number of live strong references.
+/// The `STRONG_DROPPED` sentinel means "torn down", i.e. zero live strong references.
+#[allow(unused)]
+fn live_strong_count(raw: usize) -> usize {
+    if raw == STRONG_DROPPED {
+        0
+    } else {
+        raw
+    }
+}
 
 fn get_weak_prev(count: usize) -> bool {
     (count & WEAK_HAVE_PREV) != 0
@@ -1531,6 +1556,7 @@ impl<T: ?Sized> Clone for ArcShiftWeak<T> {
             // SAFETY:
             // The pointer returned by 'do_clone_weak' is always valid and non-null.
             item: unsafe { NonNull::new_unchecked(t as *mut _) },
+            pd: PhantomData,
         }
     }
 }
@@ -1632,6 +1658,17 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
             continue;
         }
 
+        // If the last strong reference has been dropped and the teardown has *claimed* the
+        // payload for dropping, `strong_count` is set to the STRONG_DROPPED sentinel (see
+        // `do_drop_weak`). This is the authoritative "value is gone" signal, and it is the
+        // linearization point that makes resurrection (0->1 below) and teardown mutually
+        // exclusive: whichever compare-exchange on `strong_count` wins, wins. If we observe the
+        // sentinel, teardown won the race - do not resurrect.
+        if prior_strong_count == STRONG_DROPPED {
+            do_drop_weak::<T, M>(item_ptr, jobq);
+            return None;
+        }
+
         if !get_decoration(item_next).is_dropped() {
             if prior_strong_count == 0 {
                 let _prior_weak_count = item.weak_count.fetch_add(1, Ordering::SeqCst); //atomic upgrade inc weak
@@ -1642,6 +1679,11 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                 );
             }
 
+            // Resurrect from a genuine 0 (the node is stale but still alive, e.g. kept current
+            // by an older node's strong ref), or clone from n>0. In either case this
+            // compare-exchange fails if a concurrent teardown has meanwhile installed
+            // STRONG_DROPPED (or if the count otherwise changed), in which case we retry and
+            // re-observe the sentinel above.
             if item
                 .strong_count
                 .compare_exchange(
@@ -1699,16 +1741,9 @@ fn do_upgrade_weak<T: ?Sized, M: IMetadata>(
                     assert!(get_weak_count(_prior_weak_count) > 1);
                 }
                 debug_println!("Race on strong_count _increase_ - loop.");
-                // Lcok free. We only get here if some other node has succeeded in increasing or
-                // decreasing strong count, which only happens if there is progress, unless
-                // the node undid a strong_count modification because of a detected race.
-                // The possible strong_count undo operations are:
-                // 1) If ArcShift::clone exceeds the maximum strong count limit. This is an
-                //    error case, but we'll also consider it progress.
-                // 2) If ArcShift::upgrade detects a race on 'next' (new node added), which
-                //    is considered system-wide progress.
-                // 3) In ArcShift::update, if it races with adding a new node, which is
-                //    considered progress.
+                // Lock free. We only get here if some other node has succeeded in increasing or
+                // decreasing strong count, or a teardown installed the sentinel - all of which
+                // are system-wide progress.
                 continue; //Race on strong count, try again
             }
         } else {
@@ -1873,6 +1908,13 @@ fn do_advance_strong<T: ?Sized, M: IMetadata>(
         // b is a valid pointer. do_advance_impl supplies the closure with only valid pointers.
         let mut b_strong = unsafe { (*b).strong_count.load(Ordering::SeqCst) }; //atomic advance strong load b strong_count
 
+        // A strong advance is always driven by a caller that holds a strong reference on the
+        // start node throughout, so a global teardown (which is what installs STRONG_DROPPED)
+        // cannot be in progress. Hence `b` is never the STRONG_DROPPED sentinel here, and the
+        // b_strong==0 resurrection below is safe.
+        #[cfg(feature = "validate")]
+        assert_ne!(b_strong, STRONG_DROPPED);
+
         // Lock free, since we only loop when compare_exchange fails on 'strong_count', something
         // which only occurs when 'strong_count' changes, which only occurs when there is
         // system wide progress.
@@ -2021,13 +2063,17 @@ fn raw_deallocate_node<T: ?Sized, M: IMetadata>(
     // item_ptr is going to be deallocated, and the caller must make sure
     // that it has exclusive access.
     #[cfg(feature = "validate")]
-    assert_eq!(
+    {
+        // Strong count must be 0 (never resurrected) or STRONG_DROPPED (a teardown claimed and
+        // dropped this node's payload). Both mean there are no live strong references.
         // SAFETY:
         // item_ptr is guaranteed valid by caller
-        unsafe { (*item_ptr).strong_count.load(Ordering::SeqCst) },
-        0,
-        "{item_ptr:x?} strong count must be 0 when deallocating"
-    );
+        let sc = unsafe { (*item_ptr).strong_count.load(Ordering::SeqCst) };
+        assert!(
+            sc == 0 || sc == STRONG_DROPPED,
+            "{item_ptr:x?} strong count must be 0 (or STRONG_DROPPED) when deallocating, was {sc}"
+        );
+    }
 
     #[cfg(feature = "validate")]
     {
@@ -2466,22 +2512,25 @@ fn do_drop_weak<T: ?Sized, M: IMetadata>(
             // item_ptr was returned by do_advance_weak, and is thus valid.
             let o_item = unsafe { &*from_dummy::<T, M>(item_ptr) };
             let o_strong = o_item.strong_count.load(Ordering::SeqCst); //atomic drop_weak check strong_count
-            if o_strong == 0 {
-                let can_drop_now_despite_next_check = if strong_refs
-                    == NodeStrongStatus::NoStrongRefsExist
+            if o_strong == 0 && strong_refs == NodeStrongStatus::NoStrongRefsExist {
+                // We believe no strong refs exist anywhere, so this (rightmost) payload can be
+                // torn down. But a concurrent `do_upgrade_weak` may be about to resurrect this
+                // node with strong_count 0->1. To arbitrate, we *claim* the drop by atomically
+                // moving strong_count 0 -> STRONG_DROPPED. This is the single linearization point
+                // shared with the resurrection's compare-exchange:
+                //   * If our claim succeeds, no resurrection has happened and none can (any future
+                //     0->1 CAS now fails against the sentinel), so it is sound to drop the payload.
+                //   * If our claim fails, an upgrade won the race and resurrected the node; we must
+                //     NOT drop the payload.
+                if o_item
+                    .strong_count
+                    .compare_exchange(0, STRONG_DROPPED, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
                 {
-                    debug_println!("final drop analysis {:x?}: Can drop this payload, because no strong refs exists anywhere", item_ptr);
-                    true
+                    debug_println!("final drop analysis {:x?}: claimed teardown (strong 0 -> STRONG_DROPPED), dropping payload", item_ptr);
+                    do_drop_payload_if_possible(o_item, true, drop_job_queue);
                 } else {
-                    debug_println!("final drop analysis {:x?}: no exemption condition found, can't drop this payload", item_ptr);
-                    false
-                };
-                if can_drop_now_despite_next_check {
-                    do_drop_payload_if_possible(
-                        o_item,
-                        can_drop_now_despite_next_check,
-                        drop_job_queue,
-                    );
+                    debug_println!("final drop analysis {:x?}: teardown claim lost to a concurrent upgrade, not dropping payload", item_ptr);
                 }
             }
         }
@@ -3358,6 +3407,7 @@ impl<T: ?Sized> ArcShift<T> {
             // SAFETY:
             // do_clone_weak returns a valid, non-null pointer
             item: unsafe { NonNull::new_unchecked(t as *mut _) },
+            pd: PhantomData,
         }
     }
 
@@ -3375,7 +3425,7 @@ impl<T: ?Sized> ArcShift<T> {
         with_holder!(self.item, T, item, {
             // SAFETY:
             // self.item is a valid pointer
-            unsafe { (*item).strong_count.load(Ordering::SeqCst) }
+            live_strong_count(unsafe { (*item).strong_count.load(Ordering::SeqCst) })
         })
     }
 
@@ -3495,7 +3545,7 @@ impl<T: ?Sized> ArcShift<T> {
 
         let strong_refs_exist = all_nodes
             .iter()
-            .any(|x| x.strong_count.load(Ordering::SeqCst) > 0);
+            .any(|x| live_strong_count(x.strong_count.load(Ordering::SeqCst)) > 0);
 
         if strong_refs_exist {
             debug_println!("Reading {:?}.next", to_dummy(last));
@@ -3559,7 +3609,7 @@ impl<T: ?Sized> ArcShift<T> {
         }
         for node in all_nodes.iter().copied() {
             let node_dummy = to_dummy(node);
-            let strong_count = node.strong_count.load(Ordering::SeqCst);
+            let strong_count = live_strong_count(node.strong_count.load(Ordering::SeqCst));
             let weak_count = get_weak_count(node.weak_count.load(Ordering::SeqCst));
             let expected_strong_count = true_strong_refs.get(&node_dummy).unwrap_or(&0);
             let expected_weak_count = true_weak_refs.get(&node_dummy).unwrap_or(&0);

@@ -2788,3 +2788,270 @@ fn simple_threading_update_downgrade_shared_get() {
         assert_eq!(*shift.get(), 43);
     });
 }
+
+/// Regression test for a use-after-drop race between `ArcShiftWeak::upgrade` and the
+/// concurrent drop of the last strong reference.
+///
+/// When the last `ArcShift` is dropped, it tears down the (rightmost) payload if no
+/// strong refs remain anywhere. Concurrently, `upgrade` may try to resurrect that same
+/// node by compare-exchanging its strong count 0->1. The drop decision (a `strong == 0`
+/// load plus the janitor's `NoStrongRefsExist`) and the resurrection commit on
+/// *different* atomics, so both operations can "win": `upgrade` can return an `ArcShift`
+/// pointing at a node whose payload has just been dropped, which is a use-after-drop.
+///
+/// This test asserts the invariant that whenever `upgrade` hands out a strong reference,
+/// the payload it points to must still be alive. The `SpyOwner2` live-set removes an
+/// entry in the payload's `Drop`, so a dropped-but-upgraded payload shows up as a count
+/// of 0 while a strong reference is held.
+#[test]
+fn simple_threading_upgrade_vs_last_drop_uaf() {
+    model(|| {
+        let owner = std::sync::Arc::new(SpyOwner2::new());
+        {
+            let shift = ArcShift::new(owner.create("orig"));
+            let weak1 = ArcShift::downgrade(&shift);
+            let weak2 = ArcShift::downgrade(&shift); // keeps the node allocated for weak1 to observe
+
+            let owner_t2 = owner.clone();
+
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    // Drop the last strong ref. This may tear down the payload.
+                    drop(shift);
+                })
+                .unwrap();
+
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    if let Some(mut arc) = weak1.upgrade() {
+                        // We now hold a strong reference, so the payload must still be alive.
+                        assert_eq!(
+                            owner_t2.count(),
+                            1,
+                            "upgrade() returned a strong ref to an already-dropped payload"
+                        );
+                        assert_eq!(arc.get().str(), "orig");
+                    }
+                })
+                .unwrap();
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+            drop(weak2);
+        }
+        owner.validate();
+    });
+}
+
+/// Like `simple_threading_upgrade_vs_last_drop_uaf`, but the thread that drops the last strong
+/// reference *also* performs an update first. So the upgrade races both a new node being appended
+/// and the subsequent teardown of the (now previous) value.
+#[test]
+fn simple_threading_upgrade_vs_update_and_last_drop() {
+    model(|| {
+        let owner = std::sync::Arc::new(SpyOwner2::new());
+        {
+            let mut shift = ArcShift::new(owner.create("orig"));
+            let weak1 = ArcShift::downgrade(&shift);
+            let weak2 = ArcShift::downgrade(&shift); // keeps the original node observable
+
+            let owner_t1 = owner.clone();
+            let owner_t2 = owner.clone();
+
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    shift.update(owner_t1.create("upd"));
+                    drop(shift); // last strong ref -> may tear down the new value
+                })
+                .unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    if let Some(mut arc) = weak1.upgrade() {
+                        // Holding a strong ref, so whatever value we advanced to must be alive.
+                        let name = arc.get().str();
+                        assert!(
+                            owner_t2.contains(name),
+                            "upgrade() returned a strong ref to an already-dropped value: {name}"
+                        );
+                    }
+                })
+                .unwrap();
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+            drop(weak2);
+        }
+        owner.validate();
+    });
+}
+
+/// Two threads upgrade (distinct) weak references while a third drops the last strong reference.
+/// Exercises multiple concurrent resurrections racing a single teardown.
+#[test]
+fn simple_threading_double_upgrade_vs_last_drop() {
+    model(|| {
+        let owner = std::sync::Arc::new(SpyOwner2::new());
+        {
+            let shift = ArcShift::new(owner.create("orig"));
+            let weak1 = ArcShift::downgrade(&shift);
+            let weak2 = ArcShift::downgrade(&shift);
+
+            let owner_t2 = owner.clone();
+            let owner_t3 = owner.clone();
+
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    drop(shift); // last strong ref
+                })
+                .unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    if let Some(mut arc) = weak1.upgrade() {
+                        let name = arc.get().str();
+                        assert!(
+                            owner_t2.contains(name),
+                            "upgrade() (t2) returned an already-dropped value: {name}"
+                        );
+                    }
+                })
+                .unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    if let Some(mut arc) = weak2.upgrade() {
+                        let name = arc.get().str();
+                        assert!(
+                            owner_t3.contains(name),
+                            "upgrade() (t3) returned an already-dropped value: {name}"
+                        );
+                    }
+                })
+                .unwrap();
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+            t3.join().unwrap();
+        }
+        owner.validate();
+    });
+}
+
+/// A weak reference to an *old* node is upgraded while the two strong references to the current
+/// (rightmost) value are dropped concurrently in two other threads. The upgrade must advance the
+/// old weak to the current value and either resurrect it (returning a live value) or fail - never
+/// resurrect a torn-down value.
+#[test]
+fn simple_threading_upgrade_old_node_vs_last_drop() {
+    model(|| {
+        let owner = std::sync::Arc::new(SpyOwner2::new());
+        {
+            let mut shift = ArcShift::new(owner.create("v0"));
+            let weak_old = ArcShift::downgrade(&shift); // weak on the OLD node
+            shift.update(owner.create("v1"));
+            let shift_b = shift.clone(); // second strong ref on the current value
+            let weak_new = ArcShift::downgrade(&shift); // keeps the current node observable
+
+            let owner_t3 = owner.clone();
+
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    drop(shift); // one of the two strong refs to the current value
+                })
+                .unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    drop(shift_b); // the other strong ref -> teardown once both are gone
+                })
+                .unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    if let Some(mut arc) = weak_old.upgrade() {
+                        let name = arc.get().str();
+                        assert!(
+                            owner_t3.contains(name),
+                            "upgrade() of an old-node weak returned an already-dropped value: {name}"
+                        );
+                    }
+                })
+                .unwrap();
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+            t3.join().unwrap();
+            drop(weak_new);
+        }
+        owner.validate();
+    });
+}
+
+/// A successful upgrade that races the last-strong-drop is immediately followed by an update on
+/// the (possibly just-resurrected) handle, stressing that a resurrected handle is fully valid.
+#[test]
+fn simple_threading_upgrade_then_update_vs_last_drop() {
+    model(|| {
+        let owner = std::sync::Arc::new(SpyOwner2::new());
+        {
+            let shift = ArcShift::new(owner.create("orig"));
+            let shift_b = shift.clone();
+            let weak1 = ArcShift::downgrade(&shift);
+            let weak2 = ArcShift::downgrade(&shift); // survivor, keeps the node observable
+
+            let owner_t3 = owner.clone();
+
+            let t1 = atomic::thread::Builder::new()
+                .name("t1".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    drop(shift); // one strong ref
+                })
+                .unwrap();
+            let t2 = atomic::thread::Builder::new()
+                .name("t2".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    drop(shift_b); // the other strong ref -> teardown once both are gone
+                })
+                .unwrap();
+            let t3 = atomic::thread::Builder::new()
+                .name("t3".to_string())
+                .stack_size(1_000_000)
+                .spawn(move || {
+                    if let Some(mut arc) = weak1.upgrade() {
+                        let name = arc.get().str();
+                        assert!(
+                            owner_t3.contains(name),
+                            "upgrade() returned an already-dropped value: {name}"
+                        );
+                        // The resurrected handle must be fully usable.
+                        arc.update(owner_t3.create("t3upd"));
+                    }
+                })
+                .unwrap();
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+            t3.join().unwrap();
+            drop(weak2);
+        }
+        owner.validate();
+    });
+}

@@ -116,12 +116,26 @@ fn generic_3thread_ops_b<
                 let shift2 = shift.clone();
                 shift.update(owner.create("orig3"));
                 let shift3 = shift.clone();
+                // A weak reference to the current-rightmost node, kept alive in the main thread
+                // for the whole concurrent phase. It keeps that node *observable* (so an upgrade
+                // can still reach it) without keeping any *strong* reference alive.
+                let survivor = ArcShift::downgrade(&shift);
 
                 debug_println!("Prior to debug_validate");
                 // SAFETY:
                 // No threading involved
-                unsafe { ArcShift::debug_validate(&[&shift, &shift2, &shift3], &[&shift1]) };
+                unsafe {
+                    ArcShift::debug_validate(&[&shift, &shift2, &shift3], &[&shift1, &survivor])
+                };
                 debug_println!("Post debug_validate");
+
+                // Deliberately drop the main-thread strong reference before spawning the workers.
+                // This is what lets the chain's *last* strong reference be dropped inside a worker
+                // thread, concurrently with thread 1's weak upgrade - the interleaving that
+                // exposes the upgrade-vs-teardown race. Because no strong handle is guaranteed to
+                // survive the concurrent phase, we can no longer run debug_validate after the join
+                // (owner.validate() below still catches any leaked payload).
+                drop(shift);
 
                 let owner_ref1 = owner.clone();
                 let owner_ref2 = owner.clone();
@@ -164,10 +178,11 @@ fn generic_3thread_ops_b<
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
                 _ = t3.join().unwrap();
-                // SAFETY:
-                // No threading involved
-                unsafe { ArcShift::debug_validate(&[&shift], &[]) };
                 debug_println!("Joined all threads");
+                // Note: no debug_validate here - after the concurrent phase there may be no live
+                // strong handle (the chain may have been fully torn down). `survivor` (a weak) is
+                // dropped at the end of this block; owner.validate() verifies no payload leaked.
+                drop(survivor);
             }
             owner.validate();
         },
@@ -205,12 +220,20 @@ fn generic_2thread_ops_b<
                 let shift = ArcShift::new(owner.create("orig"));
                 let shift1 = ArcShift::downgrade(&shift);
                 let shift2 = shift.clone();
+                // A weak reference kept alive in the main thread so the node stays observable for
+                // an upgrade, without keeping any strong reference alive.
+                let survivor = ArcShift::downgrade(&shift);
 
                 debug_println!("Prior to debug_validate");
                 // SAFETY:
                 // No threading involved
-                unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shift1]) };
+                unsafe { ArcShift::debug_validate(&[&shift, &shift2], &[&shift1, &survivor]) };
                 debug_println!("Post debug_validate");
+
+                // Drop the main-thread strong reference before the concurrent phase, so the last
+                // strong reference can be dropped inside a worker thread concurrently with thread
+                // 1's upgrade. See the comment in generic_3thread_ops_b.
+                drop(shift);
 
                 let owner_ref1 = owner.clone();
                 let owner_ref2 = owner.clone();
@@ -241,10 +264,10 @@ fn generic_2thread_ops_b<
                 debug_println!("Begin joining threads");
                 _ = t1.join().unwrap();
                 _ = t2.join().unwrap();
-                // SAFETY:
-                // No threading involved
-                unsafe { ArcShift::debug_validate(&[&shift], &[]) };
                 debug_println!("Joined all threads");
+                // No debug_validate here: no strong handle is guaranteed to survive the concurrent
+                // phase. owner.validate() still catches any leaked payload.
+                drop(survivor);
             }
             owner.validate();
         },

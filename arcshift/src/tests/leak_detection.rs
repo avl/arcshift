@@ -51,6 +51,11 @@ impl SpyOwner2 {
         let guard = self.data.lock().unwrap();
         guard.len()
     }
+    /// Returns true if a payload with the given name is currently alive (created but not dropped).
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        let guard = self.data.lock().unwrap();
+        guard.contains(name)
+    }
 }
 
 #[derive(Debug, Clone)]
