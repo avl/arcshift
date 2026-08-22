@@ -142,6 +142,30 @@ mod simple {
             assert_eq!(shift.get(), "hello");
         });
     }
+    #[test]
+    fn simple_unsized_shared_get_stale() {
+        // Regression test: `shared_get` on a stale (not-yet-reloaded) unsized ArcShift
+        // takes the `slow_shared_get` path, which must reconstruct the 'next' node using the
+        // correct (unsized) metadata. Previously it hardcoded SizedMetadata, panicking (and
+        // being latently unsound) for unsized payloads.
+        dummy_model(|| {
+            let mut shift =
+                ArcShift::from_box("hello".to_string().into_boxed_str() as Box<str>);
+            let stale = shift.clone();
+            shift.update_box("world".to_string().into_boxed_str());
+            // `stale` still points at the old node, so this exercises the slow path.
+            assert_eq!(&*stale.shared_get(), "world");
+        });
+    }
+    #[test]
+    fn simple_unsized_slice_shared_get_stale() {
+        dummy_model(|| {
+            let mut shift = ArcShift::from_box(vec![1u32, 2u32].into_boxed_slice());
+            let stale = shift.clone();
+            shift.update_box(vec![3u32, 4u32, 5u32].into_boxed_slice());
+            assert_eq!(&*stale.shared_get(), &[3u32, 4u32, 5u32]);
+        });
+    }
     use crate::cell::ArcShiftCell;
     use crate::tests::leak_detection::InstanceSpy;
     use std::cell::{Cell, RefCell};

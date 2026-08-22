@@ -1,3 +1,7 @@
+## 0.4.6
+Fix a panic in some code paths using unsized payloads (for example, `ArcShift<str>`).
+This is not a soundness issue.
+
 ## 0.4.5
 Fix two critical soundness issues:
  * The ArcShiftWeak type had the wrong variance. It was covariant, which made it possible

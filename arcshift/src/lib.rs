@@ -3124,7 +3124,7 @@ fn slow_shared_get<T: ?Sized, M: IMetadata>(
     assert!(!undecorate(next).is_null());
     debug_println!("slow_shared_get: {:?}, next = {:?}", item as *const _, next);
 
-    let next_val = from_dummy::<_, SizedMetadata>(undecorate(next));
+    let next_val = from_dummy::<T, M>(undecorate(next));
     // SAFETY:
     // The 'item.next' pointer is not null as per method precondition, and since we have
     // incremented advance_count, 'item.next' is a valid pointer.
