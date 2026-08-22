@@ -149,8 +149,7 @@ mod simple {
         // correct (unsized) metadata. Previously it hardcoded SizedMetadata, panicking (and
         // being latently unsound) for unsized payloads.
         dummy_model(|| {
-            let mut shift =
-                ArcShift::from_box("hello".to_string().into_boxed_str() as Box<str>);
+            let mut shift = ArcShift::from_box("hello".to_string().into_boxed_str() as Box<str>);
             let stale = shift.clone();
             shift.update_box("world".to_string().into_boxed_str());
             // `stale` still points at the old node, so this exercises the slow path.
