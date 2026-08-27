@@ -1226,7 +1226,14 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         let align = align_of_val(payload_val);
         let layout = Layout::from_size_align(size, align).unwrap();
         let thin_dest_ptr = if size == 0 {
-            1 as *mut u8
+            // For zero-sized payloads we never actually allocate, but `Box::from_raw` still
+            // requires a non-null pointer that is properly aligned for the type. A zero-sized
+            // type can still have an alignment greater than 1 (e.g. `#[repr(align(16))] struct Z;`),
+            // so casting a literal `1` would produce a misaligned pointer and be UB. Use the
+            // type's actual alignment as the address instead - it is always a non-zero power of
+            // two, so the resulting dangling pointer is correctly aligned. Building it by
+            // offsetting a null pointer avoids an integer-to-pointer cast.
+            core::ptr::null_mut::<u8>().wrapping_add(align)
         } else {
             // SAFETY: 'layout' has non-zero size, checked above.
             let p = unsafe { alloc::alloc::alloc(layout) };

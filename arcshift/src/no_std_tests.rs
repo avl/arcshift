@@ -28,3 +28,19 @@ fn smoke_test() {
     x.rcu(|x| *x + 1);
     assert_eq!(*x.get(), 47);
 }
+
+#[test]
+fn zst_overaligned() {
+    // A zero-sized type can still require an alignment greater than 1. The deferred-drop
+    // path (`take_boxed_payload`, only compiled without `std`/`nostd_unchecked_panics`)
+    // constructs a dangling pointer for the zero-sized allocation; it must be aligned for
+    // `T`, otherwise `Box::from_raw` is instant UB. Miri catches a misaligned pointer here.
+    #[repr(align(64))]
+    struct OverAligned;
+
+    let a = ArcShift::new(OverAligned);
+    let mut b = a.clone();
+    b.update(OverAligned);
+    drop(b);
+    drop(a);
+}

@@ -5,7 +5,10 @@
 the update would cause a use-after-free.
  * Fix a soundness issue on out-of-memory. Arcshift didn't properly
    abort, but instead would dereference a null pointer.
-
+ * Fix wrong alignhment of memory allocations on 32 bit platforms where
+   the global allocator allocates with less than 8 bytes alignment.
+ * Fix issue where zero sized types with alignment > 1 were not handled
+   correctly.
 
 
 ## 0.4.7
