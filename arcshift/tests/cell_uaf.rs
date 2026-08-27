@@ -11,6 +11,11 @@
 //!
 //! The fix moves reloading into `ArcShiftCell::borrow` (only when no handle is
 //! outstanding) and keeps `deref` non-reloading.
+//!
+//! This is a deterministic, single-threaded Miri regression test; it explores no
+//! thread interleavings, so it is not run under loom (loom's synchronization
+//! primitives panic when touched outside a `loom::model`).
+#![cfg(not(loom))]
 
 use arcshift::cell::ArcShiftCell;
 use arcshift::ArcShift;

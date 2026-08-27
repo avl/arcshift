@@ -593,18 +593,28 @@ fn get_holder_layout<T: ?Sized>(ptr: *const T) -> Layout {
     // SAFETY:
     // The pointer 'ptr' is a valid pointer
     let payload_layout = Layout::for_value(unsafe { &*ptr });
-    if is_sized::<T>() {
+    let layout = if is_sized::<T>() {
         let layout = get_holder_base_layout::<ItemHolder<(), SizedMetadata>>();
         let (layout, _) = layout.extend(payload_layout).unwrap();
-        layout.pad_to_align()
+        layout
     } else {
         let layout = Layout::new::<UnsizedMetadata<T>>();
         let (layout, _) = layout
             .extend(get_holder_base_layout::<ItemHolder<(), UnsizedMetadata<T>>>())
             .unwrap();
         let (layout, _) = layout.extend(payload_layout).unwrap();
-        layout.pad_to_align()
-    }
+        layout
+    };
+    // Every ItemHolder allocation must be at least 8-byte aligned so that the low 3 bits of
+    // the pointer are available for our pointer decoration. `align_of::<usize>()` is only 4 on
+    // 32-bit targets, and a small-alignment payload (e.g. `u8`/`u32`) won't lift it, so force
+    // it here. Raising the overall alignment does not move any internal field offset.
+    Layout::from_size_align(
+        layout.size(),
+        layout.align().max(ITEMHOLDER_MIN_ALIGN),
+    )
+    .unwrap()
+    .pad_to_align()
 }
 
 #[inline(always)]
@@ -746,13 +756,25 @@ fn make_unsized_holder_from_box<T: ?Sized>(
 
         let metadata = UnsizedMetadata::new(cur_ptr);
         debug_println!("Layout: {:?}, meta: {:?}", layout, metadata);
+        // SAFETY:
+        // core::alloc::alloc requires the allocated layout to have a nonzero size. This
+        // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
+        // The returned memory is uninitialized, but we will initialize the required parts of it
+        // below.
+        let thin_ptr = unsafe { alloc::alloc::alloc(layout) };
+        if thin_ptr.is_null() {
+            alloc::alloc::handle_alloc_error(layout);
+        }
+        debug_assert_eq!(
+            (thin_ptr as usize) & (ITEMHOLDER_MIN_ALIGN - 1),
+            0,
+            "arcshift: ItemHolder allocation is not {}-byte aligned, pointer decoration would be corrupted",
+            ITEMHOLDER_MIN_ALIGN
+        );
         item_holder_ptr =
             // SAFETY:
-            // core::alloc::alloc requires the allocated layout to have a nonzero size. This
-            // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
-            // The returned memory is uninitialized, but we will initialize the required parts of it
-            // below.
-            unsafe { arc_from_raw_parts_mut(alloc::alloc::alloc(layout) as *mut _, metadata) };
+            // 'thin_ptr' is a non-null pointer to an allocation of the given layout.
+            unsafe { arc_from_raw_parts_mut(thin_ptr as *mut _, metadata) };
         debug_println!("Sized result ptr: {:?}", item_holder_ptr);
         // SAFETY:
         // result_ptr is a valid pointer
@@ -863,8 +885,24 @@ fn make_sized_holder_from_box<T: ?Sized>(
     // the compiler treats it like a fat pointer with a zero-size metadata, which is not
     // the exact same thing as a thin pointer (is my guess).
     // Using transmute_copy to trim off the metadata is sound.
+    // SAFETY:
+    // core::alloc::alloc requires the allocated layout to have a nonzero size. This
+    // is fulfilled, since ItemHolder is non-zero sized even if T is zero-sized.
+    let thin_ptr = unsafe { alloc::alloc::alloc(layout) };
+    if thin_ptr.is_null() {
+        alloc::alloc::handle_alloc_error(layout);
+    }
+    debug_assert_eq!(
+        (thin_ptr as usize) & (ITEMHOLDER_MIN_ALIGN - 1),
+        0,
+        "arcshift: ItemHolder allocation is not {}-byte aligned, pointer decoration would be corrupted",
+        ITEMHOLDER_MIN_ALIGN
+    );
+    // SAFETY:
+    // '*mut ItemHolder<T, SizedMetadata>' is not actually a fat pointer (it is just pointer
+    // sized), so using transmute_copy to build it from the thin allocation pointer is sound.
     let item_holder_ptr: *mut ItemHolder<T, SizedMetadata> =
-        unsafe { core::mem::transmute_copy(&alloc::alloc::alloc(layout)) };
+        unsafe { core::mem::transmute_copy(&thin_ptr) };
 
     // SAFETY:
     // The copy is safe because MaybeUninit<ItemHolder<T>> is guaranteed to have the same
@@ -1038,6 +1076,19 @@ struct ItemHolder<T: ?Sized, M: IMetadata> {
     pub(crate) payload: UnsafeCell<ManuallyDrop<T>>,
 }
 
+/// Minimum alignment of every `ItemHolder` allocation.
+///
+/// We stash a 3-bit state enum (`ItemStateEnum`, values `0..=7`) in the low bits of
+/// every `ItemHolder`-pointer (see [`decorate`]/[`undecorate`]). That requires the
+/// allocation to always be at least 8-byte aligned.
+///
+/// On 64-bit targets `align_of::<usize>()` is already 8, but on 32-bit targets it is
+/// only 4, so we can't derive this from `usize` - it must be forced to 8 explicitly.
+/// Note that `#[repr(align(8))]` on `ItemHolder` is *not* sufficient, because the
+/// allocation layout is computed by hand here (via [`get_holder_layout`]) rather than
+/// with `Layout::new::<ItemHolder<..>>()`.
+const ITEMHOLDER_MIN_ALIGN: usize = 8;
+
 // T is SizedMetadata or UnsizedMetadata
 const fn get_holder_base_layout<T: Sized>() -> Layout {
     if core::mem::size_of::<atomic::AtomicUsize>() % (core::mem::size_of::<usize>()) != 0 {
@@ -1177,7 +1228,12 @@ impl<T: ?Sized, M: IMetadata> ItemHolder<T, M> {
         let thin_dest_ptr = if size == 0 {
             1 as *mut u8
         } else {
-            alloc::alloc::alloc(layout)
+            // SAFETY: 'layout' has non-zero size, checked above.
+            let p = unsafe { alloc::alloc::alloc(layout) };
+            if p.is_null() {
+                alloc::alloc::handle_alloc_error(layout);
+            }
+            p
         };
 
         let fat_dest_ptr = if is_sized::<T>() {

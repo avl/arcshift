@@ -7,6 +7,11 @@
 //! any abort/UB is caused by a dangling `self.item`, not a panic-during-panic.
 //!
 //! Run: cargo +nightly miri test --test panic_dangles_self
+//!
+//! Deterministic, single-threaded Miri regression probes; they explore no thread
+//! interleavings, so they are not run under loom (loom's synchronization
+//! primitives panic when touched outside a `loom::model`).
+#![cfg(not(loom))]
 
 use arcshift::ArcShift;
 use std::sync::Arc;

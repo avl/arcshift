@@ -545,6 +545,22 @@ mod simple {
         });
     }
     #[test]
+    fn holder_layout_is_always_8_byte_aligned() {
+        // Our pointer decoration stashes a 3-bit state enum in the low bits of every
+        // ItemHolder-pointer, so the allocation must be >= 8-byte aligned regardless of
+        // payload type or target pointer width (on 32-bit, align_of::<usize>() is only 4).
+        assert!(crate::get_holder_layout(&0u8).align() >= 8);
+        assert!(crate::get_holder_layout(&0u16).align() >= 8);
+        assert!(crate::get_holder_layout(&0u32).align() >= 8);
+        assert!(crate::get_holder_layout(&0u64).align() >= 8);
+        assert!(crate::get_holder_layout(&[0u8; 3]).align() >= 8);
+        let slice: &[u8] = &[1, 2, 3];
+        assert!(crate::get_holder_layout(slice).align() >= 8);
+        let s: &str = "hello";
+        assert!(crate::get_holder_layout(s).align() >= 8);
+    }
+
+    #[test]
     fn simple_get2() {
         dummy_model(|| {
             let mut shift = ArcShift::from_box(Box::new(42u32));
@@ -853,16 +869,21 @@ mod simple {
     #[test]
     fn get_weak_count_works() {
         dummy_model(|| {
-            assert_eq!(get_weak_count(1 << 55), 1 << 55);
+            // The two most-significant bits of `weak_count` are the HAVE_NEXT / HAVE_PREV flags,
+            // so express the test in terms of pointer width rather than hardcoding 64-bit.
+            let have_next = 1usize << (usize::BITS - 1);
+            let have_prev = 1usize << (usize::BITS - 2);
+            let big_count = 1usize << (usize::BITS - 8);
+            assert_eq!(get_weak_count(big_count), big_count);
             assert_eq!(get_weak_count(1), 1);
-            assert_eq!(get_weak_count(542 | (1 << 62)), 542);
-            assert_eq!(get_weak_count(542 | (1 << 63)), 542);
-            assert_eq!(get_weak_count(1 << 62), 0);
-            assert_eq!(get_weak_count(1 << 63), 0);
-            assert!(get_weak_next(1 << 63));
-            assert!(!get_weak_prev(1 << 63));
-            assert!(!get_weak_next(1 << 62));
-            assert!(get_weak_prev(1 << 62));
+            assert_eq!(get_weak_count(542 | have_prev), 542);
+            assert_eq!(get_weak_count(542 | have_next), 542);
+            assert_eq!(get_weak_count(have_prev), 0);
+            assert_eq!(get_weak_count(have_next), 0);
+            assert!(get_weak_next(have_next));
+            assert!(!get_weak_prev(have_next));
+            assert!(!get_weak_next(have_prev));
+            assert!(get_weak_prev(have_prev));
         });
     }
     #[test]

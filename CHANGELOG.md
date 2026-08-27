@@ -1,16 +1,20 @@
 ## 0.4.8
-Fix a soundness issue: if a payload's `Drop` implementation panics during an advance
+ * Fix a soundness issue: if a payload's `Drop` implementation panics during an advance
 (`ArcShift::update`, `update_box`, `rcu`/`rcu_maybe`, `get`, `reload`, and hence
 `ArcShiftCell`), any further use of the ArcShift instance used to perform
 the update would cause a use-after-free.
+ * Fix a soundness issue on out-of-memory. Arcshift didn't properly
+   abort, but instead would dereference a null pointer.
+
+
 
 ## 0.4.7
-Fix a soundness issue in `cell::ArcShiftCell`: dereferencing an `ArcShiftCellHandle` multiple
+ * Fix a soundness issue in `cell::ArcShiftCell`: dereferencing an `ArcShiftCellHandle` multiple
 times and retaining an earlier reference past a later `deref` could be a use-after-free, since
 `deref` could reload the cell and drop the value the earlier reference pointed into.
 
 ## 0.4.6
-Fix a panic in some code paths using unsized payloads (for example, `ArcShift<str>`).
+ * Fix a panic in some code paths using unsized payloads (for example, `ArcShift<str>`).
 This is not a soundness issue.
 
 ## 0.4.5
