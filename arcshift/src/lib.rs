@@ -609,12 +609,9 @@ fn get_holder_layout<T: ?Sized>(ptr: *const T) -> Layout {
     // the pointer are available for our pointer decoration. `align_of::<usize>()` is only 4 on
     // 32-bit targets, and a small-alignment payload (e.g. `u8`/`u32`) won't lift it, so force
     // it here. Raising the overall alignment does not move any internal field offset.
-    Layout::from_size_align(
-        layout.size(),
-        layout.align().max(ITEMHOLDER_MIN_ALIGN),
-    )
-    .unwrap()
-    .pad_to_align()
+    Layout::from_size_align(layout.size(), layout.align().max(ITEMHOLDER_MIN_ALIGN))
+        .unwrap()
+        .pad_to_align()
 }
 
 #[inline(always)]
