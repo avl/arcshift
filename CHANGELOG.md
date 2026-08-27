@@ -1,3 +1,9 @@
+## 0.4.8
+Fix a soundness issue: if a payload's `Drop` implementation panics during an advance
+(`ArcShift::update`, `update_box`, `rcu`/`rcu_maybe`, `get`, `reload`, and hence
+`ArcShiftCell`), any further use of the ArcShift instance used to perform
+the update would cause a use-after-free.
+
 ## 0.4.7
 Fix a soundness issue in `cell::ArcShiftCell`: dereferencing an `ArcShiftCellHandle` multiple
 times and retaining an earlier reference past a later `deref` could be a use-after-free, since
@@ -16,7 +22,7 @@ Fix two critical soundness issues:
  * `ArcShiftWeak::upgrade` could erroneously return a dropped object. 
    This happened if the last strong instance of an ArcShift chain was dropped
    concurrently with a weak reference being upgraded, while a total of at least
-   two weak refs existed.   
+   two weak refs existed. 
 Disclosure: These bugs were found using Anthropic's Fable 5 model, but the fixes
 were carefully validated by a human. 
  

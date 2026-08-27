@@ -2884,17 +2884,22 @@ impl<T: ?Sized> ArcShiftWeak<T> {
     /// If the ArcShift instance has no value (because the last ArcShift instance
     /// had been deallocated), this method returns None.
     pub fn upgrade(&self) -> Option<ArcShift<T>> {
-        let t = with_holder!(self.item, T, item, {
+        with_holder!(self.item, T, item, {
             let mut drop_handler = DropHandler::default();
             let temp = do_upgrade_weak(item, &mut drop_handler);
+            // Wrap the upgraded pointer in its owning `ArcShift` *before* re-raising
+            // any deferred destructor panic. `do_upgrade_weak` has already taken the
+            // strong ref; if `resume_any_panics` unwinds before we have an owner for
+            // it, that strong (and its implicit weak) ref leaks and the chain can
+            // never be freed.
+            let upgraded = temp.map(|ptr| ArcShift {
+                // SAFETY:
+                // do_upgrade_weak returns a valid upgraded pointer
+                item: unsafe { NonNull::new_unchecked(ptr as *mut _) },
+                pd: PhantomData,
+            });
             drop_handler.resume_any_panics();
-            temp
-        });
-        Some(ArcShift {
-            // SAFETY:
-            // do_upgrade_weak returns a valid upgraded pointer
-            item: unsafe { NonNull::new_unchecked(t? as *mut _) },
-            pd: PhantomData,
+            upgraded
         })
     }
 }
@@ -2942,8 +2947,11 @@ impl<T> ArcShift<T> {
                     do_update(item, |_| Some(holder as *const _), &mut jobq) as *mut _
                 )
             };
-            jobq.resume_any_panics();
+            // Update `self.item` before re-raising deferred destructor panics:
+            // the node we advanced from may already be freed, and unwinding with
+            // `self.item` dangling makes `ArcShift::drop` a use-after-free.
             self.item = new_item;
+            jobq.resume_any_panics();
         });
     }
     /// Atomically update the value.
@@ -3032,8 +3040,11 @@ impl<T> ArcShift<T> {
         // SAFETY:
         // new_item_ptr returned by do_update is never null
         let new_unique_ptr = unsafe { NonNull::new_unchecked(new_item_ptr as *mut _) };
-        jobq.resume_any_panics();
+        // Update `self.item` before re-raising deferred destructor panics:
+        // the node we advanced from may already be freed, and unwinding with
+        // `self.item` dangling makes `ArcShift::drop` a use-after-free.
         self.item = new_unique_ptr;
+        jobq.resume_any_panics();
         !cancelled
     }
 }
@@ -3290,8 +3301,11 @@ impl<T: ?Sized> ArcShift<T> {
             let new_item = unsafe {
                 NonNull::new_unchecked(do_update(item, |_| Some(holder), &mut jobq) as *mut _)
             };
-            jobq.resume_any_panics();
+            // Update `self.item` before re-raising deferred destructor panics:
+            // the node we advanced from may already be freed, and unwinding with
+            // `self.item` dangling makes `ArcShift::drop` a use-after-free.
             self.item = new_item;
+            jobq.resume_any_panics();
         });
     }
 
@@ -3448,10 +3462,16 @@ impl<T: ?Sized> ArcShift<T> {
                     continue;
                 }
             }
-            jobq.resume_any_panics();
+            // Write the advanced pointer back into the caller's handle *before*
+            // re-raising any deferred destructor panic. `item_ptr` is fully owned
+            // and valid here, whereas the node we advanced away from may already
+            // have been freed by the janitor above. If `resume_any_panics` unwinds
+            // with `self.item` still pointing at that freed node, the eventual
+            // `ArcShift::drop` is a use-after-free.
             // SAFETY:
             // pointer returned by do_advance_strong is always a valid pointer
             *old_item_ptr = unsafe { NonNull::new_unchecked(item_ptr as *mut _) };
+            jobq.resume_any_panics();
             // SAFETY:
             // pointer returned by do_advance_strong is always a valid pointer
             let item = unsafe { &*from_dummy::<T, M>(item_ptr) };
