@@ -266,11 +266,15 @@ mod simple {
                 }
 
                 {
+                    // A handle is a stable snapshot for its whole lifetime: an update
+                    // made while the handle is alive is NOT observed through it. (Reloading
+                    // in `deref` would be a use-after-free - see cell.rs.)
                     let r = cell.borrow();
                     root.update(owner.create("B"));
-                    assert_eq!(r.str(), "B");
-                    assert_eq!(owner.count(), 1);
+                    assert_eq!(r.str(), "A");
+                    assert_eq!(owner.count(), 2); // "A" (kept by the handle) and "B" both alive
                 }
+                assert_eq!(owner.count(), 1); // dropping the last handle reloads, freeing "A"
 
                 {
                     let r1 = cell.borrow();

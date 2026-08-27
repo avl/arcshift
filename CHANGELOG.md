@@ -1,3 +1,8 @@
+## 0.4.7
+Fix a soundness issue in `cell::ArcShiftCell`: dereferencing an `ArcShiftCellHandle` multiple
+times and retaining an earlier reference past a later `deref` could be a use-after-free, since
+`deref` could reload the cell and drop the value the earlier reference pointed into.
+
 ## 0.4.6
 Fix a panic in some code paths using unsized payloads (for example, `ArcShift<str>`).
 This is not a soundness issue.

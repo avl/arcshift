@@ -49,19 +49,22 @@ impl<T: 'static + ?Sized> Deref for ArcShiftCellHandle<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        if self.cell.recursion.get() == 1 {
-            // SAFETY:
-            // We're the only owner of the ArcShiftCell, and can thus get mutable access.
-            let inner: &mut ArcShift<T> = unsafe { &mut *self.cell.inner.get() };
-            inner.get()
-        } else {
-            // SAFETY:
-            // Shared access to this UnsafeCell is always allowed.
-            // Actual mutable references to the 'inner' never live long enough
-            // to be visible by the user of this module.
-            let inner: &ArcShift<T> = unsafe { &*self.cell.inner.get() };
-            inner.shared_non_reloading_get()
-        }
+        // This must never reload. The returned reference is bound only to `&self`, but
+        // `deref` takes `&self` and can be called any number of times, so each returned
+        // reference can be held for the whole life of the handle. A reload here would
+        // advance `inner` and drop the node that a reference returned by an earlier
+        // `deref` call still points into - a use-after-free reachable from safe code.
+        //
+        // Reloading happens only in `ArcShiftCell::borrow` (when `recursion == 0`, i.e.
+        // provably no handle - and hence no outstanding reference - exists) and in
+        // `ArcShiftCellHandle::drop` when the last handle goes away.
+        //
+        // SAFETY:
+        // Shared access to this UnsafeCell is always allowed. While any handle exists,
+        // nothing reloads `inner`, so the pointed-to value stays alive for at least as
+        // long as this handle, and therefore as long as the returned reference.
+        let inner: &ArcShift<T> = unsafe { &*self.cell.inner.get() };
+        inner.shared_non_reloading_get()
     }
 }
 
@@ -126,11 +129,26 @@ impl<T: 'static + ?Sized> ArcShiftCell<T> {
 
     /// Get a handle to the pointed-to T.
     ///
+    /// The handle reloads the cell to the most recent value when it is created
+    /// (provided no other handle is currently outstanding). It then acts as a stable
+    /// snapshot: dereferencing the handle always yields that same value for the
+    /// handle's entire lifetime, even if the value is updated meanwhile. To observe a
+    /// later update, drop the handle and call [`ArcShiftCell::borrow`] again.
+    ///
     /// Make sure not to leak this handle: See further documentation on
     /// [`ArcShiftCellHandle`]. Leaking the handle will leak resources, but
     /// not cause undefined behaviour.
     #[inline]
     pub fn borrow(&self) -> ArcShiftCellHandle<'_, T> {
+        if self.recursion.get() == 0 {
+            // `recursion == 0` means no `ArcShiftCellHandle` currently exists, so no
+            // reference handed out by `<ArcShiftCellHandle as Deref>::deref` is alive.
+            // This is the only point (besides dropping the last handle) at which it is
+            // sound to reload - `deref` itself must not (see the comment there).
+            // SAFETY:
+            // No outstanding handle => no outstanding reference => unique access to `inner`.
+            unsafe { &mut *self.inner.get() }.reload();
+        }
         self.recursion.set(self.recursion.get() + 1);
         ArcShiftCellHandle {
             cell: self,
