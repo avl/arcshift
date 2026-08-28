@@ -3114,28 +3114,21 @@ impl<T> ArcShift<T> {
 pub struct ArcShiftLight {}
 
 /// Return value of [`ArcShift::shared_get`]
-pub enum SharedGetGuard<'a, T: ?Sized> {
-    #[doc(hidden)]
+pub struct SharedGetGuard<'a, T: ?Sized>(SharedGetGuardInner<'a, T>);
+
+enum SharedGetGuardInner<'a, T: ?Sized> {
     Raw(&'a T),
-    #[doc(hidden)]
-    LightCloned {
-        #[doc(hidden)]
-        next: *const ItemHolderDummy<T>,
-    },
-    #[doc(hidden)]
-    FullClone {
-        #[doc(hidden)]
-        cloned: ArcShift<T>,
-    },
+    LightCloned { next: *const ItemHolderDummy<T> },
+    FullClone { cloned: ArcShift<T> },
 }
 
 impl<T: ?Sized> Drop for SharedGetGuard<'_, T> {
     #[inline(always)]
     fn drop(&mut self) {
-        match self {
-            SharedGetGuard::Raw(_) => {}
-            SharedGetGuard::FullClone { .. } => {}
-            SharedGetGuard::LightCloned { next } => {
+        match &mut self.0 {
+            SharedGetGuardInner::Raw(_) => {}
+            SharedGetGuardInner::FullClone { .. } => {}
+            SharedGetGuardInner::LightCloned { next } => {
                 if is_sized::<T>() {
                     let item_ptr = from_dummy::<_, SizedMetadata>(*next);
                     // SAFETY:
@@ -3163,9 +3156,9 @@ impl<T: ?Sized> core::ops::Deref for SharedGetGuard<'_, T> {
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        match self {
-            SharedGetGuard::Raw(r) => r,
-            SharedGetGuard::LightCloned { next } => {
+        match &self.0 {
+            SharedGetGuardInner::Raw(r) => r,
+            SharedGetGuardInner::LightCloned { next } => {
                 if is_sized::<T>() {
                     // SAFETY:
                     // The 'next' pointer of a SharedGetGuard::Cloned is always valid
@@ -3176,7 +3169,7 @@ impl<T: ?Sized> core::ops::Deref for SharedGetGuard<'_, T> {
                     unsafe { (*from_dummy::<_, UnsizedMetadata<T>>(*next)).payload() }
                 }
             }
-            SharedGetGuard::FullClone { cloned } => cloned.shared_non_reloading_get(),
+            SharedGetGuardInner::FullClone { cloned } => cloned.shared_non_reloading_get(),
         }
     }
 }
@@ -3244,9 +3237,9 @@ fn slow_shared_get<T: ?Sized, M: IMetadata>(
         next
     );
 
-    Some(SharedGetGuard::LightCloned {
+    Some(SharedGetGuard(SharedGetGuardInner::LightCloned {
         next: undecorate(next),
-    })
+    }))
 }
 
 impl<T: ?Sized> ArcShift<T> {
@@ -3424,11 +3417,13 @@ impl<T: ?Sized> ArcShift<T> {
             if undecorate(next).is_null() {
                 // SAFETY:
                 // self.item is always a valid pointer
-                return SharedGetGuard::Raw(unsafe { item.payload() });
+                return SharedGetGuard(SharedGetGuardInner::Raw(unsafe { item.payload() }));
             }
 
-            slow_shared_get(item).unwrap_or_else(|| SharedGetGuard::FullClone {
-                cloned: self.clone(),
+            slow_shared_get(item).unwrap_or_else(|| {
+                SharedGetGuard(SharedGetGuardInner::FullClone {
+                    cloned: self.clone(),
+                })
             })
         } else {
             let ptr = from_dummy::<T, UnsizedMetadata<T>>(self.item.as_ptr());
@@ -3439,11 +3434,13 @@ impl<T: ?Sized> ArcShift<T> {
             if undecorate(next).is_null() {
                 // SAFETY:
                 // self.item is always a valid pointer
-                return SharedGetGuard::Raw(unsafe { item.payload() });
+                return SharedGetGuard(SharedGetGuardInner::Raw(unsafe { item.payload() }));
             }
 
-            slow_shared_get(item).unwrap_or_else(|| SharedGetGuard::FullClone {
-                cloned: self.clone(),
+            slow_shared_get(item).unwrap_or_else(|| {
+                SharedGetGuard(SharedGetGuardInner::FullClone {
+                    cloned: self.clone(),
+                })
             })
         }
     }
