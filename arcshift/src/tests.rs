@@ -21,8 +21,12 @@ use std::time::Duration;
 use std::vec;
 use std::{format, thread};
 
+#[cfg(not(any(loom, feature = "shuttle")))]
+mod cell_uaf;
 mod custom_fuzz;
 pub(crate) mod leak_detection;
+#[cfg(not(any(loom, feature = "shuttle")))]
+mod panic_dangles_self;
 mod race_detector;
 
 // All tests are wrapped by these 'model' calls.

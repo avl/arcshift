@@ -1,24 +1,5 @@
-//! Regression test: a reference obtained from an `ArcShiftCellHandle` (via `Deref`)
-//! must stay valid for the whole lifetime of the handle, even across further
-//! `deref` calls and concurrent-looking updates from other handles to the chain.
-//!
-//! Before the fix, `<ArcShiftCellHandle as Deref>::deref` reloaded the inner
-//! `ArcShift` in the `recursion == 1` case. Because `deref` takes `&self` it can be
-//! called repeatedly, and every returned reference is bound only to the handle
-//! borrow, so a later `deref` could drop the node an earlier reference still
-//! pointed into -> use-after-free in safe code (Miri: "dangling reference
-//! (use-after-free)").
-//!
-//! The fix moves reloading into `ArcShiftCell::borrow` (only when no handle is
-//! outstanding) and keeps `deref` non-reloading.
-//!
-//! This is a deterministic, single-threaded Miri regression test; it explores no
-//! thread interleavings, so it is not run under loom (loom's synchronization
-//! primitives panic when touched outside a `loom::model`).
-#![cfg(not(loom))]
-
-use arcshift::cell::ArcShiftCell;
-use arcshift::ArcShift;
+use crate::cell::ArcShiftCell;
+use crate::ArcShift;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 

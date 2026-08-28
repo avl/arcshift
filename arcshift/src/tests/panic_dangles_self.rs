@@ -1,19 +1,5 @@
-//! Regression probes: a panicking payload destructor during an `ArcShift`
-//! advance (`update`/`update_box`/`rcu`/`get`/`reload`) must not leave
-//! `ArcShift::item` pointing at a freed node -- that made the eventual
-//! `ArcShift::drop` a use-after-free (caught by Miri here).
-//!
-//! Only the *superseded* payload panics; the surviving payload stays quiet, so
-//! any abort/UB is caused by a dangling `self.item`, not a panic-during-panic.
-//!
-//! Run: cargo +nightly miri test --test panic_dangles_self
-//!
-//! Deterministic, single-threaded Miri regression probes; they explore no thread
-//! interleavings, so they are not run under loom (loom's synchronization
-//! primitives panic when touched outside a `loom::model`).
-#![cfg(not(loom))]
-
-use arcshift::ArcShift;
+use crate::ArcShift;
+use std::boxed::Box;
 use std::sync::Arc;
 
 enum Payload {
