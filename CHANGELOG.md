@@ -1,3 +1,7 @@
+## 0.4.10
+ * Fix possible memory leak where ArcShiftWeak can keep a value alive
+   erroneously, in certain race scenarios.
+
 ## 0.4.9
  * Fix issue where safe code could access enum variant data that was
    meant to be private.

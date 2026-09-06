@@ -2293,7 +2293,7 @@ fn do_janitor_task<T: ?Sized, M: IMetadata>(
         #[cfg(feature = "validate")]
         assert_ne!(cur_ptr, start_ptr);
 
-        if cur.strong_count.load(Ordering::SeqCst) > 0 {
+        if live_strong_count(cur.strong_count.load(Ordering::SeqCst)) > 0 {
             //atomic janitor check strong_count
             have_seen_left_strong_refs = true;
         }
