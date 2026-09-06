@@ -1,3 +1,9 @@
+## 0.4.9
+ * Fix issue where safe code could access enum variant data that was
+   meant to be private.
+ * Fix issue where user-supplied Drop-impls could theoretically re-enter
+   ArcShiftCell and cause UB.
+
 ## 0.4.8
  * Fix a soundness issue: if a payload's `Drop` implementation panics during an advance
 (`ArcShift::update`, `update_box`, `rcu`/`rcu_maybe`, `get`, `reload`, and hence
